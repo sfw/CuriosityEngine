@@ -1,0 +1,57 @@
+# Curiosity Engine — model connection settings (Phase 1 multi-profile schema).
+#
+# Copy this file to ~/.CuriosityEngine/engine.toml (or let it be auto-created on
+# first run through the interactive wizard). Values here are an example config:
+# Claude Sonnet as the primary model, GPT-5 as the adversarial verifier.
+#
+# The engine uses two model ROLES:
+#   • primary   — runs introspection, question generation, investigation, synthesis
+#   • verifier  — adversarially reviews synthesized insights before they enter the register
+# For genuine cross-model verification the verifier should be a DIFFERENT model family.
+
+[models.primary]
+# provider is one of: "anthropic" | "openai_compat"
+#   anthropic     → uses the Anthropic SDK, supports server-side web_search
+#   openai_compat → uses the OpenAI SDK; set base_url to talk to any OpenAI-compatible endpoint
+provider = "anthropic"
+name = "claude-sonnet-4-6"
+
+# Env var ANTHROPIC_API_KEY (or OPENAI_API_KEY for openai_compat) wins over api_key.
+# Do NOT commit this file with a real key.
+# api_key = "sk-ant-..."
+
+# base_url is only needed when talking to a non-default endpoint.
+# base_url = "https://api.anthropic.com"
+
+max_tokens = 4096
+investigation_max_tokens = 8192
+
+[models.verifier]
+# A DIFFERENT model family for true cross-model adversarial verification.
+# Set base_url to point at any OpenAI-compatible endpoint.
+provider = "openai_compat"
+name = "gpt-5.1"
+
+# api_key = "sk-..."
+
+# Drop in any OpenAI-compatible endpoint. Examples:
+#   OpenAI           https://api.openai.com/v1
+#   Google Gemini    https://generativelanguage.googleapis.com/v1beta/openai/
+#   OpenRouter       https://openrouter.ai/api/v1
+#   Ollama (local)   http://localhost:11434/v1
+#   xAI              https://api.x.ai/v1
+#   Groq             https://api.groq.com/openai/v1
+#   Together         https://api.together.xyz/v1
+#   DeepSeek         https://api.deepseek.com/v1
+base_url = "https://api.openai.com/v1"
+
+max_tokens = 4096
+investigation_max_tokens = 8192
+
+[retry]
+# Retry policy for transient provider errors (429, 5xx, connection, timeout).
+# Backpressure responses (rate limit / overloaded) extend attempts automatically.
+max_attempts = 5
+base_delay_seconds = 0.5
+max_delay_seconds = 8.0
+jitter_seconds = 0.25
