@@ -1,0 +1,34 @@
+.git
+.gitignore
+.github
+.venv
+.venv-*
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.ruff_cache
+
+# Engine-generated artifacts — host-mounted at runtime, don't bake into image.
+research_journal.json
+*.journal.json
+register.md
+icl_dpo_bibliography.json
+refs.json
+*.bib
+
+# Build junk.
+build
+dist
+*.egg-info
+
+# Editor / OS.
+.vscode
+.idea
+*.swp
+.DS_Store
+
+# Docs / repo scaffolding that isn't needed at runtime.
+README.md
+planning

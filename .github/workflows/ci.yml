@@ -1,0 +1,102 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  lint-and-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install ruff
+
+      - name: Lint (ruff)
+        run: ruff check --exclude .venv --exclude data .
+
+      - name: Import & syntax check
+        run: |
+          python -c "
+          import ast, os
+          errors = []
+          for dirpath, _dirs, files in os.walk('.'):
+              if '/.venv' in dirpath or '/.git' in dirpath:
+                  continue
+              for f in files:
+                  if f.endswith('.py'):
+                      p = os.path.join(dirpath, f)
+                      try:
+                          ast.parse(open(p).read())
+                      except SyntaxError as e:
+                          errors.append(f'{p}: {e}')
+          if errors:
+              for err in errors:
+                  print(err)
+              raise SystemExit(1)
+          print('syntax ok')
+          "
+
+      - name: Tool discovery smoke test (no API keys required)
+        run: |
+          python -c "
+          from engine.tools import registry, discover_tools
+          discover_tools()
+          names = registry.names()
+          assert len(names) >= 7, f'expected 7+ tools, got {names}'
+          print(f'{len(names)} tools registered: {names}')
+          "
+
+      - name: Core module import smoke test
+        run: |
+          python -c "
+          from engine import CuriosityEngine
+          from engine.graph import build_graph, graph_summary
+          from engine.embeddings import cosine, find_similar
+          from providers import ModelProfile, build_client, build_embedding_client
+          from config import CuriosityEngineConfig
+          from journal import Journal
+          from models import EngineConfig, JournalEntry, CrossReference, Insight, RegisterEntry, Prediction
+          print('all core imports ok')
+          "
+
+      - name: Calculator tool functional test
+        run: |
+          python -c "
+          from engine.tools import registry, discover_tools
+          discover_tools()
+          r = registry.execute('calculator', {'expression': 'sqrt(144) + npv(0.1, [-1000, 300, 400, 500])'})
+          assert not r.is_error, r.content
+          assert '= -9.036814425' in r.content, r.content
+          print('calculator ok:', r.content.split(chr(10))[0])
+          "
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Build image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false
+          tags: curiosity-engine:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

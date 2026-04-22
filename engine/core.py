@@ -2,18 +2,24 @@
 
 from __future__ import annotations
 
-import os
 import sys
 from typing import Optional
 
 from journal import Journal
 from models import EngineConfig
-from providers import ModelClient, build_client
+from providers import (
+    AnthropicClient,
+    EmbeddingClient,
+    ModelClient,
+    build_client,
+    build_embedding_client,
+)
 
 from engine.cross_reference import CrossReferenceMixin
 from engine.display import DisplayMixin
 from engine.introspect import IntrospectionMixin
 from engine.investigation import InvestigationMixin
+from engine.tools import discover_tools, registry as tool_registry
 from engine.verification import VerificationMixin
 
 
@@ -48,8 +54,31 @@ class CuriosityEngine(
         )
         self.cycle_count = 0
 
+        # Auto-discover tools the first time any engine spins up; idempotent.
+        self.tool_registry = tool_registry
+        discover_tools()
+
         print(f"  primary:  {self.connection.primary.provider} / {self.connection.primary.name}")
         print(f"  verifier: {self.connection.verifier.provider} / {self.connection.verifier.name}")
+        tool_names = self.tool_registry.names()
+        if tool_names:
+            print(f"  tools:    {', '.join(tool_names)}")
+
+        # Attempt to construct an embedding client from whichever profile supports it.
+        self.embedding_client: Optional[EmbeddingClient] = self._best_effort_embedding_client()
+        if self.embedding_client is not None:
+            print(f"  embed:    {self.embedding_client.model}")
+
+    def _best_effort_embedding_client(self) -> Optional[EmbeddingClient]:
+        """Try verifier profile first (usually already OpenAI-compat), then primary.
+        Returns None if neither supports embeddings — engine still runs, just without
+        semantic features."""
+        for profile in (self.connection.verifier, self.connection.primary):
+            try:
+                return build_embedding_client(profile)
+            except Exception:  # noqa: BLE001 — gracefully skip incompatible profiles
+                continue
+        return None
 
     # ── Model plumbing ──
 
@@ -96,6 +125,83 @@ class CuriosityEngine(
     ) -> dict:
         return self._call_primary(prompt, tools=tools, max_tokens=max_tokens)
 
+    # Tool-enabled paths (multi-turn loops). Use these from investigation / verify /
+    # prediction-check phases where the model needs to issue tool calls.
+
+    def _focus_block(self) -> str:
+        """Render the user-set investigation focus as a prompt section, or empty string."""
+        focus = (self.journal.focus or "").strip()
+        if not focus:
+            return ""
+        return (
+            "USER FOCUS (treat as a hard constraint — the user has directed the engine "
+            "to concentrate on this narrow area within the broader domain):\n"
+            f"  {focus}\n\n"
+        )
+
+    def _tool_list_block(self, for_client: Optional[ModelClient] = None) -> str:
+        """Human-readable bullet list of tools available to a specific client."""
+        for_client = for_client or self.primary
+        is_anthropic = isinstance(for_client, AnthropicClient)
+        lines = []
+        for cls in self.tool_registry.all():
+            if is_anthropic and cls.name in self._ANTHROPIC_RESERVED_TOOL_NAMES:
+                continue  # Anthropic's server version of this tool supersedes ours
+            first_line = cls.description.split(". ", 1)[0].strip() + "."
+            lines.append(f"- `{cls.name}`: {first_line}")
+        if is_anthropic:
+            lines.append("- `web_search`: Anthropic native web search (live results).")
+            lines.append(
+                "- `code_execution`: Anthropic native sandboxed Python runtime. Use to test "
+                "hypotheses computationally, verify math, simulate small models, plot data."
+            )
+        return "\n".join(lines)
+
+    # Names that Anthropic provides server-side — our client tools must not shadow them
+    # when Anthropic is the active client (duplicate tool names in one request = ambiguity).
+    _ANTHROPIC_RESERVED_TOOL_NAMES = frozenset({"web_search", "code_execution"})
+
+    def _client_tool_schemas(self, client) -> list[dict]:
+        """Per-provider schemas for the currently-registered client tools."""
+        if isinstance(client, AnthropicClient):
+            schemas = self.tool_registry.anthropic_schemas()
+            return [s for s in schemas if s.get("name") not in self._ANTHROPIC_RESERVED_TOOL_NAMES]
+        return self.tool_registry.openai_schemas()
+
+    def _call_primary_with_tools(
+        self,
+        prompt: str,
+        *,
+        server_tools: Optional[list[dict]] = None,
+        max_tokens: Optional[int] = None,
+    ) -> dict:
+        return self.primary.complete_json_with_tools(
+            prompt,
+            client_tools=self._client_tool_schemas(self.primary),
+            server_tools=server_tools if self.primary.supports_server_web_search else None,
+            tool_registry=self.tool_registry,
+            max_tokens=max_tokens,
+            policy=self.connection.retry,
+            on_retry=self._on_retry,
+        )
+
+    def _call_verifier_with_tools(
+        self,
+        prompt: str,
+        *,
+        server_tools: Optional[list[dict]] = None,
+        max_tokens: Optional[int] = None,
+    ) -> dict:
+        return self.verifier.complete_json_with_tools(
+            prompt,
+            client_tools=self._client_tool_schemas(self.verifier),
+            server_tools=server_tools if self.verifier.supports_server_web_search else None,
+            tool_registry=self.tool_registry,
+            max_tokens=max_tokens,
+            policy=self.connection.retry,
+            on_retry=self._on_retry,
+        )
+
     # ── Main loop ──
 
     def run_cycle(self) -> dict:
@@ -107,8 +213,27 @@ class CuriosityEngine(
         uncertainties = self.introspect()
         questions = self.generate_questions(uncertainties)
 
+        # Human-directed questions jump to the head of the investigation queue.
+        budget = self.config.investigations_per_cycle
+        human_queued = self.journal.pop_questions_by_source("human", limit=budget)
+        investigation_pool = []
+        for hq in human_queued:
+            from uuid import uuid4 as _uuid4
+            from models import ResearchQuestion as _Q
+            investigation_pool.append(_Q(
+                id=f"q-{_uuid4().hex[:8]}",
+                question=hq.get("question", ""),
+                source_uncertainties=[],
+                priority_score=1.0,
+                domain_tags=[],
+                investigability_notes="user-directed question",
+            ))
+            print(f"  [human-directed] {hq.get('question', '')[:100]}")
+        remaining = max(0, budget - len(investigation_pool))
+        investigation_pool.extend(questions[:remaining])
+
         entries = []
-        for q in questions[: self.config.investigations_per_cycle]:
+        for q in investigation_pool[:budget]:
             entry = self.investigate(q)
             entries.append(entry)
 

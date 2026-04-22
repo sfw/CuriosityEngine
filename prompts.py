@@ -2,7 +2,7 @@
 
 INTROSPECT_PROMPT = """You are a research engine performing structured self-interrogation about your own knowledge in the domain of {domain}.
 
-Your task: identify specific areas where your knowledge is uncertain, contradictory, shallow, or unstable. Be brutally honest about what you don't know well.
+{focus_block}Your task: identify specific areas where your knowledge is uncertain, contradictory, shallow, or unstable. Be brutally honest about what you don't know well.
 
 {journal_context}
 
@@ -30,7 +30,7 @@ Generate {n_items} uncertainty items. Focus on areas where resolving the uncerta
 
 QUESTION_PROMPT = """You are a research engine. Given these areas of uncertainty in {domain}, generate focused research questions that could resolve or clarify them.
 
-UNCERTAINTIES:
+{focus_block}UNCERTAINTIES:
 {uncertainties_json}
 
 PRIORITIZATION RULES:
@@ -73,11 +73,16 @@ Respond with EXACTLY this JSON structure (no other text):
 
 INVESTIGATE_PROMPT = """You are a research engine investigating a question in {domain}.
 
-QUESTION: {question}
+{focus_block}QUESTION: {question}
 
 INVESTIGATION NOTES: {investigability_notes}
 
-You have web_search available. Use it. Search for current research, specific papers, and recent work relevant to this question. Draw on multiple sources. Synthesize, don't just summarize.
+AVAILABLE TOOLS (use them):
+{tool_list}
+
+Use multiple tools where appropriate. web_search gives general web results; academic_search hits Crossref/arXiv/Semantic Scholar for papers with DOIs and citation counts; web_fetch reads a specific URL; archive_access finds primary/historical sources; calculator runs exact math. **code_execution (when available) lets you actually RUN python** — use it to test claims, compute quantities cited in papers, simulate mechanisms, and sanity-check numerical arguments. Prefer primary sources over summaries, and prefer runnable evidence over verbal description.
+
+**Tool budget**: aim for roughly 8-15 tool calls for this investigation, then conclude with your final JSON. A thorough investigation is better than an exhaustive one.
 
 Focus on:
 - What does current research say?
@@ -87,9 +92,9 @@ Focus on:
 
 After investigating, respond with EXACTLY this JSON structure (no other text):
 {{
-  "methodology": "how you investigated (which searches, angles)",
+  "methodology": "how you investigated (which tools, which searches, which sources you pulled)",
   "raw_findings": "detailed findings (be thorough, cite specific sources where possible)",
-  "sources": ["urls, paper titles, researchers, or concepts referenced"],
+  "sources": ["urls, paper titles, doi:... / arXiv:... identifiers, researchers, or concepts referenced"],
   "key_takeaways": ["distilled takeaway 1", "distilled takeaway 2"]
 }}"""
 
@@ -118,10 +123,15 @@ Respond with EXACTLY this JSON structure (no other text):
 
 CROSS_REFERENCE_PROMPT = """You are a research engine performing cross-referential analysis across multiple journal entries. Your goal is to find NON-OBVIOUS connections between findings.
 
-JOURNAL ENTRIES:
+{focus_block}JOURNAL ENTRIES:
 {entries_json}
 
-Your task: Look across ALL entries for:
+EXISTING CROSS-REFERENCES (already identified in prior cycles — DO NOT rediscover these):
+{existing_xrefs_json}
+
+Your task: Look across ALL entries for connections that are NOT already covered by the existing cross-references above. If your candidate connection restates or narrowly extends an existing one, SKIP it. Hunt for genuinely new angles — different domain pairings, different connection types, different implications. Return an empty list if no genuinely new connection meets the novelty bar.
+
+Look across ALL entries for:
 1. PATTERNS: Multiple entries that independently point toward a common underlying principle
 2. CONTRADICTIONS: Findings from different investigations that conflict with each other
 3. CONVERGENCE: Different questions that led to surprisingly similar answers
@@ -158,7 +168,19 @@ SUPPORTING CROSS-REFERENCE:
 SUPPORTING JOURNAL ENTRIES (slim view):
 {supporting_entries_json}
 
-You have web_search available. Use it adversarially. Complete three tasks:
+AVAILABLE TOOLS (use them adversarially):
+{tool_list}
+
+PRIOR HUMAN REJECTIONS (patterns to avoid repeating — the reasons a domain expert rejected previous register entries):
+{prior_human_rejections_json}
+
+If the candidate insight has the same weakness as any of these prior rejections, apply the same skepticism and reflect it in your verdict.
+
+**Tool budget**: aim for roughly 8-15 tool calls, then render your verdict. Efficient refutation beats exhaustive search.
+
+Complete three tasks:
+
+**code_execution (when available) lets you actually RUN python** — use it to recompute numerical claims cited by the insight, test the reasoning against real data, or simulate the proposed mechanism.
 
 1. PRIOR ART SEARCH
 Search for this claim or claims very close to it. Is it already well-established in textbooks, surveys, or widely-cited papers? If so, this insight is not novel — note where it appears.
@@ -221,9 +243,12 @@ PREDICTION UNDER CHECK:
   Target check date:       {target_date}
   Today's date:            {today}
 
-You have web_search available. Your task:
+AVAILABLE TOOLS:
+{tool_list}
 
-1. Search for evidence that speaks to this prediction's falsifiable_condition. Follow the check_method as a starting point, but expand as needed.
+Your task:
+
+1. Search for evidence that speaks to this prediction's falsifiable_condition. Follow the check_method as a starting point, but expand as needed. Use academic_search for papers, web_search for general web, web_fetch for specific URLs, archive_access for primary sources.
 2. Consider both confirming and contradicting evidence. Don't anchor on the claim being true.
 3. If evidence is genuinely unclear or the horizon hasn't been reached in practice, say so — "inconclusive" is a legitimate verdict.
 
@@ -243,7 +268,7 @@ Respond with EXACTLY this JSON structure (no other text):
 
 SYNTHESIZE_PROMPT = """You are a research engine synthesizing a novel insight from cross-referenced findings.
 
-CROSS-REFERENCE:
+{focus_block}CROSS-REFERENCE:
 {xref_json}
 
 SUPPORTING JOURNAL ENTRIES:

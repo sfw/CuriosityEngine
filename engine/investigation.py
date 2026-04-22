@@ -24,13 +24,18 @@ class InvestigationMixin:
     def _run_investigation(self, question: ResearchQuestion) -> dict:
         prompt = INVESTIGATE_PROMPT.format(
             domain=self.config.domain,
+            focus_block=self._focus_block(),
             question=question.question,
             investigability_notes=question.investigability_notes,
+            tool_list=self._tool_list_block(for_client=self.primary),
         )
-        tools = [{"type": "web_search_20250305", "name": "web_search"}]
-        return self._call_primary(
+        server_tools = [
+            {"type": "web_search_20250305", "name": "web_search"},
+            {"type": "code_execution_20250825", "name": "code_execution"},
+        ]
+        return self._call_primary_with_tools(
             prompt,
-            tools=tools,
+            server_tools=server_tools,
             max_tokens=self.connection.primary.investigation_max_tokens,
         )
 
@@ -88,4 +93,15 @@ class InvestigationMixin:
 
         self.journal.add_entry(entry)
         self._enqueue_questions(entry.new_questions, source=f"entry:{entry.id}")
+        # Best-effort embed the new entry so semantic features stay current. If the
+        # embedding client is unavailable or fails, we just skip — not a cycle-breaking
+        # concern.
+        if getattr(self, "embedding_client", None) is not None:
+            try:
+                from engine.embeddings import embed_missing_entries
+                n = embed_missing_entries(self.journal, self.embedding_client)
+                if n:
+                    print(f"  [embed] {n} new entry embedding(s) computed.")
+            except Exception as e:  # noqa: BLE001
+                print(f"  [embed warn] skipped: {type(e).__name__}: {e}")
         return entry

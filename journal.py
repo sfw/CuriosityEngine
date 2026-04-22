@@ -25,6 +25,8 @@ class Journal:
         self.register: list[dict] = []
         self.predictions: list[dict] = []
         self.question_queue: list[dict] = []
+        self.focus: str = ""                       # user-set investigation focus
+        self.embeddings: dict[str, list[float]] = {}  # entry_id -> dense vector
         self._load()
 
     def _load(self):
@@ -37,6 +39,8 @@ class Journal:
                 self.register = data.get("register", [])
                 self.predictions = data.get("predictions", [])
                 self.question_queue = data.get("question_queue", [])
+                self.focus = str(data.get("focus", ""))
+                self.embeddings = dict(data.get("embeddings", {}))
 
     def save(self):
         with open(self.path, "w") as f:
@@ -47,6 +51,8 @@ class Journal:
                 "register": self.register,
                 "predictions": self.predictions,
                 "question_queue": self.question_queue,
+                "focus": self.focus,
+                "embeddings": self.embeddings,
                 "metadata": {
                     "last_updated": datetime.now(timezone.utc).isoformat(),
                     "total_entries": len(self.entries),
@@ -106,6 +112,44 @@ class Journal:
                 self._write_register_markdown()
                 return
 
+    def update_register_entry_review(
+        self,
+        register_entry_id: str,
+        *,
+        status: str,
+        notes: str = "",
+        rejection_reason: str = "",
+        reviewer: str = "",
+    ):
+        """Record a human review outcome on a register entry."""
+        for e in self.register:
+            if e.get("id") == register_entry_id:
+                e["human_review_status"] = status
+                e["human_review_notes"] = notes
+                e["human_rejection_reason"] = rejection_reason
+                e["human_reviewer"] = reviewer
+                e["human_review_at"] = datetime.now(timezone.utc).isoformat()
+                self.save()
+                self._write_register_markdown()
+                return
+
+    def unreviewed_register_entries(self) -> list[dict]:
+        return [e for e in self.register if (e.get("human_review_status") or "unreviewed") == "unreviewed"]
+
+    def human_rejection_feedback(self, limit: int = 20) -> list[dict]:
+        """Latest human rejections; used to inject prior-human-feedback into verify prompts."""
+        rejections = [
+            {
+                "title": e.get("title", ""),
+                "rejection_reason": e.get("human_rejection_reason", ""),
+                "notes": e.get("human_review_notes", ""),
+            }
+            for e in self.register
+            if e.get("human_review_status") == "rejected"
+            and (e.get("human_rejection_reason") or e.get("human_review_notes"))
+        ]
+        return rejections[-limit:]
+
     def due_predictions(self, *, include_overdue: bool = True) -> list[dict]:
         """Return pending predictions whose target_date has arrived."""
         now = datetime.now(timezone.utc).date().isoformat()
@@ -158,6 +202,54 @@ class Journal:
         self.question_queue = self.question_queue[n:]
         self.save()
         return popped
+
+    def set_embedding(self, entry_id: str, vector: list[float]):
+        self.embeddings[entry_id] = list(vector)
+        self.save()
+
+    def missing_embedding_entry_ids(self) -> list[str]:
+        return [e["id"] for e in self.entries if e.get("id") and e["id"] not in self.embeddings]
+
+    def set_focus(self, focus: str):
+        self.focus = focus.strip()
+        self.save()
+
+    def clear_focus(self):
+        self.focus = ""
+        self.save()
+
+    def questions_by_source(self, source_prefix: str) -> list[dict]:
+        return [q for q in self.question_queue if (q.get("source") or "").startswith(source_prefix)]
+
+    def pop_questions_by_source(self, source_prefix: str, *, limit: int) -> list[dict]:
+        """Remove and return up to `limit` queued questions whose source starts with prefix."""
+        if limit <= 0:
+            return []
+        matches: list[dict] = []
+        remaining: list[dict] = []
+        for q in self.question_queue:
+            if len(matches) < limit and (q.get("source") or "").startswith(source_prefix):
+                matches.append(q)
+            else:
+                remaining.append(q)
+        if matches:
+            self.question_queue = remaining
+            self.save()
+        return matches
+
+    def clear_question_queue(self, *, source_prefix: Optional[str] = None) -> int:
+        before = len(self.question_queue)
+        if source_prefix:
+            self.question_queue = [
+                q for q in self.question_queue
+                if not (q.get("source") or "").startswith(source_prefix)
+            ]
+        else:
+            self.question_queue = []
+        removed = before - len(self.question_queue)
+        if removed:
+            self.save()
+        return removed
 
     def annotate_connection(self, entry_id: str, xref_id: str):
         """Record that a cross-reference touches an entry."""

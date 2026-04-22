@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Thin wrapper: run the Curiosity Engine inside its Docker container with the
+# right mounts and TTY. Forwards any args straight to the engine CLI.
+#
+# Examples:
+#   ./curiosity --cycles 3
+#   ./curiosity --list-tools
+#   ./curiosity --review-register
+#
+# On first run this builds the image. Use `./curiosity --rebuild` to force rebuild.
+
+set -euo pipefail
+
+cd "$(dirname "$0")"
+
+IMAGE="curiosity-engine:latest"
+
+if [[ "${1:-}" == "--rebuild" ]]; then
+  shift
+  docker compose build
+elif ! docker image inspect "${IMAGE}" >/dev/null 2>&1; then
+  echo "Building ${IMAGE} (first run)…"
+  docker compose build
+fi
+
+mkdir -p ./data
+mkdir -p "${HOME}/.CuriosityEngine"
+
+export HOST_UID="$(id -u)"
+export HOST_GID="$(id -g)"
+
+exec docker compose run --rm engine "$@"

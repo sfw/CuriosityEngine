@@ -28,21 +28,26 @@ class CrossReferenceMixin:
         }
 
     def _select_entries_for_xref(self) -> list[dict]:
-        """Pick the entries to cross-reference: recent window, biased toward high surprise."""
-        all_entries = self.journal.entries
-        window = self.config.cross_ref_window
-        if len(all_entries) <= window:
-            pool = list(all_entries)
-        else:
-            recent = all_entries[-window:]
-            older = all_entries[:-window]
-            high_surprise_older = [
-                e for e in older if e.get("surprise_delta", 0) >= 0.6
-            ]
-            pool = high_surprise_older + recent
-            if len(pool) > window:
-                pool = pool[-window:]
+        """Pick the entries to cross-reference.
+
+        Uses the knowledge graph to prioritize entries with *unexplored* pairwise
+        connections (shared tags / sources that no existing cross-reference has
+        captured yet) + recent-baseline + surprise bias. This targets the
+        'intersection of knowledge gaps' rather than just the chronological tail.
+        """
+        from engine.graph import select_entries_for_xref
+        pool = select_entries_for_xref(self.journal, window=self.config.cross_ref_window)
         return [self._slim_entry_for_xref(e) for e in pool]
+
+    @staticmethod
+    def _slim_xref_for_prompt(xref: dict) -> dict:
+        return {
+            "id": xref.get("id"),
+            "source_entries": xref.get("source_entries", []),
+            "connection_type": xref.get("connection_type"),
+            "description": xref.get("description", ""),
+            "novelty_score": xref.get("novelty_score"),
+        }
 
     def cross_reference(self) -> list[CrossReference]:
         print("\n--- CROSS-REFERENCING ---")
@@ -53,9 +58,16 @@ class CrossReferenceMixin:
             return []
 
         slim_entries = self._select_entries_for_xref()
-        print(f"  Analyzing {len(slim_entries)} of {len(entries)} entries (slimmed)...")
+        existing_xrefs = [self._slim_xref_for_prompt(x) for x in self.journal.cross_references]
+        print(f"  Analyzing {len(slim_entries)} of {len(entries)} entries (slimmed); "
+              f"{len(existing_xrefs)} existing cross-ref(s) shown as priors...")
         entries_json = json.dumps(slim_entries, indent=2)
-        prompt = CROSS_REFERENCE_PROMPT.format(entries_json=entries_json)
+        existing_xrefs_json = json.dumps(existing_xrefs, indent=2) if existing_xrefs else "[]"
+        prompt = CROSS_REFERENCE_PROMPT.format(
+            focus_block=self._focus_block(),
+            entries_json=entries_json,
+            existing_xrefs_json=existing_xrefs_json,
+        )
 
         result = self._call_primary(prompt)
         existing_keys = {
@@ -105,6 +117,7 @@ class CrossReferenceMixin:
         supporting = [e for e in self.journal.entries if e["id"] in xref.source_entries]
 
         prompt = SYNTHESIZE_PROMPT.format(
+            focus_block=self._focus_block(),
             xref_json=json.dumps(asdict(xref), indent=2),
             supporting_entries_json=json.dumps(supporting, indent=2),
         )

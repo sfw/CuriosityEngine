@@ -12,6 +12,23 @@ from models import CrossReference, Insight, Prediction, RegisterEntry
 from prompts import PREDICTION_CHECK_PROMPT, VERIFY_PROMPT
 
 
+def _prompt_line(prompt: str) -> str:
+    try:
+        return input(prompt)
+    except (EOFError, KeyboardInterrupt):
+        return ""
+
+
+def _prompt_choice_with_default(prompt: str, valid: tuple[str, ...], default: str) -> str:
+    while True:
+        raw = _prompt_line(f"{prompt} [default={default}]: ").strip().lower()
+        if not raw:
+            return default
+        if raw in valid:
+            return raw
+        print(f"  Please choose one of: {', '.join(valid)}")
+
+
 class VerificationMixin:
     """Adversarial review of insights, plus falsifiable-prediction lifecycle."""
 
@@ -39,11 +56,18 @@ class VerificationMixin:
             insight_json=json.dumps(asdict(insight), indent=2),
             xref_json=json.dumps(asdict(xref), indent=2),
             supporting_entries_json=json.dumps(slim_supporting, indent=2),
+            tool_list=self._tool_list_block(for_client=self.verifier),
+            prior_human_rejections_json=json.dumps(
+                self.journal.human_rejection_feedback(), indent=2,
+            ),
         )
-        tools = [{"type": "web_search_20250305", "name": "web_search"}]
-        result = self._call_verifier(
+        server_tools = [
+            {"type": "web_search_20250305", "name": "web_search"},
+            {"type": "code_execution_20250825", "name": "code_execution"},
+        ]
+        result = self._call_verifier_with_tools(
             prompt,
-            tools=tools,
+            server_tools=server_tools,
             max_tokens=self.connection.verifier.investigation_max_tokens,
         )
 
@@ -139,7 +163,10 @@ class VerificationMixin:
 
         entry_by_id = {e.get("id"): e for e in self.journal.register}
         updated: list[dict] = []
-        tools = [{"type": "web_search_20250305", "name": "web_search"}]
+        tools = [
+            {"type": "web_search_20250305", "name": "web_search"},
+            {"type": "code_execution_20250825", "name": "code_execution"},
+        ]
         today = datetime.now(timezone.utc).date().isoformat()
 
         for prediction in pending:
@@ -160,10 +187,11 @@ class VerificationMixin:
                 created_at=prediction.get("created_at", ""),
                 target_date=prediction.get("target_date", ""),
                 today=today,
+                tool_list=self._tool_list_block(for_client=self.verifier),
             )
-            result = self._call_verifier(
+            result = self._call_verifier_with_tools(
                 prompt,
-                tools=tools,
+                server_tools=tools,
                 max_tokens=self.connection.verifier.investigation_max_tokens,
             )
 
@@ -185,6 +213,91 @@ class VerificationMixin:
 
         print(f"\n  {len(updated)} prediction(s) reviewed.")
         return updated
+
+    def review_register(self):
+        """Walk unreviewed register entries and prompt for approve / reject / defer / skip."""
+        pending = self.journal.unreviewed_register_entries()
+        print(f"\n--- REVIEW REGISTER ({len(pending)} unreviewed) ---")
+        if not pending:
+            print("  All register entries already reviewed.")
+            return
+
+        for i, entry in enumerate(pending, start=1):
+            print(f"\n{'='*62}")
+            print(f"  Entry {i}/{len(pending)}  id={entry.get('id')}")
+            print(f"{'='*62}")
+            print(f"Title:       {entry.get('title', '')}")
+            print(f"Registered:  {entry.get('timestamp', '')}")
+            print(f"Verdict:     {entry.get('verdict', '')}  "
+                  f"(conf {entry.get('verified_confidence', 0.0):.2f})")
+            if entry.get("status") and entry["status"] != "active":
+                print(f"Lifecycle:   {entry['status']}")
+            desc = entry.get("description", "")
+            if desc:
+                print(f"\n{desc}")
+            motivation = entry.get("motivation", "")
+            if motivation:
+                print(f"\nMotivation:  {motivation}")
+            summary = entry.get("verification_summary", "")
+            if summary:
+                print(f"\nVerification summary: {summary}")
+            citations = entry.get("prior_art_citations") or []
+            if citations:
+                print("\nPrior art cited by verifier:")
+                for c in citations[:5]:
+                    print(f"  - {c}")
+            sources = entry.get("supporting_sources") or []
+            if sources:
+                print(f"\n{len(sources)} supporting source(s); first few:")
+                for s in sources[:5]:
+                    print(f"  - {s}")
+
+            action = _prompt_choice_with_default(
+                "\nAction: [a]pprove  [r]eject  [d]efer  [s]kip  [q]uit",
+                valid=("a", "r", "d", "s", "q"),
+                default="s",
+            )
+            if action == "q":
+                print("\nAborted review; progress saved.")
+                return
+            if action == "s":
+                print("  Skipped.")
+                continue
+
+            notes = _prompt_line("  Optional notes: ")
+            reviewer = _prompt_line("  Reviewer name (optional): ")
+
+            if action == "a":
+                self.journal.update_register_entry_review(
+                    entry.get("id", ""),
+                    status="approved",
+                    notes=notes,
+                    reviewer=reviewer,
+                )
+                print("  Marked approved.")
+            elif action == "r":
+                rejection_reason = _prompt_line("  Rejection reason (required): ").strip()
+                if not rejection_reason:
+                    print("  Rejection requires a reason; skipping this entry.")
+                    continue
+                self.journal.update_register_entry_review(
+                    entry.get("id", ""),
+                    status="rejected",
+                    notes=notes,
+                    rejection_reason=rejection_reason,
+                    reviewer=reviewer,
+                )
+                print("  Marked rejected. Reason will inform future verifications.")
+            elif action == "d":
+                self.journal.update_register_entry_review(
+                    entry.get("id", ""),
+                    status="deferred",
+                    notes=notes,
+                    reviewer=reviewer,
+                )
+                print("  Deferred. You can revisit later.")
+
+        print("\nReview complete.")
 
     def _reconcile_entry_status(self, register_entry_id: str):
         """Update a register entry's status based on the current verdicts of its predictions."""

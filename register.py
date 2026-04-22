@@ -46,6 +46,17 @@ def _render_entry(entry: dict, predictions: list[dict]) -> list[str]:
     out.append(f"- **Verdict:** `{entry.get('verdict', 'unknown')}`")
     out.append(f"- **Verified Confidence:** {entry.get('verified_confidence', 0.0):.2f}")
     out.append(f"- **Lifecycle status:** `{entry.get('status', 'active')}`")
+    review_status = entry.get("human_review_status", "unreviewed")
+    reviewer = entry.get("human_reviewer", "")
+    review_suffix = f" by {reviewer}" if reviewer else ""
+    out.append(f"- **Human review:** `{review_status}`{review_suffix}")
+    if review_status == "rejected":
+        reason = entry.get("human_rejection_reason", "")
+        if reason:
+            out.append(f"  - rejection reason: {reason}")
+    notes = entry.get("human_review_notes", "")
+    if notes:
+        out.append(f"  - notes: {notes}")
     out.append("")
 
     description = entry.get("description", "").strip()

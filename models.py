@@ -113,6 +113,13 @@ class RegisterEntry:
     # Lifecycle (updated by prediction checks)
     status: str = "active"                   # active | validated_by_prediction | challenged_by_prediction
 
+    # Human review (updated by --review-register)
+    human_review_status: str = "unreviewed"   # unreviewed | approved | rejected | deferred
+    human_review_notes: str = ""
+    human_rejection_reason: str = ""          # required when status == "rejected"
+    human_reviewer: str = ""
+    human_review_at: str = ""
+
 
 @dataclass
 class Prediction:

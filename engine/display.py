@@ -59,6 +59,8 @@ class DisplayMixin:
 
     def show_journal_summary(self):
         print(f"\nJournal: {self.config.journal_path}")
+        if self.journal.focus:
+            print(f"Focus: {self.journal.focus}")
         print(f"Entries: {len(self.journal.entries)}")
         print(f"Cross-references: {len(self.journal.cross_references)}")
         print(f"Insights: {len(self.journal.insights)}")

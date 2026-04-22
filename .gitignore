@@ -20,9 +20,16 @@ ENV/
 .env.local
 *.key
 
-# Engine artifacts
+# Engine artifacts (journals, registers, bibliographies — all runtime state)
 research_journal.json
 *.journal.json
+register.md
+*_bibliography.json
+refs.json
+data/
+
+# Docker ephemera
+.docker-cache/
 
 # Editor / OS
 .vscode/

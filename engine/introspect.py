@@ -50,6 +50,7 @@ class IntrospectionMixin:
 
         prompt = INTROSPECT_PROMPT.format(
             domain=self.config.domain,
+            focus_block=self._focus_block(),
             journal_context=self._build_journal_context(),
             n_items=self.config.questions_per_cycle + 2,
         )
@@ -75,6 +76,7 @@ class IntrospectionMixin:
         uncertainties_json = json.dumps([asdict(u) for u in uncertainties], indent=2)
         prompt = QUESTION_PROMPT.format(
             domain=self.config.domain,
+            focus_block=self._focus_block(),
             uncertainties_json=uncertainties_json,
             n_questions=self.config.questions_per_cycle,
         )
