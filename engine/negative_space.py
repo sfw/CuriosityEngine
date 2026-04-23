@@ -62,11 +62,11 @@ class NegativeSpaceMixin:
             )
             return None
 
-        print(f"\n--- NEGATIVE-SPACE SCAN ---")
+        print("\n--- NEGATIVE-SPACE SCAN ---")
         print(f"  journal size: {n_entries} entries")
 
         # Step 1: Hybrid matrix extraction.
-        print(f"  [1/4] extracting (method × problem) matrix from journal...")
+        print("  [1/4] extracting (method × problem) matrix from journal...")
         entries = [_slim_entry_for_matrix(e) for e in self.journal.entries]
         tag_anchors = sorted(self.journal.get_all_domain_tags())
         extract_prompt = NEGATIVE_SPACE_EXTRACT_PROMPT.format(
@@ -83,7 +83,7 @@ class NegativeSpaceMixin:
         methods: list[str] = [m.strip() for m in (extract_result.get("methods") or []) if m.strip()]
         problems: list[str] = [p.strip() for p in (extract_result.get("problems") or []) if p.strip()]
         if not methods or not problems:
-            print(f"  [abort] extractor returned empty methods/problems lists.")
+            print("  [abort] extractor returned empty methods/problems lists.")
             return None
 
         # Normalize cells + build covered-cell set.
@@ -106,7 +106,7 @@ class NegativeSpaceMixin:
                 empty_cells.append({"method": m, "problem": p})
 
         if not empty_cells:
-            print(f"  [done] matrix is fully covered; no gaps to investigate.")
+            print("  [done] matrix is fully covered; no gaps to investigate.")
             scan = self._persist_scan(
                 methods=methods, problems=problems, covered=covered,
                 classified=[], verified_gaps=[], gap_questions={},
@@ -206,7 +206,7 @@ class NegativeSpaceMixin:
                 for q in qs:
                     print(f"        + {q[:120]}")
         else:
-            print(f"  [done] no verified gaps — no questions enqueued.")
+            print("  [done] no verified gaps — no questions enqueued.")
 
         summary = (
             f"Scan over {n_entries} entries. Matrix: {len(methods)} methods × "
