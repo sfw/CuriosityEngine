@@ -13,6 +13,7 @@ from typing import Optional
 import httpx
 
 from engine.tools.base import Tool, ToolError
+from engine.tools._rate_limits import ARXIV, CROSSREF, SEMANTIC_SCHOLAR
 
 _USER_AGENT = "CuriosityEngine/0.1 (research use; contact via repo)"
 _TIMEOUT = 25.0
@@ -34,6 +35,7 @@ class AcademicResult:
 
 def _crossref_search(query: str, limit: int) -> list[AcademicResult]:
     """Crossref REST API. https://api.crossref.org/swagger-ui/"""
+    CROSSREF.acquire()
     url = "https://api.crossref.org/works"
     params = {
         "query": query,
@@ -82,6 +84,7 @@ def _crossref_search(query: str, limit: int) -> list[AcademicResult]:
 
 def _arxiv_search(query: str, limit: int) -> list[AcademicResult]:
     """arXiv Atom feed API. https://info.arxiv.org/help/api/user-manual.html"""
+    ARXIV.acquire()  # arXiv user manual: 3s between requests
     url = "https://export.arxiv.org/api/query"
     params = {
         "search_query": f"all:{query}",
@@ -138,6 +141,7 @@ def _arxiv_search(query: str, limit: int) -> list[AcademicResult]:
 
 def _semantic_scholar_search(query: str, limit: int) -> list[AcademicResult]:
     """Semantic Scholar Graph API (public, no key required but rate-limited)."""
+    SEMANTIC_SCHOLAR.acquire()  # unauth: 100 req / 5min → paced at 1/3s
     url = "https://api.semanticscholar.org/graph/v1/paper/search"
     params = {
         "query": query,

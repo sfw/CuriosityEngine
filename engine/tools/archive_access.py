@@ -11,6 +11,7 @@ from typing import Optional
 import httpx
 
 from engine.tools.base import Tool, ToolError
+from engine.tools._rate_limits import ARCHIVE_ORG, OPENVERSE, WIKIMEDIA
 
 _USER_AGENT = "CuriosityEngine/0.1 (research use; contact via repo)"
 _TIMEOUT = 25.0
@@ -31,6 +32,7 @@ class ArchiveResult:
 
 def _internet_archive_search(query: str, limit: int) -> list[ArchiveResult]:
     """Internet Archive advanced search. https://archive.org/help/aboutsearch.htm"""
+    ARCHIVE_ORG.acquire()
     url = "https://archive.org/advancedsearch.php"
     params = {
         "q": query,
@@ -69,6 +71,7 @@ def _internet_archive_search(query: str, limit: int) -> list[ArchiveResult]:
 
 def _wikimedia_search(query: str, limit: int) -> list[ArchiveResult]:
     """Wikimedia Commons MediaWiki API."""
+    WIKIMEDIA.acquire()
     url = "https://commons.wikimedia.org/w/api.php"
     params = {
         "action": "query",
@@ -106,6 +109,7 @@ def _wikimedia_search(query: str, limit: int) -> list[ArchiveResult]:
 
 def _openverse_search(query: str, limit: int) -> list[ArchiveResult]:
     """Openverse — openly-licensed media aggregator. https://api.openverse.org/"""
+    OPENVERSE.acquire()
     url = "https://api.openverse.org/v1/images/"
     params = {
         "q": query,

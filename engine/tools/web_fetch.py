@@ -140,6 +140,14 @@ class WebFetchTool(Tool):
 
         _ensure_safe_url(url)
 
+        # Per-host rate limiting so a burst of web_fetch calls against a single
+        # paper server (e.g. arxiv.org in a verification sweep) doesn't hammer
+        # it — especially important under parallel investigation fan-out.
+        from engine.tools._rate_limits import WEB_FETCH
+        host = urlparse(url).hostname or ""
+        if host:
+            WEB_FETCH.acquire(host)
+
         headers = {"User-Agent": _USER_AGENT, "Accept": "text/html,text/plain,*/*"}
         try:
             with httpx.Client(timeout=_TIMEOUT_SECONDS, follow_redirects=True) as client:

@@ -1,0 +1,62 @@
+"""Rate limiters for throttled external endpoints.
+
+One instance per endpoint, shared process-wide. Every network-touching tool
+calls `.acquire()` on the appropriate limiter before firing. Serial runs gain
+pacing (previously the LLM could burst 10+ tool_uses in one response with
+zero delay); parallel runs gain the hard guarantee that we don't blow past
+public API budgets no matter how many engine threads are active.
+
+Rates are sized for politeness, not for peak legal throughput:
+
+- arXiv's user manual asks for 3s between requests. We enforce that exactly.
+- Semantic Scholar unauthenticated quota is 100 req / 5 min = 0.33 req/s.
+  We pace at 1/3s to stay well clear of bursty depletion.
+- Crossref "polite pool" is generous (50+ req/s with a mailto header); we
+  still cap at 5 req/s to be conservative.
+- DuckDuckGo/Bing are scraping endpoints — no official rate; 1 req/2s is
+  the empirically-safe pace that our existing _PaceGate used.
+- web_fetch is generic HTTP — per-host 3 req/s so we don't hammer any one
+  paper server. arxiv.org + paper repositories benefit from the same
+  per-host discipline.
+- Internet Archive + Wikimedia are rate-friendly but we still pace to
+  respect shared infrastructure.
+
+If you're seeing frequent "rate limited" tool errors in the log, raise the
+burst (more tolerance for clusters) before raising the rate. Raising the rate
+risks actual blocks; raising burst just lets short spikes through.
+"""
+
+from __future__ import annotations
+
+from engine.tools.base import HostRateLimiter, RateLimiter
+
+# --- Academic endpoints --------------------------------------------------------
+# arXiv: 1 req / 3s. Hard-documented in their user manual.
+ARXIV = RateLimiter(rate=1 / 3.0, burst=1, name="arxiv")
+
+# Semantic Scholar unauthenticated: 100 req / 5min ≈ 0.33 req/s. 1/3s pacing
+# with burst=2 gives us clean handling of a typical multi-query academic_search.
+SEMANTIC_SCHOLAR = RateLimiter(rate=1 / 3.0, burst=2, name="semantic_scholar")
+
+# Crossref polite pool is 50+ req/s; we cap at 5 for safety + burst=10 so a
+# whole academic_search call can fire in one shot.
+CROSSREF = RateLimiter(rate=5.0, burst=10, name="crossref")
+
+# --- Web-search scrapers -------------------------------------------------------
+# Note: engine/tools/web_search.py has its own per-host `_PaceGate` that
+# handles DuckDuckGo and Bing. _PaceGate enforces the same ~2s interval AND
+# implements cooldown-on-429 (a feature the generic RateLimiter doesn't have).
+# Leaving that tool-local; the limiters below are unused until we unify.
+DUCKDUCKGO = RateLimiter(rate=0.5, burst=1, name="duckduckgo")  # (unused — see web_search._PaceGate)
+BING = RateLimiter(rate=0.5, burst=1, name="bing")              # (unused — see web_search._PaceGate)
+
+# --- Generic HTTP fetching -----------------------------------------------------
+# web_fetch is per-host so busy hosts (e.g. arxiv.org for bulk paper fetches)
+# don't get hammered, while other hosts remain snappy.
+WEB_FETCH = HostRateLimiter(rate=3.0, burst=5, name="web_fetch")
+
+# --- Archive / reference endpoints --------------------------------------------
+# Internet Archive + Wikimedia Commons + Openverse — polite defaults.
+ARCHIVE_ORG = RateLimiter(rate=2.0, burst=4, name="archive.org")
+WIKIMEDIA = RateLimiter(rate=3.0, burst=5, name="wikimedia")
+OPENVERSE = RateLimiter(rate=2.0, burst=4, name="openverse")

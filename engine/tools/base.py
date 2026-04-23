@@ -13,6 +13,7 @@ from __future__ import annotations
 import importlib
 import pkgutil
 import threading
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import ClassVar, Optional
@@ -20,6 +21,84 @@ from typing import ClassVar, Optional
 
 class ToolError(Exception):
     """Raised when a tool cannot complete its work. The message is returned to the model."""
+
+
+class RateLimiter:
+    """Thread-safe token-bucket rate limiter.
+
+    Shared across threads — use one instance per throttled endpoint (e.g. one
+    for arXiv, one for Semantic Scholar, one per host for web_fetch). Every
+    tool call `.acquire()`s before hitting the network; concurrent callers
+    serialize on this shared state.
+
+    Under parallelism, the limiter is the hard guarantee that we don't burst
+    the upstream endpoint no matter how many engine threads are firing tools.
+    Serial runs also benefit: the LLM frequently emits multiple tool_use blocks
+    per response that previously fired back-to-back without pacing.
+
+    - rate: tokens refilled per second (e.g. 1/3 = "1 request every 3 seconds")
+    - burst: max tokens the bucket can hold (1 = strict pacing; 5 = allow small
+      clusters, recover later)
+    - name: for debug logging when a wait occurs
+    """
+
+    def __init__(self, rate: float, burst: int = 1, name: str = ""):
+        if rate <= 0:
+            raise ValueError("rate must be positive")
+        self._rate = float(rate)
+        self._capacity = max(1, int(burst))
+        self._tokens = float(self._capacity)
+        self._last = time.monotonic()
+        self._cond = threading.Condition()
+        self.name = name or f"limiter-{id(self):x}"
+
+    def acquire(self, tokens: int = 1) -> float:
+        """Block until `tokens` are available. Returns seconds waited."""
+        waited = 0.0
+        with self._cond:
+            while True:
+                now = time.monotonic()
+                elapsed = now - self._last
+                if elapsed > 0:
+                    self._tokens = min(self._capacity, self._tokens + elapsed * self._rate)
+                    self._last = now
+                if self._tokens >= tokens:
+                    self._tokens -= tokens
+                    return waited
+                needed = tokens - self._tokens
+                wait = needed / self._rate
+                # Cap any single wait to avoid pathological long blocks; the
+                # while-loop will re-evaluate on wakeup.
+                wait = min(wait, 5.0) + 0.01
+                waited += wait
+                self._cond.wait(timeout=wait)
+
+    def __repr__(self):
+        return f"RateLimiter(name={self.name!r}, rate={self._rate}, burst={self._capacity})"
+
+
+class HostRateLimiter:
+    """Per-host variant — lazily instantiates a RateLimiter for each hostname.
+    Use for endpoints where throttling is per-host (web_fetch, for example).
+    """
+
+    def __init__(self, rate: float, burst: int = 1, name: str = ""):
+        self._rate = rate
+        self._burst = burst
+        self._name = name
+        self._limiters: dict[str, RateLimiter] = {}
+        self._lock = threading.Lock()
+
+    def acquire(self, host: str, tokens: int = 1) -> float:
+        with self._lock:
+            limiter = self._limiters.get(host)
+            if limiter is None:
+                limiter = RateLimiter(
+                    rate=self._rate, burst=self._burst,
+                    name=f"{self._name or 'host'}:{host}",
+                )
+                self._limiters[host] = limiter
+        return limiter.acquire(tokens)
 
 
 @dataclass

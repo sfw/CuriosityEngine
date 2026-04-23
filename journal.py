@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
+import threading
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,7 +16,14 @@ from register import render_markdown
 
 
 class Journal:
-    """Append-mostly research journal backed by a single JSON file."""
+    """Append-mostly research journal backed by a single JSON file.
+
+    Thread-safety: every mutating method calls `self.save()`, which serializes
+    through `self._save_lock` and writes atomically via temp-file + rename.
+    Multiple threads can safely call `add_entry`, `add_insight`, etc. concurrently
+    — writes are ordered by lock acquisition, and the on-disk state is always
+    a complete snapshot (never a partial JSON write).
+    """
 
     def __init__(self, path: str, register_markdown_path: Optional[str] = None):
         self.path = path
@@ -29,6 +38,7 @@ class Journal:
         self.last_domain: str = ""                 # last domain used on a run against this journal
         self.embeddings: dict[str, list[float]] = {}  # entry_id -> dense vector
         self.coverage_scans: list[dict] = []       # negative-space gap scans over time
+        self._save_lock = threading.Lock()
         self._load()
 
     def _load(self):
@@ -47,26 +57,52 @@ class Journal:
                 self.coverage_scans = list(data.get("coverage_scans", []))
 
     def save(self):
-        with open(self.path, "w") as f:
-            json.dump({
-                "entries": self.entries,
-                "cross_references": self.cross_references,
-                "insights": self.insights,
-                "register": self.register,
-                "predictions": self.predictions,
-                "question_queue": self.question_queue,
-                "focus": self.focus,
-                "last_domain": self.last_domain,
-                "embeddings": self.embeddings,
-                "coverage_scans": self.coverage_scans,
-                "metadata": {
-                    "last_updated": datetime.now(timezone.utc).isoformat(),
-                    "total_entries": len(self.entries),
-                    "total_insights": len(self.insights),
-                    "total_register_entries": len(self.register),
-                    "total_predictions": len(self.predictions),
-                },
-            }, f, indent=2)
+        """Serialize the full journal state.
+
+        Thread-safe + atomic: the lock serializes concurrent writers, and the
+        write goes to a temp file + os.replace so readers never see a partial
+        JSON document (critical now that investigation/synth/verify may fan
+        out across threads — see Phase 1 parallelism in engine/core.py).
+        """
+        payload = {
+            "entries": self.entries,
+            "cross_references": self.cross_references,
+            "insights": self.insights,
+            "register": self.register,
+            "predictions": self.predictions,
+            "question_queue": self.question_queue,
+            "focus": self.focus,
+            "last_domain": self.last_domain,
+            "embeddings": self.embeddings,
+            "coverage_scans": self.coverage_scans,
+            "metadata": {
+                "last_updated": datetime.now(timezone.utc).isoformat(),
+                "total_entries": len(self.entries),
+                "total_insights": len(self.insights),
+                "total_register_entries": len(self.register),
+                "total_predictions": len(self.predictions),
+            },
+        }
+        serialized = json.dumps(payload, indent=2)
+        with self._save_lock:
+            target = Path(self.path)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            # Write to a temp file in the same directory so os.replace is atomic
+            # on POSIX (same filesystem). NamedTemporaryFile(delete=False) keeps
+            # the file around after close so we can rename it.
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=str(target.parent),
+                prefix=f".{target.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as tf:
+                tf.write(serialized)
+                tf.flush()
+                os.fsync(tf.fileno())
+                tmp_path = tf.name
+            os.replace(tmp_path, self.path)
 
     def add_entry(self, entry: JournalEntry):
         self.entries.append(asdict(entry))
