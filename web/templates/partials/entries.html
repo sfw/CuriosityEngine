@@ -1,0 +1,109 @@
+{% macro verdict_chip(verdict) %}
+  {% set meta = {
+    'confirmed':           ('emerald', 'confirmed'),
+    'partially_confirmed': ('amber',   'partial'),
+    'contradicted':        ('rose',    'contradicted'),
+    'unresolved':          ('slate',   'unresolved'),
+  }.get(verdict, ('slate', verdict or '')) %}
+  {% if verdict %}
+    <span class="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full
+                 {% if meta[0] == 'emerald' %}bg-emerald-500/15 text-emerald-300
+                 {% elif meta[0] == 'amber' %}bg-amber-500/15 text-amber-300
+                 {% elif meta[0] == 'rose' %}bg-rose-500/15 text-rose-300
+                 {% else %}bg-slate-500/15 text-slate-400{% endif %}">
+      {{ meta[1] }}
+    </span>
+  {% endif %}
+{% endmacro %}
+
+{% macro surprise_badge(delta) %}
+  {% if delta >= 0.7 %}
+    <span class="mono text-xs px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-200">Δ {{ '%.2f'|format(delta) }}</span>
+  {% elif delta >= 0.4 %}
+    <span class="mono text-xs px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-200">Δ {{ '%.2f'|format(delta) }}</span>
+  {% else %}
+    <span class="mono text-xs px-1.5 py-0.5 rounded bg-slate-700/60 text-slate-300">Δ {{ '%.2f'|format(delta) }}</span>
+  {% endif %}
+{% endmacro %}
+
+{% if domains %}
+  <div class="mb-4 flex flex-wrap gap-1 items-center text-xs">
+    <span class="text-slate-500">Filter:</span>
+    <button type="button"
+            class="px-2.5 py-1 rounded-md {% if not filter_tag %}bg-indigo-500/20 text-indigo-300 border border-indigo-500/30{% else %}bg-slate-800/40 hover:bg-slate-800 border border-slate-700/40{% endif %}"
+            hx-get="/journals/{{ name }}/entries" hx-target="#tab-body">
+      all
+    </button>
+    {% for d in domains %}
+      <button type="button"
+              class="px-2.5 py-1 rounded-md mono {% if filter_tag == d %}bg-indigo-500/20 text-indigo-300 border border-indigo-500/30{% else %}bg-slate-800/40 hover:bg-slate-800 border border-slate-700/40{% endif %}"
+              hx-get="/journals/{{ name }}/entries?tag={{ d }}" hx-target="#tab-body">
+        {{ d }}
+      </button>
+    {% endfor %}
+  </div>
+{% endif %}
+
+{% if entries %}
+  <div class="space-y-3">
+    {% for e in entries %}
+      <details id="{{ e.id }}" class="rounded-xl border border-slate-700/60 bg-slate-900/30 overflow-hidden scroll-mt-24">
+        <summary class="p-4 cursor-pointer hover:bg-slate-800/30">
+          <div class="flex items-center gap-2 mb-2 flex-wrap">
+            <span class="mono text-xs text-slate-500">{{ e.id }}</span>
+            {{ surprise_badge(e.surprise_delta or 0) }}
+            {{ verdict_chip(e.hypothesis_verdict) }}
+            <span class="mono text-xs text-slate-500">conf {{ '%.2f'|format(e.confidence_before or 0) }}→{{ '%.2f'|format(e.confidence_after or 0) }}</span>
+          </div>
+          <div class="text-sm text-slate-200 leading-snug">{{ e.question[:320] }}{% if e.question|length > 320 %}…{% endif %}</div>
+          {% if e.domain_tags %}
+            <div class="mt-2 flex flex-wrap gap-1">
+              {% for t in e.domain_tags %}
+                <span class="text-[10px] mono px-1.5 py-0.5 rounded bg-slate-800/80 text-slate-500">{{ t }}</span>
+              {% endfor %}
+            </div>
+          {% endif %}
+        </summary>
+        <div class="border-t border-slate-700/60 bg-slate-950/40"
+             hx-get="/journals/{{ name }}/entries/{{ e.id }}"
+             hx-trigger="toggle from:closest details once"
+             hx-swap="innerHTML">
+          <div class="p-4 text-xs text-slate-500">Loading entry…</div>
+        </div>
+      </details>
+    {% endfor %}
+  </div>
+{% else %}
+  <p class="text-sm text-slate-500">No entries match that filter yet.</p>
+{% endif %}
+
+<script>
+  // If the page was loaded with a hash matching an entry id (e.g. from an
+  // Overview-tab deep-link), expand that entry and scroll to it.
+  //
+  // Subtle: the htmx `hx-trigger="toggle from:closest details once"` listener
+  // on the inner hx-get div is attached AFTER this partial is swapped in.
+  // Programmatically setting `el.open = true` fires a toggle event in the
+  // same tick, which the listener misses — and `once` then prevents a later
+  // retry. We sidestep the race by fetching the detail URL directly here.
+  (() => {
+    const hash = (window.location.hash || "").replace(/^#/, "");
+    if (!hash) return;
+    const el = document.getElementById(hash);
+    if (!el || el.tagName.toLowerCase() !== "details") return;
+    el.open = true;
+
+    const target = el.querySelector("[hx-get]");
+    if (target && !target.dataset.ceLoaded) {
+      const url = target.getAttribute("hx-get");
+      target.dataset.ceLoaded = "1";
+      fetch(url)
+        .then(r => r.ok ? r.text() : Promise.reject(new Error(`HTTP ${r.status}`)))
+        .then(html => { target.innerHTML = html; })
+        .catch(err => { target.innerHTML = `<div class="p-4 text-xs text-rose-400">Failed to load: ${err.message}</div>`; });
+    }
+
+    // Defer the scroll so the expanded details can settle first.
+    setTimeout(() => el.scrollIntoView({ behavior: "smooth", block: "start" }), 60);
+  })();
+</script>

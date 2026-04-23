@@ -1,0 +1,100 @@
+{% macro status_chip(status) %}
+  {% set color = {
+    'running':  '#fbbf24',
+    'complete': '#34d399',
+    'failed':   '#f87171',
+  }.get(status, '#94a3b8') %}
+  <span class="chip" style="border-color:{{ color }}33">
+    <span class="chip-dot {% if status == 'running' %}animate-pulse{% endif %}" style="background:{{ color }}"></span>
+    {{ status }}
+  </span>
+{% endmacro %}
+
+{% if runs %}
+  <div class="mb-3 text-xs text-slate-500">
+    {{ runs|length }} run{{ '' if runs|length == 1 else 's' }} on this journal · most recent first
+  </div>
+
+  <div class="space-y-2">
+    {% for r in runs %}
+      {% set is_active = r.run_id in active_ids %}
+      <details class="rounded-xl border {% if is_active %}border-amber-500/40 bg-amber-500/5 animate-pulse-border
+                      {% elif r.status == 'failed' %}border-rose-500/40 bg-rose-500/5
+                      {% else %}border-slate-700/60 bg-slate-900/30{% endif %}"
+               {% if is_active and loop.first %}open{% endif %}>
+        <summary class="p-3 cursor-pointer hover:bg-slate-800/30 rounded-xl">
+          <div class="flex items-center justify-between gap-3 flex-wrap">
+            <div class="flex items-center gap-2 flex-wrap">
+              {{ status_chip(r.status) }}
+              <span class="mono text-xs text-slate-400 ce-localtime" data-utc="{{ r.started_at }}"
+                    title="{{ r.started_at }}">
+                {{ r.started_at[:10] }} {{ r.started_at[11:19] }}
+              </span>
+              <span class="text-sm text-slate-300">
+                {{ r.cycles or '?' }} cycle{{ '' if (r.cycles or 0) == 1 else 's' }}
+              </span>
+              {% if r.returncode is not none %}
+                <span class="mono text-xs {% if r.returncode == 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">
+                  exit {{ r.returncode }}
+                </span>
+              {% endif %}
+            </div>
+            <span class="mono text-[10px] text-slate-600">{{ r.run_id[:12] }}</span>
+          </div>
+          {% if r.domain %}
+            <div class="mt-1 text-xs text-slate-500">
+              <span class="text-slate-600">domain:</span> {{ r.domain }}
+            </div>
+          {% endif %}
+        </summary>
+        <div class="border-t border-slate-700/40"
+             hx-get="/journals/{{ name }}/runs/{{ r.run_id }}"
+             hx-trigger="toggle from:closest details once"
+             hx-swap="innerHTML">
+          <div class="p-4 text-xs text-slate-500">Loading run log…</div>
+        </div>
+      </details>
+    {% endfor %}
+  </div>
+
+  <script>
+    (() => {
+      document.querySelectorAll('.ce-localtime').forEach(el => {
+        const iso = el.getAttribute('data-utc');
+        if (!iso) return;
+        const d = new Date(iso);
+        if (isNaN(d.getTime())) return;
+        const date = d.toLocaleDateString(undefined, {year: 'numeric', month: '2-digit', day: '2-digit'});
+        const time = d.toLocaleTimeString(undefined, {hour: '2-digit', minute: '2-digit', second: '2-digit'});
+        el.textContent = `${date} ${time}`;
+      });
+
+      // Active runs start with the server-rendered `open` attribute. The browser
+      // fires a toggle event as it parses the element, BEFORE htmx has attached
+      // its `hx-trigger="toggle from:closest details once"` listener — so the
+      // event is lost and the placeholder stays forever. Fetch the detail URL
+      // directly here to sidestep the race.
+      document.querySelectorAll('details[open] [hx-get]').forEach(target => {
+        if (target.dataset.ceLoaded) return;
+        const url = target.getAttribute('hx-get');
+        if (!url) return;
+        target.dataset.ceLoaded = '1';
+        fetch(url)
+          .then(r => r.ok ? r.text() : Promise.reject(new Error('HTTP ' + r.status)))
+          .then(html => { target.innerHTML = html; })
+          .catch(err => { target.innerHTML = `<div class="p-4 text-xs text-rose-400">Failed to load: ${err.message}</div>`; });
+      });
+    })();
+  </script>
+{% else %}
+  <div class="text-center py-12">
+    <svg class="w-10 h-10 mx-auto text-slate-700 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+      <circle cx="12" cy="12" r="9"/>
+      <path stroke-linecap="round" stroke-linejoin="round" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/>
+    </svg>
+    <p class="text-sm text-slate-500">No runs recorded on this journal yet.</p>
+    <p class="mt-1 text-xs text-slate-600">
+      Start one from <a href="/run?journal={{ name }}" class="text-indigo-400 hover:underline">the Run page →</a>
+    </p>
+  </div>
+{% endif %}

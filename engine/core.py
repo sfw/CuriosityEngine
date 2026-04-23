@@ -213,24 +213,45 @@ class CuriosityEngine(
         uncertainties = self.introspect()
         questions = self.generate_questions(uncertainties)
 
-        # Human-directed questions jump to the head of the investigation queue.
+        # Build the investigation pool in priority order:
+        #   1. Human-queued questions (always first — explicit human direction).
+        #   2. Emergent queued questions (entry followups, xref followups, analog
+        #      probes) ranked by the priority_score assigned at enqueue time.
+        #   3. Fresh introspection-generated questions when queue is insufficient.
+        from uuid import uuid4 as _uuid4
+        from models import ResearchQuestion as _Q
+
         budget = self.config.investigations_per_cycle
-        human_queued = self.journal.pop_questions_by_source("human", limit=budget)
         investigation_pool = []
-        for hq in human_queued:
-            from uuid import uuid4 as _uuid4
-            from models import ResearchQuestion as _Q
-            investigation_pool.append(_Q(
+
+        def _queued_to_rq(item: dict, priority: float) -> _Q:
+            return _Q(
                 id=f"q-{_uuid4().hex[:8]}",
-                question=hq.get("question", ""),
+                question=item.get("question", ""),
                 source_uncertainties=[],
-                priority_score=1.0,
+                priority_score=priority,
                 domain_tags=[],
-                investigability_notes="user-directed question",
-            ))
+                investigability_notes=f"queued ({item.get('source','?')})",
+            )
+
+        human_queued = self.journal.pop_questions_by_source("human", limit=budget)
+        for hq in human_queued:
+            investigation_pool.append(_queued_to_rq(hq, 1.0))
             print(f"  [human-directed] {hq.get('question', '')[:100]}")
+
         remaining = max(0, budget - len(investigation_pool))
-        investigation_pool.extend(questions[:remaining])
+        if remaining > 0 and self.journal.question_queue:
+            # Pop highest-priority non-human queued questions to fill the budget.
+            emergent = self.journal.pop_queued_questions(remaining)
+            for eq in emergent:
+                pri = float(eq.get("priority", 0.5))
+                investigation_pool.append(_queued_to_rq(eq, pri))
+                src = eq.get("source", "?")
+                print(f"  [queued pri={pri:.2f} src={src}] {eq.get('question', '')[:90]}")
+
+        remaining = max(0, budget - len(investigation_pool))
+        if remaining > 0:
+            investigation_pool.extend(questions[:remaining])
 
         entries = []
         for q in investigation_pool[:budget]:

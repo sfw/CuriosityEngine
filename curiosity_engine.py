@@ -62,6 +62,19 @@ def main():
     parser.add_argument("--primary-model", type=str, default=None, help="Override primary model name (keeps TOML provider/endpoint)")
     parser.add_argument("--verifier-model", type=str, default=None, help="Override verifier model name")
     parser.add_argument("--cross-ref-freq", type=int, default=engine_defaults.cross_ref_frequency, help="Run cross-ref every N cycles")
+    # Per-run engine-knob overrides. default=None means "inherit from engine.toml".
+    parser.add_argument("--investigations-per-cycle", type=int, default=None,
+                        help="Override [engine].investigations_per_cycle for this run")
+    parser.add_argument("--novelty-threshold", type=float, default=None,
+                        help="Override [engine].novelty_threshold for this run (0.0–1.0)")
+    parser.add_argument("--register-confidence-floor", type=float, default=None,
+                        help="Override [engine].register_confidence_floor for this run (0.0–1.0)")
+    parser.add_argument("--verify-insights", action=argparse.BooleanOptionalAction, default=None,
+                        help="Toggle cross-model verification for this run (--verify-insights / --no-verify-insights)")
+    parser.add_argument("--analog-probe-enabled", action=argparse.BooleanOptionalAction, default=None,
+                        help="Toggle cross-domain analog probe for this run")
+    parser.add_argument("--analog-probe-threshold", type=float, default=None,
+                        help="Override [engine].analog_probe_surprise_threshold for this run (0.0–1.0)")
     args = parser.parse_args()
 
     if args.list_tools:
@@ -111,11 +124,24 @@ def main():
     if args.verifier_model:
         connection.verifier = replace(connection.verifier, name=args.verifier_model)
 
+    # CLI overrides take precedence over engine.toml values. None = inherit.
+    def _override(cli_val, toml_val):
+        return toml_val if cli_val is None else cli_val
+
     config = EngineConfig(
         domain=args.domain,
         journal_path=args.journal,
         cross_ref_frequency=args.cross_ref_freq,
         connection=connection,
+        # Engine-level behavior pulled from [engine] section of engine.toml, with CLI overrides.
+        cross_ref_window=connection.engine.cross_ref_window,
+        questions_per_cycle=connection.engine.questions_per_cycle,
+        investigations_per_cycle=_override(args.investigations_per_cycle, connection.engine.investigations_per_cycle),
+        novelty_threshold=_override(args.novelty_threshold, connection.engine.novelty_threshold),
+        register_confidence_floor=_override(args.register_confidence_floor, connection.engine.register_confidence_floor),
+        verify_insights=_override(args.verify_insights, connection.engine.verify_insights),
+        analog_probe_enabled=_override(args.analog_probe_enabled, connection.engine.analog_probe_enabled),
+        analog_probe_surprise_threshold=_override(args.analog_probe_threshold, connection.engine.analog_probe_surprise_threshold),
     )
 
     engine = CuriosityEngine(config)
@@ -131,7 +157,7 @@ def main():
         print("Focus cleared.")
         did_mutation = True
     if args.add_question:
-        engine._enqueue_questions(args.add_question, source="human")
+        engine._enqueue_questions(args.add_question, source="human", priority=1.0)
         print(f"Queued {len(args.add_question)} user-directed question(s).")
         did_mutation = True
     if args.clear_questions:

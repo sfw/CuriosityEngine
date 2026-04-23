@@ -1,0 +1,252 @@
+{# Per-node detail fragment for the graph tab. innerHTML-swapped into #graph-detail. #}
+{% set palette = {
+  'entry':      '#818cf8',
+  'xref':       '#fbbf24',
+  'insight':    '#34d399',
+  'register':   '#10b981',
+  'prediction': '#f472b6',
+  'source':     '#64748b',
+  'tag':        '#c084fc',
+} %}
+{% set colour = palette.get(kind, '#94a3b8') %}
+
+<div class="flex items-baseline gap-2 mb-2 flex-wrap">
+  <span class="mono text-xs text-slate-500">{{ node_key }}</span>
+  <span class="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-full"
+        style="background:{{ colour }}22;color:{{ colour }}">{{ kind }}</span>
+</div>
+
+{% if kind == 'entry' %}
+  <h4 class="font-semibold text-slate-100 leading-snug">{{ entry.question }}</h4>
+  <div class="mt-2 flex flex-wrap gap-2 text-[11px]">
+    {% if entry.hypothesis_verdict %}
+      <span class="px-1.5 py-0.5 rounded bg-slate-800 text-slate-300">verdict: {{ entry.hypothesis_verdict }}</span>
+    {% endif %}
+    <span class="px-1.5 py-0.5 rounded bg-slate-800 text-slate-300">δ {{ '%.2f'|format(entry.surprise_delta or 0) }}</span>
+    <span class="px-1.5 py-0.5 rounded bg-slate-800 text-slate-300">
+      conf {{ '%.2f'|format(entry.confidence_before or 0) }} → {{ '%.2f'|format(entry.confidence_after or 0) }}
+    </span>
+    {% for tag in (entry.domain_tags or []) %}
+      <span class="px-1.5 py-0.5 rounded bg-purple-900/30 text-purple-300">{{ tag }}</span>
+    {% endfor %}
+  </div>
+  {% if entry.hypothesis %}
+    <div class="mt-3 text-xs">
+      <div class="text-slate-500 uppercase tracking-wider text-[10px] mb-0.5">Pre-investigation hypothesis</div>
+      <div class="text-slate-300 whitespace-pre-wrap">{{ entry.hypothesis }}</div>
+    </div>
+  {% endif %}
+  {% if entry.surprise_explanation %}
+    <div class="mt-3 text-xs">
+      <div class="text-slate-500 uppercase tracking-wider text-[10px] mb-0.5">Why surprising</div>
+      <div class="text-slate-300 whitespace-pre-wrap">{{ entry.surprise_explanation }}</div>
+    </div>
+  {% endif %}
+  {% if entry.key_takeaways %}
+    <div class="mt-3 text-xs">
+      <div class="text-slate-500 uppercase tracking-wider text-[10px] mb-1">Key takeaways</div>
+      <ul class="list-disc pl-5 space-y-0.5 text-slate-300">
+        {% for t in entry.key_takeaways %}<li>{{ t }}</li>{% endfor %}
+      </ul>
+    </div>
+  {% endif %}
+  {% if entry.new_questions %}
+    <div class="mt-3 text-xs">
+      <div class="text-slate-500 uppercase tracking-wider text-[10px] mb-1">Emergent questions</div>
+      <ul class="list-disc pl-5 space-y-0.5 text-slate-400">
+        {% for q in entry.new_questions %}<li>{{ q }}</li>{% endfor %}
+      </ul>
+    </div>
+  {% endif %}
+
+{% elif kind == 'xref' %}
+  <h4 class="font-semibold text-slate-100 leading-snug">{{ xref.description }}</h4>
+  <div class="mt-2 flex flex-wrap gap-2 text-[11px]">
+    <span class="px-1.5 py-0.5 rounded bg-amber-900/30 text-amber-300">{{ xref.connection_type }}</span>
+    <span class="px-1.5 py-0.5 rounded bg-slate-800 text-slate-300">novelty {{ '%.2f'|format(xref.novelty_score or 0) }}</span>
+  </div>
+  {% if xref.implications %}
+    <div class="mt-3 text-xs">
+      <div class="text-slate-500 uppercase tracking-wider text-[10px] mb-1">Implications</div>
+      <ul class="list-disc pl-5 space-y-0.5 text-slate-300">
+        {% for imp in xref.implications %}<li>{{ imp }}</li>{% endfor %}
+      </ul>
+    </div>
+  {% endif %}
+  {% if xref.suggested_questions %}
+    <div class="mt-3 text-xs">
+      <div class="text-slate-500 uppercase tracking-wider text-[10px] mb-1">Suggested questions</div>
+      <ul class="list-disc pl-5 space-y-0.5 text-slate-400">
+        {% for q in xref.suggested_questions %}<li>{{ q }}</li>{% endfor %}
+      </ul>
+    </div>
+  {% endif %}
+  {% if source_entries %}
+    <div class="mt-3 text-xs">
+      <div class="text-slate-500 uppercase tracking-wider text-[10px] mb-1">Cross-referenced entries</div>
+      <ul class="list-disc pl-5 space-y-0.5 text-slate-400">
+        {% for e in source_entries %}
+          <li><span class="mono text-[10px] text-slate-500">{{ e.id }}</span> — {{ e.question }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+  {% endif %}
+
+{% elif kind == 'insight' %}
+  <h4 class="font-semibold text-slate-100 leading-snug">{{ insight.title }}</h4>
+  <div class="mt-2 flex flex-wrap gap-2 text-[11px]">
+    <span class="px-1.5 py-0.5 rounded bg-emerald-900/30 text-emerald-300">conf {{ '%.2f'|format(insight.confidence or 0) }}</span>
+  </div>
+  {% if insight.description %}
+    <div class="mt-3 text-xs text-slate-300 whitespace-pre-wrap">{{ insight.description }}</div>
+  {% endif %}
+  {% if insight.novelty_assessment %}
+    <div class="mt-3 text-xs">
+      <div class="text-slate-500 uppercase tracking-wider text-[10px] mb-0.5">Novelty assessment</div>
+      <div class="text-slate-300 whitespace-pre-wrap">{{ insight.novelty_assessment }}</div>
+    </div>
+  {% endif %}
+  {% if insight.prior_art_check %}
+    <div class="mt-3 text-xs">
+      <div class="text-slate-500 uppercase tracking-wider text-[10px] mb-0.5">Prior-art self-check</div>
+      <div class="text-slate-400 whitespace-pre-wrap">{{ insight.prior_art_check }}</div>
+    </div>
+  {% endif %}
+  {% if insight.implications %}
+    <div class="mt-3 text-xs">
+      <div class="text-slate-500 uppercase tracking-wider text-[10px] mb-1">Implications</div>
+      <ul class="list-disc pl-5 space-y-0.5 text-slate-300">
+        {% for imp in insight.implications %}<li>{{ imp }}</li>{% endfor %}
+      </ul>
+    </div>
+  {% endif %}
+  {% if insight.counter_arguments %}
+    <div class="mt-3 text-xs">
+      <div class="text-slate-500 uppercase tracking-wider text-[10px] mb-1">Counter-arguments</div>
+      <ul class="list-disc pl-5 space-y-0.5 text-slate-400">
+        {% for c in insight.counter_arguments %}<li>{{ c }}</li>{% endfor %}
+      </ul>
+    </div>
+  {% endif %}
+
+{% elif kind == 'register' %}
+  <h4 class="font-semibold text-slate-100 leading-snug">{{ register.title }}</h4>
+  <div class="mt-2 flex flex-wrap gap-2 text-[11px]">
+    <span class="px-1.5 py-0.5 rounded bg-emerald-900/30 text-emerald-300">
+      verdict {{ register.verdict }} · conf {{ '%.2f'|format(register.verified_confidence or 0) }}
+    </span>
+    {% if register.novelty_type %}
+      <span class="px-1.5 py-0.5 rounded bg-indigo-900/30 text-indigo-300">{{ register.novelty_type }}</span>
+    {% endif %}
+    {% if 'premises_supported' in register %}
+      <span class="px-1.5 py-0.5 rounded {% if register.premises_supported %}bg-emerald-900/30 text-emerald-300{% else %}bg-red-900/30 text-red-300{% endif %}">
+        premises {% if register.premises_supported %}supported{% else %}unsupported{% endif %}
+      </span>
+      <span class="px-1.5 py-0.5 rounded {% if register.synthesis_findable %}bg-red-900/30 text-red-300{% else %}bg-emerald-900/30 text-emerald-300{% endif %}">
+        synthesis {% if register.synthesis_findable %}in literature{% else %}not in literature{% endif %}
+      </span>
+    {% endif %}
+  </div>
+  {% if register.description %}
+    <div class="mt-3 text-xs text-slate-300 whitespace-pre-wrap">{{ register.description }}</div>
+  {% endif %}
+  {% if register.motivation %}
+    <div class="mt-3 text-xs">
+      <div class="text-slate-500 uppercase tracking-wider text-[10px] mb-0.5">Motivation</div>
+      <div class="text-slate-300 whitespace-pre-wrap">{{ register.motivation }}</div>
+    </div>
+  {% endif %}
+  {% if register.verification_summary %}
+    <div class="mt-3 text-xs">
+      <div class="text-slate-500 uppercase tracking-wider text-[10px] mb-0.5">Verifier's summary</div>
+      <div class="text-slate-300 whitespace-pre-wrap">{{ register.verification_summary }}</div>
+    </div>
+  {% endif %}
+  {% if register_predictions %}
+    <div class="mt-3 text-xs">
+      <div class="text-slate-500 uppercase tracking-wider text-[10px] mb-1">Attached predictions</div>
+      <ul class="list-disc pl-5 space-y-1 text-slate-300">
+        {% for p in register_predictions %}
+          <li>
+            <span class="mono text-[10px] text-slate-500">{{ p.id }}</span> · {{ p.status }} · target {{ p.target_date }}
+            <div class="text-slate-400">{{ p.claim }}</div>
+          </li>
+        {% endfor %}
+      </ul>
+    </div>
+  {% endif %}
+
+{% elif kind == 'prediction' %}
+  <h4 class="font-semibold text-slate-100 leading-snug">{{ prediction.claim }}</h4>
+  <div class="mt-2 flex flex-wrap gap-2 text-[11px]">
+    <span class="px-1.5 py-0.5 rounded
+                 {% if prediction.status == 'confirmed' %}bg-emerald-900/30 text-emerald-300
+                 {% elif prediction.status == 'refuted' %}bg-red-900/30 text-red-300
+                 {% elif prediction.status == 'expired' %}bg-slate-800 text-slate-400
+                 {% else %}bg-amber-900/30 text-amber-300{% endif %}">
+      {{ prediction.status }}
+    </span>
+    <span class="px-1.5 py-0.5 rounded bg-slate-800 text-slate-300">target {{ prediction.target_date }}</span>
+  </div>
+  {% if prediction.falsifiable_condition %}
+    <div class="mt-3 text-xs">
+      <div class="text-slate-500 uppercase tracking-wider text-[10px] mb-0.5">Falsifiable condition</div>
+      <div class="text-slate-300 whitespace-pre-wrap">{{ prediction.falsifiable_condition }}</div>
+    </div>
+  {% endif %}
+  {% if prediction.check_method %}
+    <div class="mt-3 text-xs">
+      <div class="text-slate-500 uppercase tracking-wider text-[10px] mb-0.5">Check method</div>
+      <div class="text-slate-400 whitespace-pre-wrap">{{ prediction.check_method }}</div>
+    </div>
+  {% endif %}
+  {% if parent_register %}
+    <div class="mt-3 text-xs text-slate-500">
+      From register entry: <span class="mono text-slate-300">{{ parent_register.title }}</span>
+    </div>
+  {% endif %}
+
+{% elif kind == 'source' %}
+  <div class="text-sm text-slate-200 break-all">
+    {% if source_url.startswith('http') %}
+      <a href="{{ source_url }}" target="_blank" rel="noopener noreferrer"
+         class="text-indigo-400 hover:underline">{{ source_url }}</a>
+    {% else %}
+      <span class="mono">{{ source_url }}</span>
+    {% endif %}
+  </div>
+  <div class="mt-2 text-xs text-slate-500">Cited by {{ source_citing_entries|length }} entr{{ 'y' if source_citing_entries|length == 1 else 'ies' }}:</div>
+  <ul class="mt-1 list-disc pl-5 space-y-0.5 text-xs text-slate-400">
+    {% for e in source_citing_entries %}
+      <li><span class="mono text-[10px] text-slate-500">{{ e.id }}</span> — {{ e.question }}</li>
+    {% endfor %}
+  </ul>
+
+{% elif kind == 'tag' %}
+  <div class="text-sm text-slate-200">
+    <span class="px-1.5 py-0.5 rounded bg-purple-900/30 text-purple-300 mono">{{ tag_name }}</span>
+  </div>
+  <div class="mt-2 text-xs text-slate-500">Used in {{ tag_entries|length }} entr{{ 'y' if tag_entries|length == 1 else 'ies' }}:</div>
+  <ul class="mt-1 list-disc pl-5 space-y-0.5 text-xs text-slate-400">
+    {% for e in tag_entries %}
+      <li><span class="mono text-[10px] text-slate-500">{{ e.id }}</span> — {{ e.question }}</li>
+    {% endfor %}
+  </ul>
+
+{% else %}
+  <div class="text-sm text-slate-400">No detail renderer for kind <span class="mono">{{ kind }}</span>.</div>
+{% endif %}
+
+{% set tab_by_kind = {
+  'entry':      'entries',
+  'xref':       'entries',
+  'insight':    'insights',
+  'register':   'register',
+  'prediction': 'predictions',
+} %}
+{% if tab_by_kind.get(kind) %}
+  <a class="mt-3 inline-block text-indigo-400 hover:text-indigo-300 underline underline-offset-2 text-xs"
+     href="/journals/{{ name }}?tab={{ tab_by_kind[kind] }}">
+    Open in {{ tab_by_kind[kind] }} tab →
+  </a>
+{% endif %}

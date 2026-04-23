@@ -55,3 +55,17 @@ max_attempts = 5
 base_delay_seconds = 0.5
 max_delay_seconds = 8.0
 jitter_seconds = 0.25
+
+[engine]
+# Operational knobs for the loop. Editable via the Settings page.
+#
+# cross_ref_window is the biggest lever on big-context primary models.
+# Default 20 entries; bump to 80-120 with Kimi K2.6 or other 200K+ models so
+# cross-reference surfaces intersections across a wider slice of the journal.
+cross_ref_window = 20
+questions_per_cycle = 3
+investigations_per_cycle = 1
+cross_ref_frequency = 3
+novelty_threshold = 0.7
+register_confidence_floor = 0.6
+verify_insights = true

@@ -101,11 +101,28 @@ def _render_entry(entry: dict, predictions: list[dict]) -> list[str]:
         out.append(summary)
         out.append("")
 
-    prior_art_found = entry.get("prior_art_found", False)
-    out.append(f"- **Prior art found:** {'yes' if prior_art_found else 'no'}")
-    citations = entry.get("prior_art_citations", []) or []
-    for c in citations:
-        out.append(f"  - {c}")
+    novelty_type = entry.get("novelty_type", "")
+    if novelty_type:
+        out.append(f"- **Novelty type:** `{novelty_type}`")
+
+    if "premises_supported" in entry or "synthesis_findable" in entry:
+        premises_supported = entry.get("premises_supported", True)
+        synthesis_findable = entry.get("synthesis_findable", False)
+        out.append(f"- **Premises supported in literature:** {'yes' if premises_supported else 'no'}")
+        premises_cites = entry.get("premises_support_citations", []) or []
+        for c in premises_cites:
+            out.append(f"  - {c}")
+        out.append(f"- **Synthesis already in literature:** {'yes' if synthesis_findable else 'no'}")
+        synth_cites = entry.get("synthesis_prior_art", []) or entry.get("prior_art_citations", []) or []
+        for c in synth_cites:
+            out.append(f"  - {c}")
+    else:
+        # Legacy entry written before the premises/synthesis split.
+        prior_art_found = entry.get("prior_art_found", False)
+        out.append(f"- **Prior art found:** {'yes' if prior_art_found else 'no'}")
+        citations = entry.get("prior_art_citations", []) or []
+        for c in citations:
+            out.append(f"  - {c}")
 
     contradictions = entry.get("contradicting_findings", []) or []
     if contradictions:

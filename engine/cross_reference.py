@@ -74,15 +74,44 @@ class CrossReferenceMixin:
             (tuple(sorted(x.get("source_entries", []))), x.get("connection_type"))
             for x in self.journal.cross_references
         }
+        existing_participant_sets = [
+            frozenset(x.get("source_entries", []) or [])
+            for x in self.journal.cross_references
+        ]
+
+        def _participant_overlap(candidate: set[str]) -> float:
+            """Max overlap coefficient between candidate and any existing xref.
+            Overlap coefficient = |A ∩ B| / min(|A|, |B|) — 1.0 means subset."""
+            if not candidate:
+                return 0.0
+            best = 0.0
+            for prior in existing_participant_sets:
+                if not prior:
+                    continue
+                inter = len(candidate & prior)
+                denom = min(len(candidate), len(prior))
+                if denom == 0:
+                    continue
+                best = max(best, inter / denom)
+            return best
 
         xrefs = []
         skipped = 0
+        skipped_attractor = 0
         for x in result.get("cross_references", []):
             source_ids = x.get("source_entry_ids", [])
             connection_type = x.get("connection_type", "pattern")
             key = (tuple(sorted(source_ids)), connection_type)
             if key in existing_keys:
                 skipped += 1
+                continue
+            # Anti-attractor gate: if the participant set heavily overlaps an existing
+            # xref's participants, the insight space is likely to repeat. Require either
+            # a very high novelty_score (>= 0.85) to justify reentering, or drop.
+            overlap = _participant_overlap(set(source_ids))
+            claimed_novelty = float(x.get("novelty_score", 0.5) or 0.0)
+            if overlap >= 0.5 and claimed_novelty < 0.85:
+                skipped_attractor += 1
                 continue
             existing_keys.add(key)
 
@@ -100,11 +129,21 @@ class CrossReferenceMixin:
             self.journal.add_cross_reference(xref)
             for entry_id in xref.source_entries:
                 self.journal.annotate_connection(entry_id, xref.id)
-            self._enqueue_questions(xref.suggested_questions, source=f"xref:{xref.id}")
+            # Priority: xref novelty_score is the direct reward signal — novel connections
+            # that raise interesting follow-ups should jump ahead of stale entry-level leftovers.
+            xref_priority = max(0.4, min(1.0, 0.4 + 0.6 * float(xref.novelty_score or 0.0)))
+            self._enqueue_questions(
+                xref.suggested_questions,
+                source=f"xref:{xref.id}",
+                priority=xref_priority,
+            )
             print(f"  [{xref.connection_type}] (novelty={xref.novelty_score:.2f}) {xref.description[:80]}...")
 
         if skipped:
             print(f"  Skipped {skipped} duplicate cross-reference(s).")
+        if skipped_attractor:
+            print(f"  Skipped {skipped_attractor} attractor-basin cross-reference(s) "
+                  "(participant overlap ≥50%, novelty<0.85).")
 
         if xrefs:
             self.journal.save()

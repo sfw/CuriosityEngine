@@ -1,0 +1,117 @@
+<div class="grid gap-6 md:grid-cols-2">
+  <!-- FOCUS + SEARCH -->
+  <section>
+    <div class="flex items-center gap-2 mb-3">
+      <svg class="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+        <path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+      </svg>
+      <h3 class="text-sm font-semibold uppercase tracking-wider text-slate-300">Focus</h3>
+    </div>
+    {% if focus %}
+      <div class="rounded-xl border border-indigo-500/40 bg-indigo-500/10 p-3 text-sm text-indigo-100">
+        {{ focus }}
+      </div>
+    {% else %}
+      <p class="text-sm text-slate-500">No focus set. Phase prompts run against the broader domain only.</p>
+    {% endif %}
+
+    <form method="post" action="/journals/{{ name }}/focus" class="mt-3 space-y-2">
+      <textarea name="focus" rows="3"
+                class="w-full px-3 py-2 rounded-lg border border-slate-700/60 bg-slate-900/60 text-sm placeholder:text-slate-600"
+                placeholder="e.g. the role of latent-space exploration vs template recombination in creative output">{% if focus %}{{ focus }}{% endif %}</textarea>
+      <div class="flex gap-2">
+        <button type="submit" class="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm shadow-lg shadow-indigo-900/20">Set focus</button>
+        {% if focus %}
+          <button type="submit" formaction="/journals/{{ name }}/focus/clear"
+                  class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-sm">Clear</button>
+        {% endif %}
+      </div>
+    </form>
+
+    <div class="mt-8 flex items-center gap-2 mb-3">
+      <svg class="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+      </svg>
+      <h3 class="text-sm font-semibold uppercase tracking-wider text-slate-300">Semantic search</h3>
+    </div>
+    <form class="space-y-2"
+          hx-post="/journals/{{ name }}/find-similar"
+          hx-target="#similar-results"
+          hx-swap="innerHTML">
+      <input name="query" required placeholder="free-text query over journal entries"
+             class="w-full px-3 py-2 rounded-lg border border-slate-700/60 bg-slate-900/60 text-sm placeholder:text-slate-600" />
+      <div class="flex gap-2 items-center">
+        <input type="number" name="top_k" value="10" min="1" max="30"
+               class="w-20 px-2 py-1.5 rounded-lg border border-slate-700/60 bg-slate-900/60 text-sm mono" />
+        <button type="submit" class="px-3 py-1.5 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white text-sm">Search</button>
+      </div>
+    </form>
+    <div id="similar-results" class="mt-3"></div>
+  </section>
+
+  <!-- QUEUE -->
+  <section>
+    <div class="flex items-center gap-2 mb-3">
+      <svg class="w-4 h-4 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h7"/>
+      </svg>
+      <h3 class="text-sm font-semibold uppercase tracking-wider text-slate-300">Question queue</h3>
+      <span class="mono text-xs text-slate-500">{{ queue|length }}</span>
+    </div>
+
+    {% if queue %}
+      <p class="text-xs text-slate-500 mb-2">Sorted by priority — highest-priority questions will be investigated first on the next run.</p>
+      <ul class="space-y-2 text-sm">
+        {% for q in queue|sort(attribute='priority', reverse=True) %}
+          {% set pri = q.priority if q.priority is defined else 0.5 %}
+          <li class="rounded-xl border border-slate-700/60 {% if q.source.startswith('human') %}bg-indigo-500/10 border-indigo-500/30{% else %}bg-slate-800/30{% endif %} p-3 flex items-start gap-3">
+            <div class="flex-1 min-w-0">
+              <div class="flex items-baseline gap-2 mb-0.5 flex-wrap">
+                <span class="mono text-xs {% if q.source.startswith('human') %}text-indigo-300{% else %}text-slate-500{% endif %}">
+                  {{ q.source }}
+                </span>
+                <span class="mono text-[10px] px-1.5 py-0.5 rounded
+                             {% if pri >= 0.8 %}bg-emerald-500/20 text-emerald-300
+                             {% elif pri >= 0.6 %}bg-sky-500/20 text-sky-300
+                             {% else %}bg-slate-700 text-slate-400{% endif %}"
+                      title="Expected-reward priority at enqueue time">pri {{ '%.2f'|format(pri) }}</span>
+              </div>
+              <div class="text-slate-200">{{ q.question }}</div>
+            </div>
+            <form method="post" action="/journals/{{ name }}/questions/delete" class="flex-shrink-0">
+              <input type="hidden" name="question_text" value="{{ q.question }}" />
+              <button type="submit" title="Remove from queue"
+                      class="p-1 rounded-md text-slate-500 hover:text-rose-400 hover:bg-slate-800">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+                </svg>
+              </button>
+            </form>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="text-sm text-slate-500">Queue is empty. Emergent questions from past cycles and human-directed questions you add here get investigated first on the next run.</p>
+    {% endif %}
+
+    <form method="post" action="/journals/{{ name }}/questions/add" class="mt-3 space-y-2">
+      <textarea name="question" rows="3" required
+                class="w-full px-3 py-2 rounded-lg border border-slate-700/60 bg-slate-900/60 text-sm placeholder:text-slate-600"
+                placeholder="A specific, investigable research question."></textarea>
+      <div class="flex gap-2">
+        <button type="submit" class="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm shadow-lg shadow-indigo-900/20">
+          Queue question
+        </button>
+        {% if queue %}
+          <button type="submit" formaction="/journals/{{ name }}/questions/clear"
+                  formnovalidate
+                  class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-sm"
+                  onclick="return confirm('Clear all {{ queue|length }} queued questions?')">
+            Clear all
+          </button>
+        {% endif %}
+      </div>
+    </form>
+  </section>
+</div>

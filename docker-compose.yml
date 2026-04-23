@@ -22,3 +22,39 @@ services:
       E2B_API_KEY: ${E2B_API_KEY:-}
     # Default command shows CLI help; real runs override via `docker compose run ... --cycles 3`.
     command: ["--help"]
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        ENGINE_UID: ${HOST_UID:-1000}
+        ENGINE_GID: ${HOST_GID:-1000}
+    image: curiosity-engine:latest
+    container_name: curiosity-engine-web
+    # Same volumes as the engine service — web and CLI share state.
+    # web/ + engine/ + top-level .py modules mounted read-only so code edits
+    # apply without rebuilding the image (paired with --reload below).
+    volumes:
+      - ./data:/workspace
+      - ${HOME}/.CuriosityEngine:/home/engine/.CuriosityEngine
+      - ./web:/app/web:ro
+      - ./engine:/app/engine:ro
+      - ./journal.py:/app/journal.py:ro
+      - ./models.py:/app/models.py:ro
+      - ./providers.py:/app/providers.py:ro
+      - ./config.py:/app/config.py:ro
+      - ./prompts.py:/app/prompts.py:ro
+      - ./register.py:/app/register.py:ro
+      - ./retry_utils.py:/app/retry_utils.py:ro
+      - ./json_utils.py:/app/json_utils.py:ro
+      - ./curiosity_engine.py:/app/curiosity_engine.py:ro
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      E2B_API_KEY: ${E2B_API_KEY:-}
+    # Bind to localhost only — single-user, no auth.
+    ports:
+      - "127.0.0.1:8000:8000"
+    entrypoint: []
+    command: ["uvicorn", "web.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "/app"]

@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{% block title %}Curiosity Engine{% endblock %}</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/app.css" />
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['"Inter"', 'ui-sans-serif', 'system-ui'],
+            mono: ['"JetBrains Mono"', 'ui-monospace', 'monospace'],
+          },
+        },
+      },
+    }
+  </script>
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      background:
+        radial-gradient(1200px 600px at 15% -10%, rgba(99,102,241,0.12), transparent 60%),
+        radial-gradient(1000px 500px at 90% 0%, rgba(16,185,129,0.08), transparent 60%),
+        #0b1220;
+      min-height: 100vh;
+    }
+    .mono { font-family: "JetBrains Mono", ui-monospace, monospace; }
+    .shimmer {
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.04), transparent);
+      background-size: 200% 100%;
+      animation: shimmer 2.5s infinite;
+    }
+    @keyframes shimmer { to { background-position: -200% 0; } }
+    .card {
+      background: linear-gradient(180deg, rgba(30,41,59,0.7), rgba(15,23,42,0.7));
+      border: 1px solid rgba(148,163,184,0.12);
+      backdrop-filter: blur(8px);
+    }
+    .card-hover:hover {
+      border-color: rgba(129,140,248,0.45);
+      transform: translateY(-1px);
+      transition: transform 150ms ease, border-color 150ms ease;
+    }
+    .gradient-title {
+      background: linear-gradient(90deg, #e2e8f0 0%, #a5b4fc 100%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    details > summary { list-style: none; cursor: pointer; }
+    details > summary::-webkit-details-marker { display: none; }
+    .chip {
+      display: inline-flex; align-items: center; gap: 0.35rem;
+      padding: 0.125rem 0.625rem; border-radius: 9999px;
+      font-size: 0.7rem; font-weight: 500;
+      border: 1px solid rgba(148,163,184,0.18);
+      background: rgba(30,41,59,0.5);
+    }
+    .chip-dot { width: 0.5rem; height: 0.5rem; border-radius: 9999px; display: inline-block; }
+    .pill-tab {
+      padding: 0.5rem 1rem;
+      border-radius: 9999px;
+      font-size: 0.875rem;
+      color: rgb(148 163 184);
+      transition: all 150ms ease;
+    }
+    .pill-tab:hover {
+      color: rgb(203 213 225);
+      background: rgba(30,41,59,0.6);
+    }
+    .pill-tab[data-active="true"] {
+      color: rgb(224 231 255);
+      background: linear-gradient(180deg, rgba(99,102,241,0.25), rgba(99,102,241,0.15));
+      border: 1px solid rgba(129,140,248,0.35);
+      box-shadow: 0 1px 0 rgba(255,255,255,0.04) inset;
+    }
+  </style>
+</head>
+<body class="text-slate-100 antialiased">
+  <header class="sticky top-0 z-40 backdrop-blur-lg border-b border-slate-800/70 bg-slate-950/60">
+    <div class="max-w-7xl mx-auto px-6 py-3 flex items-center gap-8">
+      <a href="/journals" class="flex items-center gap-2.5 font-semibold">
+        <svg class="w-6 h-6 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 2L3 7l9 5 9-5-9-5z"/>
+          <path stroke-linecap="round" stroke-linejoin="round" d="M3 17l9 5 9-5"/>
+          <path stroke-linecap="round" stroke-linejoin="round" d="M3 12l9 5 9-5"/>
+        </svg>
+        <span class="gradient-title">Curiosity Engine</span>
+      </a>
+      <nav class="flex gap-1 text-sm">
+        <a href="/journals" class="px-3 py-1.5 rounded-md text-slate-300 hover:text-white hover:bg-slate-800/60">Journals</a>
+        <a href="/run" class="px-3 py-1.5 rounded-md text-slate-300 hover:text-white hover:bg-slate-800/60">Run</a>
+        <a href="/settings" class="px-3 py-1.5 rounded-md text-slate-300 hover:text-white hover:bg-slate-800/60">Settings</a>
+      </nav>
+      <div class="ml-auto flex items-center gap-3 text-xs mono hidden md:flex">
+        <a id="ce-run-indicator"
+           href="/journals"
+           class="flex items-center gap-1.5 px-2 py-1 rounded-md text-slate-500 hover:text-slate-300 hover:bg-slate-800/60 transition-colors"
+           title="Engine idle — click to browse journals">
+          <span id="ce-run-dot-outer" class="relative flex items-center justify-center w-2.5 h-2.5">
+            <span id="ce-run-dot-ping" class="absolute inset-0 rounded-full hidden"></span>
+            <span id="ce-run-dot" class="relative inline-block w-2 h-2 rounded-full bg-emerald-500/50"></span>
+          </span>
+          <span id="ce-run-label" class="hidden text-amber-300">running</span>
+        </a>
+        <span class="text-slate-600">localhost:8000</span>
+      </div>
+    </div>
+  </header>
+
+  <script>
+    // Top-bar activity indicator. Polls /active-runs.json every 5s.
+    // Idle → dim emerald dot; active → amber dot with ping halo + clickable link
+    // to the running journal's Runs tab.
+    (() => {
+      const link   = document.getElementById("ce-run-indicator");
+      const dot    = document.getElementById("ce-run-dot");
+      const ping   = document.getElementById("ce-run-dot-ping");
+      const label  = document.getElementById("ce-run-label");
+      if (!link || !dot) return;
+
+      const IDLE_DOT_CLASS   = "relative inline-block w-2 h-2 rounded-full bg-emerald-500/50";
+      const ACTIVE_DOT_CLASS = "relative inline-block w-2 h-2 rounded-full bg-amber-400 shadow-[0_0_10px_rgba(251,191,36,0.65)]";
+      const ACTIVE_PING_CLASS = "absolute inset-0 rounded-full bg-amber-400/50 animate-ping";
+
+      function render(count, first) {
+        if (count > 0 && first && first.journal) {
+          link.href = `/journals/${encodeURIComponent(first.journal)}?tab=runs`;
+          link.title = count > 1
+            ? `${count} runs streaming — click to open ${first.journal}`
+            : `Active run on ${first.journal} — click to watch`;
+          link.classList.add("text-amber-300");
+          link.classList.remove("text-slate-500");
+          dot.className = ACTIVE_DOT_CLASS;
+          ping.className = ACTIVE_PING_CLASS;
+          label.textContent = count > 1 ? `${count} running` : "running";
+          label.classList.remove("hidden");
+        } else {
+          link.href = "/journals";
+          link.title = "Engine idle — click to browse journals";
+          link.classList.remove("text-amber-300");
+          link.classList.add("text-slate-500");
+          dot.className = IDLE_DOT_CLASS;
+          ping.className = "absolute inset-0 rounded-full hidden";
+          label.classList.add("hidden");
+        }
+      }
+
+      async function poll() {
+        try {
+          const r = await fetch("/active-runs.json", { cache: "no-store" });
+          if (!r.ok) return;
+          const data = await r.json();
+          const first = (data.active || [])[0] || null;
+          render(data.count || 0, first);
+        } catch (_) { /* network blip — keep last-known state */ }
+      }
+
+      poll();
+      setInterval(poll, 5000);
+    })();
+  </script>
+
+  <main class="max-w-7xl mx-auto px-6 py-8">
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="max-w-7xl mx-auto px-6 py-6 text-xs text-slate-600 flex justify-between">
+    <div>Local research interface. Journals mounted from <span class="mono">./data/</span>.</div>
+    <div class="mono">proof of concept</div>
+  </footer>
+</body>
+</html>

@@ -1,0 +1,82 @@
+<div class="p-4">
+  <!-- Header: cmd + live indicator -->
+  <div class="flex items-center justify-between gap-3 mb-3 flex-wrap">
+    <div class="mono text-[11px] text-slate-500 break-all">$ {{ meta.cmd }}</div>
+    <div class="flex items-center gap-2 flex-shrink-0">
+      {% if is_active %}
+        <span class="chip" style="border-color:rgba(251,191,36,0.3)">
+          <span class="chip-dot animate-pulse" style="background:#fbbf24"></span>
+          streaming
+        </span>
+      {% elif meta.status == 'complete' %}
+        <span class="chip" style="border-color:rgba(52,211,153,0.3)">
+          <span class="chip-dot" style="background:#34d399"></span>
+          complete · exit 0
+        </span>
+      {% elif meta.status == 'failed' %}
+        <span class="chip" style="border-color:rgba(248,113,113,0.3)">
+          <span class="chip-dot" style="background:#f87171"></span>
+          failed · exit {{ meta.returncode }}
+        </span>
+      {% endif %}
+      <span class="mono text-[10px] text-slate-600">{{ run_id[:12] }}</span>
+    </div>
+  </div>
+
+  <!-- Metadata row -->
+  <div class="mb-3 flex flex-wrap gap-2 text-xs text-slate-500">
+    {% if meta.domain %}<span>domain: <span class="text-slate-300">{{ meta.domain }}</span></span>{% endif %}
+    <span>cycles: <span class="text-slate-300 mono">{{ meta.cycles }}</span></span>
+    <span>started: <span class="text-slate-300 mono ce-localtime" data-utc="{{ meta.started_at }}" title="{{ meta.started_at }}">{{ meta.started_at[:19].replace('T', ' ') }}</span></span>
+    {% if meta.completed_at %}
+      <span>completed: <span class="text-slate-300 mono ce-localtime" data-utc="{{ meta.completed_at }}" title="{{ meta.completed_at }}">{{ meta.completed_at[:19].replace('T', ' ') }}</span></span>
+    {% endif %}
+  </div>
+
+  <script>
+    (() => {
+      document.querySelectorAll('.ce-localtime').forEach(el => {
+        const iso = el.getAttribute('data-utc');
+        if (!iso) return;
+        const d = new Date(iso);
+        if (isNaN(d.getTime())) return;
+        const date = d.toLocaleDateString(undefined, {year: 'numeric', month: '2-digit', day: '2-digit'});
+        const time = d.toLocaleTimeString(undefined, {hour: '2-digit', minute: '2-digit', second: '2-digit'});
+        el.textContent = `${date} ${time}`;
+      });
+    })();
+  </script>
+
+  <!-- Log output -->
+  <pre id="runlog-{{ run_id }}"
+       class="mono text-[11px] whitespace-pre-wrap leading-snug text-slate-300 bg-slate-950 border border-slate-800/60 rounded-md p-3 max-h-[60vh] overflow-auto">{{ log_content }}</pre>
+
+  {% if is_active %}
+    <script>
+      (() => {
+        const RUN_ID = "{{ run_id }}";
+        const log = document.getElementById(`runlog-${RUN_ID}`);
+        if (!log) return;
+        // Scroll to the bottom of whatever we already have.
+        log.scrollTop = log.scrollHeight;
+
+        // Attach to the existing active run's SSE endpoint. If the run completes
+        // while we're watching, the stream emits a done event and we close it.
+        const es = new EventSource(`/run/stream/${RUN_ID}`);
+        es.onmessage = (m) => {
+          try {
+            const p = JSON.parse(m.data);
+            if (p.line !== undefined) {
+              log.textContent += p.line + "\n";
+              log.scrollTop = log.scrollHeight;
+            } else if (p.done) {
+              log.textContent += `\n[run complete · exit ${p.returncode}]`;
+              es.close();
+            }
+          } catch (e) { /* ignore malformed */ }
+        };
+        es.onerror = () => es.close();
+      })();
+    </script>
+  {% endif %}
+</div>

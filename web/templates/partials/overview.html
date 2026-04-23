@@ -1,0 +1,158 @@
+{% macro verdict_chip(verdict) %}
+  {% set meta = {
+    'confirmed':           ('emerald', 'confirmed'),
+    'partially_confirmed': ('amber',   'partially confirmed'),
+    'contradicted':        ('rose',    'contradicted'),
+    'unresolved':          ('slate',   'unresolved'),
+  }.get(verdict, ('slate', verdict or 'unknown')) %}
+  <span class="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-full
+               {% if meta[0] == 'emerald' %}bg-emerald-500/15 text-emerald-300 border border-emerald-500/30
+               {% elif meta[0] == 'amber' %}bg-amber-500/15 text-amber-300 border border-amber-500/30
+               {% elif meta[0] == 'rose' %}bg-rose-500/15 text-rose-300 border border-rose-500/30
+               {% else %}bg-slate-500/15 text-slate-300 border border-slate-500/30{% endif %}">
+    {{ meta[1] }}
+  </span>
+{% endmacro %}
+
+{% macro surprise_badge(delta) %}
+  {% if delta >= 0.7 %}
+    <span class="mono text-xs px-2 py-0.5 rounded bg-rose-500/20 text-rose-200 border border-rose-500/30">Δ {{ '%.2f'|format(delta) }}</span>
+  {% elif delta >= 0.4 %}
+    <span class="mono text-xs px-2 py-0.5 rounded bg-amber-500/20 text-amber-200 border border-amber-500/30">Δ {{ '%.2f'|format(delta) }}</span>
+  {% else %}
+    <span class="mono text-xs px-2 py-0.5 rounded bg-slate-700/60 text-slate-300">Δ {{ '%.2f'|format(delta) }}</span>
+  {% endif %}
+{% endmacro %}
+
+{% if high_surprise %}
+<section class="mb-6">
+  <div class="flex items-center gap-2 mb-3">
+    <svg class="w-4 h-4 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+    </svg>
+    <h3 class="text-sm font-semibold uppercase tracking-wider text-slate-300">Highest surprise</h3>
+    <span class="text-xs text-slate-500">where the model's prior collided with the evidence</span>
+  </div>
+
+  <div class="space-y-3">
+    {% for e in high_surprise %}
+      <a href="/journals/{{ name }}?tab=entries#{{ e.id }}"
+         class="block rounded-xl border border-slate-700/70 bg-slate-900/40 overflow-hidden hover:border-indigo-500/40 hover:bg-slate-900/60 transition-colors no-underline"
+         title="Open full entry in Entries tab">
+      <article>
+        <div class="p-4">
+          <div class="flex items-center gap-2 mb-2">
+            {{ surprise_badge(e.surprise_delta) }}
+            {% if e.hypothesis_verdict %}{{ verdict_chip(e.hypothesis_verdict) }}{% endif %}
+            <span class="mono text-xs text-slate-500 ml-auto">{{ e.id }}</span>
+          </div>
+
+          <div class="text-sm text-slate-200 leading-snug mb-3">
+            {{ e.question[:240] }}{% if e.question|length > 240 %}…{% endif %}
+          </div>
+
+          {% if e.hypothesis or e.surprise_explanation %}
+            {% set both_sides = e.hypothesis and e.surprise_explanation %}
+            <div class="grid gap-2 mb-3 {% if both_sides %}md:grid-cols-2{% endif %}">
+              {% if e.hypothesis %}
+                <div class="rounded-lg border border-slate-700/50 bg-slate-900/50 p-3.5">
+                  <div class="flex items-center gap-1.5 mb-2">
+                    <svg class="w-3.5 h-3.5 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
+                    </svg>
+                    <span class="text-[10px] uppercase tracking-wider font-semibold text-indigo-300">What the model expected</span>
+                    <span class="text-[10px] text-slate-500 normal-case tracking-normal">— its committed prior, stated before any search ran</span>
+                  </div>
+                  <div class="text-sm text-slate-300 leading-relaxed">
+                    {{ e.hypothesis[:420] }}{% if e.hypothesis|length > 420 %}…{% endif %}
+                  </div>
+                </div>
+              {% endif %}
+              {% if e.surprise_explanation %}
+                <div class="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3.5">
+                  <div class="flex items-center gap-1.5 mb-2">
+                    <svg class="w-3.5 h-3.5 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                    </svg>
+                    <span class="text-[10px] uppercase tracking-wider font-semibold text-amber-300">What the evidence showed instead</span>
+                    <span class="text-[10px] text-slate-500 normal-case tracking-normal">— where the investigation diverged from the prior</span>
+                  </div>
+                  <div class="text-sm text-slate-200 leading-relaxed">
+                    {{ e.surprise_explanation[:420] }}{% if e.surprise_explanation|length > 420 %}…{% endif %}
+                  </div>
+                </div>
+              {% endif %}
+            </div>
+          {% endif %}
+
+          {% if e.confidence_before is not none and e.confidence_after is not none %}
+            {% set delta = (e.confidence_after or 0) - (e.confidence_before or 0) %}
+            <div class="flex items-center gap-3 text-xs text-slate-400">
+              <span class="mono">Confidence</span>
+              <span class="mono text-slate-300">{{ '%.2f'|format(e.confidence_before or 0) }}</span>
+              <svg class="w-4 h-4 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M17 8l4 4m0 0l-4 4m4-4H3"/>
+              </svg>
+              <span class="mono {% if delta < -0.15 %}text-rose-300{% elif delta > 0.15 %}text-emerald-300{% else %}text-slate-300{% endif %}">
+                {{ '%.2f'|format(e.confidence_after or 0) }}
+              </span>
+              {% if delta != 0 %}
+                <span class="mono {% if delta < 0 %}text-rose-400{% else %}text-emerald-400{% endif %}">
+                  ({{ '+' if delta > 0 else '' }}{{ '%.2f'|format(delta) }})
+                </span>
+              {% endif %}
+              {% if e.domain_tags %}
+                <span class="ml-auto flex flex-wrap gap-1 justify-end">
+                  {% for t in e.domain_tags[:4] %}
+                    <span class="text-[10px] px-1.5 py-0.5 rounded bg-slate-800/60 text-slate-500 mono">{{ t }}</span>
+                  {% endfor %}
+                </span>
+              {% endif %}
+            </div>
+          {% endif %}
+        </div>
+      </article>
+      </a>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
+{% if recent %}
+<section>
+  <div class="flex items-center gap-2 mb-3">
+    <svg class="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+    </svg>
+    <h3 class="text-sm font-semibold uppercase tracking-wider text-slate-300">Recent investigations</h3>
+  </div>
+  <div class="space-y-2">
+    {% for e in recent %}
+      <a href="/journals/{{ name }}?tab=entries#{{ e.id }}"
+         class="block rounded-xl border border-slate-700/60 bg-slate-800/30 p-3 hover:border-indigo-500/40 hover:bg-slate-800/50 transition-colors no-underline"
+         title="Open full entry in Entries tab">
+        <div class="flex items-baseline gap-2 mb-1 flex-wrap">
+          <span class="mono text-xs text-slate-500">{{ e.id }}</span>
+          {{ surprise_badge(e.surprise_delta or 0) }}
+          {% if e.hypothesis_verdict %}{{ verdict_chip(e.hypothesis_verdict) }}{% endif %}
+          {% if e.domain_tags %}
+            {% for t in e.domain_tags[:3] %}
+              <span class="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 mono">{{ t }}</span>
+            {% endfor %}
+          {% endif %}
+        </div>
+        <div class="text-sm text-slate-200">{{ e.question[:220] }}{% if e.question|length > 220 %}…{% endif %}</div>
+      </a>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
+{% if not high_surprise and not recent %}
+  <div class="text-center py-12">
+    <svg class="w-10 h-10 mx-auto text-slate-700 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
+    </svg>
+    <p class="text-sm text-slate-500">Nothing investigated yet. Run cycles to populate this journal.</p>
+  </div>
+{% endif %}

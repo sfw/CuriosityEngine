@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}{{ name }} — Curiosity Engine{% endblock %}
+{% block content %}
+  <div class="mb-6 flex items-start justify-between gap-6">
+    <div class="min-w-0">
+      <div class="text-xs text-slate-500 mb-1 flex items-center gap-2">
+        <a href="/journals" class="hover:text-slate-300">Journals</a>
+        <span>›</span>
+        <span class="mono text-slate-600">{{ name }}.json</span>
+      </div>
+      <h1 class="text-3xl font-semibold tracking-tight gradient-title">{{ name.replace('_', ' ') }}</h1>
+      {% if journal.focus %}
+        <div class="mt-3 flex items-start gap-2 text-sm text-indigo-300 max-w-3xl">
+          <svg class="w-4 h-4 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+            <path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+          </svg>
+          <span><span class="text-slate-500">Focus:</span> {{ journal.focus }}</span>
+        </div>
+      {% endif %}
+    </div>
+    {% set has_entries = journal.entries|length > 0 %}
+    <a href="/run?journal={{ name }}"
+       class="flex-shrink-0 flex items-center gap-2 text-sm px-4 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-900/30 transition font-medium">
+      {% if has_entries %}
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/>
+          <circle cx="12" cy="12" r="9"/>
+        </svg>
+        Continue exploration →
+      {% else %}
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/>
+        </svg>
+        Begin investigation →
+      {% endif %}
+    </a>
+  </div>
+
+  <!-- Stats strip -->
+  <div class="grid grid-cols-2 md:grid-cols-6 gap-2 mb-6">
+    {% set stats = [
+      ('Entries',     journal.entries|length,           'text-indigo-300',  'entries',     'Open the Entries tab'),
+      ('Cross-refs',  journal.cross_references|length,  'text-amber-300',   'graph-view',  'Cross-references appear as nodes in the Graph'),
+      ('Insights',    journal.insights|length,          'text-emerald-300', 'insights',    'Open the Insights tab'),
+      ('Registered',  journal.register|length,          'text-emerald-200', 'register',    'Open the Register tab'),
+      ('Predictions', journal.predictions|length,       'text-pink-300',    'predictions', 'Open the Predictions tab'),
+      ('Queued',      journal.question_queue|length,    'text-slate-300',   'queue',       'Open the Focus & Queue tab'),
+    ] %}
+    {% for label, value, text_class, target_tab, tip in stats %}
+      <a href="/journals/{{ name }}?tab={{ target_tab }}"
+         title="{{ tip }}"
+         class="card rounded-xl px-4 py-3 no-underline hover:border-indigo-500/40 hover:bg-slate-800/40 transition-colors">
+        <div class="text-xs text-slate-500 uppercase tracking-wider">{{ label }}</div>
+        <div class="mt-1 text-2xl font-semibold {{ text_class }}">{{ value }}</div>
+      </a>
+    {% endfor %}
+  </div>
+
+  <!-- Tabs -->
+  <div class="flex gap-1 mb-5 flex-wrap">
+    {% set tabs = [
+      ('overview', 'Overview', 'M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6'),
+      ('entries', 'Entries', 'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z'),
+      ('insights', 'Insights', 'M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z'),
+      ('register', 'Register', 'M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z'),
+      ('predictions', 'Predictions', 'M13 10V3L4 14h7v7l9-11h-7z'),
+      ('queue', 'Focus & Queue', 'M3 4h13M3 8h9m-9 4h6m4 0l4-4m0 0l4 4m-4-4v12'),
+      ('runs', 'Runs', 'M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z M21 12a9 9 0 11-18 0 9 9 0 0118 0z'),
+      ('graph-view', 'Graph', 'M17 20h2a2 2 0 002-2V8a2 2 0 00-2-2h-2m-5 0V4a2 2 0 012-2h2a2 2 0 012 2v2m-6 0h6M5 20h2a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z'),
+    ] %}
+    {% set active_tab = request.query_params.get('tab', 'overview') %}
+    {% for key, label, icon in tabs %}
+      <button type="button"
+              class="pill-tab flex items-center gap-2"
+              data-active="{{ 'true' if key == active_tab else 'false' }}"
+              hx-get="/journals/{{ name }}/{{ key }}"
+              hx-target="#tab-body"
+              hx-swap="innerHTML"
+              {% if key == active_tab %}hx-trigger="load, click"{% else %}hx-trigger="click"{% endif %}
+              hx-on::after-request="document.querySelectorAll('.pill-tab').forEach(b => b.setAttribute('data-active','false')); this.setAttribute('data-active','true')">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.8">
+          <path stroke-linecap="round" stroke-linejoin="round" d="{{ icon }}"/>
+        </svg>
+        {{ label }}
+      </button>
+    {% endfor %}
+  </div>
+
+  <div id="tab-body" class="card rounded-2xl p-5">
+    <div class="text-sm text-slate-500">Loading…</div>
+  </div>
+{% endblock %}

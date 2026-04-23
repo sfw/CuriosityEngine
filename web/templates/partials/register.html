@@ -1,0 +1,111 @@
+{% set statuses = [('', 'all'), ('unreviewed', 'unreviewed'), ('approved', 'approved'), ('rejected', 'rejected'), ('deferred', 'deferred')] %}
+<div class="mb-3 flex flex-wrap gap-1 items-center text-xs">
+  <span class="text-slate-500">Status:</span>
+  {% for val, label in statuses %}
+    <button type="button"
+            class="px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-700 hover:bg-indigo-100 dark:hover:bg-indigo-900 {% if filter_status == val %}ring-1 ring-indigo-600{% endif %}"
+            hx-get="/journals/{{ name }}/register{% if val %}?filter_status={{ val }}{% endif %}"
+            hx-target="#tab-body">
+      {{ label }}
+    </button>
+  {% endfor %}
+</div>
+
+{% if register %}
+  <div class="space-y-4">
+    {% for r in register %}
+      {% set status = r.human_review_status or 'unreviewed' %}
+      <article class="p-4 rounded-md border
+                      {% if status == 'approved' %}border-emerald-400 bg-emerald-50 dark:bg-emerald-900/20
+                      {% elif status == 'rejected' %}border-red-400 bg-red-50 dark:bg-red-900/20
+                      {% elif status == 'deferred' %}border-amber-400 bg-amber-50 dark:bg-amber-900/20
+                      {% else %}border-slate-200 dark:border-slate-700{% endif %}">
+        <div class="flex items-baseline justify-between">
+          <div class="flex items-baseline gap-2 flex-wrap">
+            <span class="text-xs mono text-slate-500">{{ r.id }}</span>
+            <span class="text-xs mono px-1.5 py-0.5 rounded bg-slate-200 dark:bg-slate-700">verdict {{ r.verdict }}</span>
+            <span class="text-xs mono px-1.5 py-0.5 rounded bg-emerald-200 dark:bg-emerald-800">conf {{ '%.2f'|format(r.verified_confidence or 0) }}</span>
+            {% if r.novelty_type %}
+              <span class="text-xs mono px-1.5 py-0.5 rounded
+                           {% if r.novelty_type == 'new_synthesis' %}bg-indigo-200 dark:bg-indigo-800
+                           {% elif r.novelty_type == 'correction' %}bg-purple-200 dark:bg-purple-800
+                           {% elif r.novelty_type == 'extension' %}bg-sky-200 dark:bg-sky-800
+                           {% elif r.novelty_type == 'restatement' %}bg-amber-200 dark:bg-amber-800
+                           {% else %}bg-slate-200 dark:bg-slate-700{% endif %}"
+                    title="Novelty type assigned by verifier">{{ r.novelty_type }}</span>
+            {% endif %}
+            <span class="text-xs mono px-1.5 py-0.5 rounded
+                         {% if status == 'approved' %}bg-emerald-200 dark:bg-emerald-800
+                         {% elif status == 'rejected' %}bg-red-200 dark:bg-red-800
+                         {% elif status == 'deferred' %}bg-amber-200 dark:bg-amber-800
+                         {% else %}bg-slate-200 dark:bg-slate-700{% endif %}">{{ status }}</span>
+          </div>
+        </div>
+        <h3 class="mt-1 font-semibold">{{ r.title }}</h3>
+        <p class="mt-2 text-sm whitespace-pre-wrap">{{ r.description }}</p>
+
+        {% if 'premises_supported' in r or 'synthesis_findable' in r %}
+          <div class="mt-2 flex flex-wrap gap-2 text-[11px]">
+            <span class="px-1.5 py-0.5 rounded {% if r.premises_supported %}bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300{% else %}bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300{% endif %}">
+              premises {% if r.premises_supported %}supported{% else %}unsupported{% endif %}
+            </span>
+            <span class="px-1.5 py-0.5 rounded {% if r.synthesis_findable %}bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300{% else %}bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300{% endif %}">
+              synthesis {% if r.synthesis_findable %}in literature{% else %}not in literature{% endif %}
+            </span>
+          </div>
+        {% endif %}
+        {% if r.motivation %}
+          <div class="mt-2 text-xs">
+            <span class="font-semibold text-slate-700 dark:text-slate-300">Motivation:</span>
+            <span class="text-slate-600 dark:text-slate-400">{{ r.motivation }}</span>
+          </div>
+        {% endif %}
+        {% if r.verification_summary %}
+          <div class="mt-2 text-xs">
+            <span class="font-semibold text-slate-700 dark:text-slate-300">Verifier's summary:</span>
+            <span class="text-slate-600 dark:text-slate-400">{{ r.verification_summary }}</span>
+          </div>
+        {% endif %}
+
+        {% if status == 'unreviewed' %}
+          <details class="mt-3 text-xs">
+            <summary class="cursor-pointer px-2 py-1 rounded bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 inline-block">
+              Review this entry
+            </summary>
+            <form class="mt-2 p-3 rounded bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 space-y-2"
+                  method="post"
+                  action="/journals/{{ name }}/register/{{ r.id }}/review">
+              <label class="block">
+                Notes (optional):
+                <textarea name="notes" rows="2" class="mt-1 w-full px-2 py-1 rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900"></textarea>
+              </label>
+              <label class="block">
+                Rejection reason (required if rejecting):
+                <textarea name="rejection_reason" rows="2" class="mt-1 w-full px-2 py-1 rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900"></textarea>
+              </label>
+              <label class="block">
+                Reviewer (optional):
+                <input name="reviewer" class="mt-1 w-full px-2 py-1 rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900" />
+              </label>
+              <div class="flex gap-2">
+                <button type="submit" name="action" value="approved" class="px-3 py-1 rounded bg-emerald-600 text-white hover:bg-emerald-700">Approve</button>
+                <button type="submit" name="action" value="rejected" class="px-3 py-1 rounded bg-red-600 text-white hover:bg-red-700">Reject</button>
+                <button type="submit" name="action" value="deferred" class="px-3 py-1 rounded bg-amber-600 text-white hover:bg-amber-700">Defer</button>
+              </div>
+            </form>
+          </details>
+        {% elif r.human_rejection_reason %}
+          <div class="mt-2 text-xs text-red-700 dark:text-red-400">
+            <span class="font-semibold">Rejection reason:</span> {{ r.human_rejection_reason }}
+          </div>
+        {% elif r.human_review_notes %}
+          <div class="mt-2 text-xs text-slate-600 dark:text-slate-400">
+            <span class="font-semibold">Notes:</span> {{ r.human_review_notes }}
+          </div>
+        {% endif %}
+      </article>
+    {% endfor %}
+  </div>
+{% else %}
+  <p class="text-sm text-slate-500">No register entries with that status.</p>
+{% endif %}

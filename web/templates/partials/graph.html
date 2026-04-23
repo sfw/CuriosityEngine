@@ -1,0 +1,239 @@
+<div>
+  <!-- Toolbar -->
+  <div class="flex items-center justify-between flex-wrap gap-3 mb-3">
+    <div class="flex items-center gap-1.5 text-xs">
+      <span class="text-slate-500 mr-1">show:</span>
+      <label class="flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-slate-700 hover:bg-slate-800 cursor-pointer">
+        <input type="checkbox" id="show-sources" checked class="accent-indigo-500" />
+        <span class="text-slate-300">sources</span>
+      </label>
+      <label class="flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-slate-700 hover:bg-slate-800 cursor-pointer">
+        <input type="checkbox" id="show-tags" checked class="accent-indigo-500" />
+        <span class="text-slate-300">tags</span>
+      </label>
+      <label class="flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-slate-700 hover:bg-slate-800 cursor-pointer">
+        <input type="checkbox" id="show-similarity" checked class="accent-indigo-500" />
+        <span class="text-slate-300">similarity edges</span>
+      </label>
+    </div>
+    <div class="flex gap-1.5 text-xs">
+      <button id="graph-reset" class="px-2.5 py-1 rounded-md bg-slate-800 hover:bg-slate-700 border border-slate-700">Reset view</button>
+      <button id="graph-relayout" class="px-2.5 py-1 rounded-md bg-slate-800 hover:bg-slate-700 border border-slate-700">Re-layout</button>
+      <a href="/journals/{{ name }}/graph.json" class="px-2.5 py-1 rounded-md text-indigo-400 hover:text-indigo-300">JSON</a>
+    </div>
+  </div>
+
+  <!-- Canvas -->
+  <div id="graph-container"
+       class="relative rounded-2xl border border-slate-700/60 bg-gradient-to-br from-slate-950 via-slate-950 to-slate-900 overflow-hidden"
+       style="height: 640px;">
+    <div id="graph-loading" class="absolute inset-0 flex items-center justify-center text-sm text-slate-500">
+      <div class="shimmer px-6 py-2 rounded-md">Loading graph…</div>
+    </div>
+    <div class="absolute top-3 right-3 rounded-xl bg-slate-900/85 backdrop-blur border border-slate-700/60 p-3 text-xs space-y-1.5 pointer-events-none z-10">
+      <div class="font-semibold text-slate-300 text-[10px] uppercase tracking-wider mb-1">Legend</div>
+      <div class="flex items-center gap-2"><span class="inline-block w-2.5 h-2.5 rounded-full" style="background:#818cf8"></span><span class="text-slate-300">Entry</span></div>
+      <div class="flex items-center gap-2"><span class="inline-block w-2.5 h-2.5 rounded-full" style="background:#fbbf24"></span><span class="text-slate-300">Cross-reference</span></div>
+      <div class="flex items-center gap-2"><span class="inline-block w-2.5 h-2.5 rounded-full" style="background:#34d399"></span><span class="text-slate-300">Insight</span></div>
+      <div class="flex items-center gap-2"><span class="inline-block w-2.5 h-2.5 rounded-full" style="background:#10b981"></span><span class="text-slate-300">Registered</span></div>
+      <div class="flex items-center gap-2"><span class="inline-block w-2.5 h-2.5 rounded-full" style="background:#f472b6"></span><span class="text-slate-300">Prediction</span></div>
+      <div class="flex items-center gap-2"><span class="inline-block w-2.5 h-2.5 rounded-full" style="background:#64748b"></span><span class="text-slate-300">Source</span></div>
+      <div class="flex items-center gap-2"><span class="inline-block w-2.5 h-2.5 rounded-full" style="background:#c084fc"></span><span class="text-slate-300">Tag</span></div>
+    </div>
+  </div>
+
+  <!-- Detail pane -->
+  <div id="graph-detail"
+       class="mt-3 p-4 rounded-xl border border-slate-700/60 bg-slate-900/40 min-h-[4.5rem] text-sm">
+    <p class="text-slate-500">Click a node to see details.</p>
+  </div>
+</div>
+
+<script src="https://unpkg.com/graphology@0.26.0/dist/graphology.umd.min.js"></script>
+<script src="https://unpkg.com/graphology-library@0.8.0/dist/graphology-library.min.js"></script>
+<script src="https://unpkg.com/sigma@3.0.1/dist/sigma.min.js"></script>
+<script>
+(() => {
+  const JOURNAL = "{{ name }}";
+  const palette = {
+    entry:      "#818cf8",
+    xref:       "#fbbf24",
+    insight:    "#34d399",
+    register:   "#10b981",
+    prediction: "#f472b6",
+    source:     "#64748b",
+    tag:        "#c084fc",
+  };
+  const edgeColor = {
+    "shares-tag":          "rgba(129,140,248,0.25)",
+    "cites-source":        "rgba(251,191,36,0.25)",
+    "semantic-similarity": "rgba(52,211,153,0.3)",
+    "cross-referenced-by": "rgba(251,191,36,0.8)",
+    "supports-insight":    "rgba(52,211,153,0.8)",
+    "registered-as":       "rgba(5,150,105,0.9)",
+    "predicts":            "rgba(244,114,182,0.8)",
+    "cites":               "rgba(100,116,139,0.35)",
+    "has-tag":             "rgba(192,132,252,0.35)",
+  };
+
+  let renderer = null;
+  let graph = null;
+  let rawData = null;
+
+  const randPos = () => (Math.random() - 0.5) * 200;
+
+  function buildGraph(showSources, showTags, showSimilarity) {
+    const g = new graphology.MultiUndirectedGraph();
+    for (const n of rawData.nodes) {
+      const k = n.attributes.kind;
+      if (k === "source" && !showSources) continue;
+      if (k === "tag" && !showTags) continue;
+      g.addNode(n.key, {
+        ...n.attributes,
+        x: randPos(),
+        y: randPos(),
+        color: palette[k] || "#94a3b8",
+      });
+    }
+    for (const e of rawData.edges) {
+      if (!g.hasNode(e.source) || !g.hasNode(e.target)) continue;
+      if (e.attributes.kind === "semantic-similarity" && !showSimilarity) continue;
+      try {
+        g.addEdgeWithKey(e.key, e.source, e.target, {
+          ...e.attributes,
+          color: edgeColor[e.attributes.kind] || "rgba(148,163,184,0.18)",
+        });
+      } catch (err) {}
+    }
+    if (g.order >= 3 && g.size >= 1 && window.graphologyLibrary && window.graphologyLibrary.layoutForceAtlas2) {
+      try {
+        graphologyLibrary.layoutForceAtlas2.assign(g, {
+          iterations: 200,
+          settings: { gravity: 1, scalingRatio: 12, barnesHutOptimize: g.order > 50 },
+        });
+      } catch (err) { console.warn("FA2 failed", err); }
+    } else if (g.order === 1) {
+      g.setNodeAttribute(g.nodes()[0], "x", 0);
+      g.setNodeAttribute(g.nodes()[0], "y", 0);
+    }
+    return g;
+  }
+
+  function render() {
+    const showSources = document.getElementById("show-sources").checked;
+    const showTags = document.getElementById("show-tags").checked;
+    const showSimilarity = document.getElementById("show-similarity").checked;
+    if (renderer) { renderer.kill(); renderer = null; }
+
+    graph = buildGraph(showSources, showTags, showSimilarity);
+
+    const container = document.getElementById("graph-container");
+    renderer = new Sigma(graph, container, {
+      renderEdgeLabels: false,
+      defaultEdgeColor: "rgba(148,163,184,0.18)",
+      labelColor: { color: "#cbd5e1" },
+      labelSize: 11,
+      labelRenderedSizeThreshold: 6,
+      zIndex: true,
+    });
+    setTimeout(() => { if (renderer) renderer.getCamera().animatedReset({ duration: 0 }); }, 50);
+
+    const detailEl = document.getElementById("graph-detail");
+    let activeNodeKey = null;
+
+    async function selectNode(node, { center = false } = {}) {
+      if (!graph.hasNode(node)) return;
+      activeNodeKey = node;
+      const a = graph.getNodeAttributes(node);
+      const kind = a.kind;
+      // Paint a fast skeleton immediately so the transition feels responsive.
+      detailEl.innerHTML = `
+        <div class="flex items-baseline gap-2 mb-2">
+          <span class="mono text-xs text-slate-500">${node}</span>
+          <span class="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-full"
+                style="background:${palette[kind]}22;color:${palette[kind]}">${kind}</span>
+        </div>
+        <div class="text-slate-400 text-xs">Loading full detail…</div>
+      `;
+      if (center && renderer) {
+        try {
+          const pos = renderer.getNodeDisplayData(node);
+          if (pos) renderer.getCamera().animate({ x: pos.x, y: pos.y, ratio: 0.4 }, { duration: 400 });
+        } catch (_) { /* sigma not ready yet */ }
+      }
+      try {
+        const res = await fetch(`/journals/${JOURNAL}/graph-node?key=${encodeURIComponent(node)}`);
+        if (activeNodeKey !== node) return; // a newer click superseded us
+        if (!res.ok) {
+          detailEl.innerHTML = `
+            <div class="flex items-baseline gap-2 mb-1">
+              <span class="mono text-xs text-slate-500">${node}</span>
+              <span class="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-full"
+                    style="background:${palette[kind]}22;color:${palette[kind]}">${kind}</span>
+            </div>
+            <div class="text-rose-400 text-xs">Failed to load detail (HTTP ${res.status}).</div>
+            <div class="mt-2 text-slate-200 leading-relaxed">${(a.label || "").replace(/</g, "&lt;")}</div>
+          `;
+          return;
+        }
+        detailEl.innerHTML = await res.text();
+      } catch (err) {
+        if (activeNodeKey !== node) return;
+        detailEl.innerHTML = `
+          <div class="text-rose-400 text-xs">Detail fetch failed: ${err.message}</div>
+          <div class="mt-2 text-slate-200 leading-relaxed">${(a.label || "").replace(/</g, "&lt;")}</div>
+        `;
+      }
+    }
+
+    renderer.on("clickNode", ({ node }) => selectNode(node));
+    renderer.on("clickStage", () => {
+      activeNodeKey = null;
+      detailEl.innerHTML = '<p class="text-slate-500">Click a node to see details.</p>';
+    });
+
+    // Expose selectNode so the hash-handler below can fire it after render.
+    window.__ceGraphSelectNode = selectNode;
+  }
+
+  async function loadGraph() {
+    const loading = document.getElementById("graph-loading");
+    try {
+      const res = await fetch(`/journals/${JOURNAL}/graph.json`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      rawData = await res.json();
+    } catch (err) {
+      loading.innerHTML = `<div class="text-rose-400">Failed to load: ${err.message}</div>`;
+      return;
+    }
+    if (!rawData.nodes.length) {
+      loading.innerHTML = `
+        <div class="text-center">
+          <div class="text-4xl mb-2 opacity-30">∅</div>
+          <div class="text-slate-400">No nodes yet.</div>
+          <div class="text-xs text-slate-500 mt-1">Run a cycle to populate this journal.</div>
+        </div>`;
+      return;
+    }
+    loading.style.display = "none";
+    render();
+    // If we arrived with a hash like #xref:x-371c8792 or #entry:j-abc, auto-select
+    // that node and pan to it. Sigma's layout + camera need a tick to settle after
+    // render(), so defer slightly.
+    const hash = (window.location.hash || "").replace(/^#/, "");
+    if (hash && window.__ceGraphSelectNode) {
+      setTimeout(() => window.__ceGraphSelectNode(hash, { center: true }), 120);
+    }
+  }
+
+  document.getElementById("show-sources").addEventListener("change", render);
+  document.getElementById("show-tags").addEventListener("change", render);
+  document.getElementById("show-similarity").addEventListener("change", render);
+  document.getElementById("graph-reset").addEventListener("click", () => {
+    if (renderer) renderer.getCamera().animatedReset({ duration: 300 });
+  });
+  document.getElementById("graph-relayout").addEventListener("click", () => render());
+
+  loadGraph();
+})();
+</script>

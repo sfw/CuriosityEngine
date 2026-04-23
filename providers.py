@@ -28,6 +28,35 @@ _DEFAULT_MAX_TOOL_ITERATIONS = 40
 _WRAP_UP_MARGIN = 5  # iterations before the hard cap at which we tell the model to wrap up
 
 
+def _openai_token_param_name(model_name: str) -> str:
+    """OpenAI renamed `max_tokens` → `max_completion_tokens` for reasoning models
+    (GPT-5 family, o1/o3/o4). Older models still take `max_tokens`. Other OpenAI-compat
+    providers (Moonshot/Kimi, Gemini, Groq, etc.) accept `max_tokens` — the new name
+    is OpenAI-specific for now."""
+    n = (model_name or "").strip().lower()
+    if n.startswith(("gpt-5", "o1", "o3", "o4")):
+        return "max_completion_tokens"
+    return "max_tokens"
+
+
+def _is_reasoning_model(model_name: str) -> bool:
+    """Heuristic for models whose internal chain-of-thought counts against the
+    output token budget. These need substantially larger max_tokens floors."""
+    n = (model_name or "").strip().lower()
+    return n.startswith(("gpt-5", "o1", "o3", "o4", "kimi-k2", "kimi-k3"))
+
+
+_REASONING_MIN_TOKENS = 16000
+
+
+def _effective_max_tokens(model_name: str, requested: int) -> int:
+    """Clamp to a minimum for reasoning models so the thinking budget doesn't
+    consume everything before a visible answer gets emitted."""
+    if _is_reasoning_model(model_name):
+        return max(requested, _REASONING_MIN_TOKENS)
+    return requested
+
+
 @dataclass(frozen=True)
 class ModelProfile:
     provider: str                       # "anthropic" | "openai_compat"
@@ -36,6 +65,10 @@ class ModelProfile:
     base_url: str = ""                  # OpenAI-compat: override endpoint; anthropic: rarely used
     max_tokens: int = 4096
     investigation_max_tokens: int = 8192
+    # 1.0 is the safe default for most modern reasoning-first models (Kimi K2.x,
+    # OpenAI o1/o3/GPT-5 thinking). Setting anything else can make these models
+    # return empty content. For non-thinking models, drop to 0.3-0.7 for determinism.
+    temperature: float = 1.0
 
 
 class ModelClient(ABC):
@@ -231,17 +264,45 @@ class OpenAICompatClient(ModelClient):
         del tools
 
         def _invoke():
-            return self._client.chat.completions.create(
-                model=self.profile.name,
-                max_tokens=max_tokens or self.profile.max_tokens,
-                messages=[{"role": "user", "content": prompt}],
-                response_format={"type": "json_object"},
+            # NOTE: intentionally no response_format={"type":"json_object"} — some
+            # OpenAI-compat providers (Moonshot/Kimi, Gemini via openai endpoint,
+            # various Ollama models) return empty content when it's set. Our prompts
+            # all explicitly ask for JSON-only output and parse_json_response tolerates
+            # markdown fences + junk preamble.
+            effective_max = _effective_max_tokens(
+                self.profile.name,
+                max_tokens or self.profile.max_tokens,
             )
+            kwargs = {
+                "model": self.profile.name,
+                "temperature": self.profile.temperature,
+                "messages": [{"role": "user", "content": prompt}],
+                _openai_token_param_name(self.profile.name): effective_max,
+            }
+            return self._client.chat.completions.create(**kwargs)
 
         response = call_with_retry(_invoke, policy=policy, on_retry=on_retry)
-        text = (response.choices[0].message.content or "").strip()
+        choice = response.choices[0]
+        text = (choice.message.content or "").strip()
         if not text:
-            raise ValueError("model response had no text content")
+            finish = getattr(choice, "finish_reason", "?")
+            effective_max = _effective_max_tokens(
+                self.profile.name,
+                max_tokens or self.profile.max_tokens,
+            )
+            if finish == "length":
+                raise ValueError(
+                    f"model ({self.profile.name}) exhausted its token budget "
+                    f"(max={effective_max}) before producing visible output. "
+                    f"Reasoning/thinking models count internal thinking against the "
+                    f"budget — raise max_tokens / investigation_max_tokens in Settings "
+                    f"(try 32000 for long prompts)."
+                )
+            raise ValueError(
+                f"model ({self.profile.name}) returned empty content (finish_reason={finish!r}). "
+                f"Most common causes: temperature setting unsupported by this model "
+                f"(Kimi/GPT-5/o-series require 1.0), content filter, or transient provider issue."
+            )
         return parse_json_response(text)
 
     def complete_json_with_tools(
@@ -263,10 +324,15 @@ class OpenAICompatClient(ModelClient):
 
         for iteration in range(max_iterations):
             def _invoke():
+                effective_max = _effective_max_tokens(
+                    self.profile.name,
+                    max_tokens or self.profile.max_tokens,
+                )
                 kwargs = {
                     "model": self.profile.name,
-                    "max_tokens": max_tokens or self.profile.max_tokens,
+                    "temperature": self.profile.temperature,
                     "messages": messages,
+                    _openai_token_param_name(self.profile.name): effective_max,
                 }
                 if client_tools:
                     kwargs["tools"] = client_tools
@@ -285,7 +351,7 @@ class OpenAICompatClient(ModelClient):
                 return parse_json_response(text)
 
             # Append the assistant turn (may contain both text and tool_calls).
-            messages.append({
+            assistant_turn: dict = {
                 "role": "assistant",
                 "content": message.content or "",
                 "tool_calls": [
@@ -299,7 +365,18 @@ class OpenAICompatClient(ModelClient):
                     }
                     for tc in tool_calls
                 ],
-            })
+            }
+            # Kimi K2.x "thinking mode" (and other reasoning-enabled OpenAI-compat
+            # providers) attach a reasoning_content field to the assistant message.
+            # Their API then requires it echoed back on subsequent turns, or rejects
+            # the request with 'thinking is enabled but reasoning_content is missing'.
+            reasoning = getattr(message, "reasoning_content", None)
+            if reasoning is None:
+                extras = getattr(message, "model_extra", None) or {}
+                reasoning = extras.get("reasoning_content") if isinstance(extras, dict) else None
+            if reasoning is not None:
+                assistant_turn["reasoning_content"] = reasoning
+            messages.append(assistant_turn)
 
             for call in tool_calls:
                 name = call.function.name

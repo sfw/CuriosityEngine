@@ -1,0 +1,103 @@
+<div class="p-5 space-y-5 text-sm">
+  {# Hypothesis → Findings tension, if present #}
+  {% if entry.hypothesis or entry.surprise_explanation %}
+    <section>
+      <div class="flex items-center gap-2 mb-2">
+        <svg class="w-4 h-4 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+        </svg>
+        <h4 class="text-xs uppercase tracking-wider text-slate-400 font-semibold">Hypothesis ↔ Findings</h4>
+      </div>
+      {% set both_sides = entry.hypothesis and entry.surprise_explanation %}
+      <div class="grid gap-2 {% if both_sides %}md:grid-cols-2{% endif %}">
+        {% if entry.hypothesis %}
+          <div class="rounded-lg border border-slate-700/60 bg-slate-900/60 p-3.5">
+            <div class="flex items-center gap-1.5 mb-1.5">
+              <span class="text-[10px] uppercase tracking-wider font-semibold text-indigo-300">What the model expected</span>
+              <span class="text-[10px] text-slate-500 normal-case">— committed prior, stated before any search ran</span>
+            </div>
+            <div class="text-slate-300 leading-relaxed">{{ entry.hypothesis }}</div>
+          </div>
+        {% endif %}
+        {% if entry.surprise_explanation %}
+          <div class="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3.5">
+            <div class="flex items-center gap-1.5 mb-1.5">
+              <span class="text-[10px] uppercase tracking-wider font-semibold text-amber-300">What the evidence showed instead</span>
+              <span class="text-[10px] text-slate-500 normal-case">— where the investigation diverged</span>
+            </div>
+            <div class="text-slate-200 leading-relaxed">{{ entry.surprise_explanation }}</div>
+          </div>
+        {% endif %}
+      </div>
+    </section>
+  {% endif %}
+
+  {% if entry.methodology %}
+    <section>
+      <h4 class="text-xs uppercase tracking-wider text-slate-400 font-semibold mb-1.5">Methodology</h4>
+      <p class="whitespace-pre-wrap text-slate-300 leading-relaxed">{{ entry.methodology }}</p>
+    </section>
+  {% endif %}
+
+  {% if entry.raw_findings %}
+    <section>
+      <h4 class="text-xs uppercase tracking-wider text-slate-400 font-semibold mb-1.5">Findings</h4>
+      <div class="whitespace-pre-wrap text-slate-200 leading-relaxed">{{ entry.raw_findings }}</div>
+    </section>
+  {% endif %}
+
+  {% if entry.key_takeaways %}
+    <section>
+      <h4 class="text-xs uppercase tracking-wider text-slate-400 font-semibold mb-1.5">Key takeaways</h4>
+      <ul class="space-y-1.5">
+        {% for t in entry.key_takeaways %}
+          <li class="flex gap-2 text-slate-200">
+            <span class="text-emerald-400 flex-shrink-0">✓</span>
+            <span>{{ t }}</span>
+          </li>
+        {% endfor %}
+      </ul>
+    </section>
+  {% endif %}
+
+  {% if entry.new_questions %}
+    <section>
+      <h4 class="text-xs uppercase tracking-wider text-slate-400 font-semibold mb-1.5">New questions raised</h4>
+      <ul class="space-y-1">
+        {% for q in entry.new_questions %}
+          <li class="flex gap-2 text-slate-300">
+            <span class="text-indigo-400 flex-shrink-0">→</span>
+            <span>{{ q }}</span>
+          </li>
+        {% endfor %}
+      </ul>
+    </section>
+  {% endif %}
+
+  {% if entry.sources %}
+    <section>
+      <h4 class="text-xs uppercase tracking-wider text-slate-400 font-semibold mb-1.5">Sources ({{ entry.sources|length }})</h4>
+      <ul class="space-y-1 text-xs mono break-all">
+        {% for s in entry.sources[:30] %}
+          <li class="text-slate-400">• {{ s }}</li>
+        {% endfor %}
+        {% if entry.sources|length > 30 %}<li class="text-slate-600 italic">… {{ entry.sources|length - 30 }} more</li>{% endif %}
+      </ul>
+    </section>
+  {% endif %}
+
+  {% if entry.connections_to %}
+    <section>
+      <h4 class="text-xs uppercase tracking-wider text-slate-400 font-semibold mb-1.5">Cross-referenced by</h4>
+      <div class="flex flex-wrap gap-1">
+        {% for x in entry.connections_to %}
+          <a href="/journals/{{ name }}?tab=graph-view#xref:{{ x }}"
+             title="Open this cross-reference in the Graph"
+             class="text-xs mono px-2 py-0.5 rounded bg-amber-500/15 text-amber-300 hover:bg-amber-500/25 hover:text-amber-200 no-underline transition-colors">
+            {{ x }}
+          </a>
+        {% endfor %}
+      </div>
+    </section>
+  {% endif %}
+</div>

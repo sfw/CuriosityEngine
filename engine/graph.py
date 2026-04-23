@@ -36,6 +36,10 @@ except ImportError as e:  # pragma: no cover
     ) from e
 
 
+import hashlib
+import re
+
+
 def _entry_id(e: dict) -> str:
     return f"entry:{e.get('id', '')}"
 
@@ -54,6 +58,47 @@ def _register_id(r: dict) -> str:
 
 def _prediction_id(p: dict) -> str:
     return f"prediction:{p.get('id', '')}"
+
+
+_ARXIV_ID_RE = re.compile(
+    r"(?:arxiv\.org/(?:abs|pdf|html)/|arxiv:\s*)([0-9]{4}\.[0-9]{4,6})(?:v\d+)?",
+    re.IGNORECASE,
+)
+_DOI_RE = re.compile(r"(?:doi\.org/|doi:\s*)(10\.\d{4,9}/\S+)", re.IGNORECASE)
+
+
+def _normalize_source(src: str) -> str:
+    """Collapse near-duplicate source references to a canonical identifier.
+
+    URLs to the same paper arrive in many forms (arxiv abs/pdf/html, DOI prefix,
+    raw title). Without normalization, the graph treats each as a distinct node
+    and no cross-entry citation bridges appear. Canonicalize to:
+      - arxiv:<id> when an arXiv identifier is present
+      - doi:<lowercased-doi> when a DOI is present
+      - lowercased, whitespace-collapsed title otherwise
+    """
+    s = (src or "").strip()
+    if not s:
+        return ""
+    m = _ARXIV_ID_RE.search(s)
+    if m:
+        return f"arxiv:{m.group(1)}"
+    m = _DOI_RE.search(s)
+    if m:
+        return f"doi:{m.group(1).lower().rstrip('.)')}"
+    # Fallback: lowercase + collapse internal whitespace so "Foo  Bar" == "foo bar".
+    return " ".join(s.lower().split())
+
+
+def _source_id(src: str) -> str:
+    """Stable short id for a source string (URL / DOI / paper title)."""
+    canonical = _normalize_source(src)
+    h = hashlib.sha1(canonical.encode("utf-8")).hexdigest()[:10]
+    return f"source:{h}"
+
+
+def _tag_id(tag: str) -> str:
+    return f"tag:{tag}"
 
 
 def build_graph(journal) -> nx.MultiGraph:
@@ -133,6 +178,42 @@ def build_graph(journal) -> nx.MultiGraph:
         if g.has_node(reg_node):
             g.add_edge(reg_node, _prediction_id(p), kind="predicts")
 
+    # Source nodes (cited URLs / DOIs / paper titles). Size scales with
+    # how many entries cite each source — shared sources are bridges.
+    source_citations: dict[str, list[str]] = {}
+    source_label: dict[str, str] = {}
+    for e in journal.entries:
+        for src in (e.get("sources") or []):
+            key = src.strip()
+            if not key:
+                continue
+            source_citations.setdefault(key, []).append(e.get("id"))
+            source_label[key] = key
+    for src, cited_by in source_citations.items():
+        sid = _source_id(src)
+        g.add_node(
+            sid,
+            kind="source",
+            label=source_label[src][:200],
+            citation_count=len(cited_by),
+        )
+        for entry_id in cited_by:
+            eid = f"entry:{entry_id}"
+            if g.has_node(eid):
+                g.add_edge(eid, sid, kind="cites")
+
+    # Tag nodes. Each tag becomes a hub that connects every entry using it.
+    tag_usage: dict[str, int] = {}
+    for e in journal.entries:
+        for tag in (e.get("domain_tags") or []):
+            tag_usage[tag] = tag_usage.get(tag, 0) + 1
+    for tag, count in tag_usage.items():
+        tid = _tag_id(tag)
+        g.add_node(tid, kind="tag", label=tag, usage=count)
+        for e in journal.entries:
+            if tag in (e.get("domain_tags") or []):
+                g.add_edge(_entry_id(e), tid, kind="has-tag")
+
     # Semantic-similarity edges (if embeddings available) across entries.
     if getattr(journal, "embeddings", None):
         try:
@@ -150,11 +231,11 @@ def build_graph(journal) -> nx.MultiGraph:
     for i in range(len(entries)):
         e_i = entries[i]
         tags_i = set(e_i.get("domain_tags") or [])
-        srcs_i = set(e_i.get("sources") or [])
+        srcs_i = {_normalize_source(s) for s in (e_i.get("sources") or []) if s}
         for j in range(i + 1, len(entries)):
             e_j = entries[j]
             tags_j = set(e_j.get("domain_tags") or [])
-            srcs_j = set(e_j.get("sources") or [])
+            srcs_j = {_normalize_source(s) for s in (e_j.get("sources") or []) if s}
             tag_overlap = tags_i & tags_j
             src_overlap = srcs_i & srcs_j
             if tag_overlap:
@@ -222,26 +303,42 @@ def select_entries_for_xref(
                     existing_pairs.add(frozenset({entry_nodes[i], entry_nodes[j]}))
 
     # Score each entry by # of not-yet-cross-referenced connection partners.
+    # The cross-ref prompt explicitly rewards DISSIMILAR-domain partners, so the
+    # selector biases toward entries whose neighbors don't share domain_tags — that's
+    # where cross-domain novelty lives. cites-source / semantic-similarity edges
+    # that span DIFFERENT tag sets get a strong bonus.
     scores: dict[str, float] = {}
     for node, data in g.nodes(data=True):
         if data.get("kind") != "entry":
             continue
+        my_tags = set(data.get("domain_tags") or [])
         unexplored_partners = 0
         weight = 0.0
+        cross_domain_bonus = 0.0
         for neighbor in g.neighbors(node):
-            if g.nodes[neighbor].get("kind") != "entry":
+            n_data = g.nodes[neighbor]
+            if n_data.get("kind") != "entry":
                 continue
             if frozenset({node, neighbor}) in existing_pairs:
                 continue
-            # Weight by # of shares-tag / cites-source edges in the multigraph.
+            neighbor_tags = set(n_data.get("domain_tags") or [])
             edges = g.get_edge_data(node, neighbor) or {}
             for e in edges.values():
-                if e.get("kind") in ("shares-tag", "cites-source", "semantic-similarity"):
+                kind = e.get("kind")
+                if kind in ("cites-source", "semantic-similarity"):
                     unexplored_partners += 1
                     weight += float(e.get("weight", 1))
-        # Surprise bumps the score — we prefer high-surprise entries.
+                elif kind == "shares-tag":
+                    # Same-domain connection — real but discounted; we'd rather find
+                    # cross-domain bridges where novelty is less predictable.
+                    unexplored_partners += 1
+                    weight += 0.25 * float(e.get("weight", 1))
+            # If this neighbor brings fresh tags (no overlap with this entry's
+            # tags), it's a cross-domain candidate — strong bonus.
+            if my_tags and neighbor_tags and not (my_tags & neighbor_tags):
+                cross_domain_bonus += 2.5
         surprise = float(data.get("surprise_delta") or 0.0)
-        scores[node] = weight + 2.0 * unexplored_partners + surprise
+        scores[node] = weight + 2.0 * unexplored_partners + surprise + cross_domain_bonus
 
     # Baseline: most recent entries (they're likely already in the window anyway).
     recent_ids = [_entry_id(e) for e in all_entries[-max(3, window // 3):]]

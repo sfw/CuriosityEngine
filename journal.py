@@ -26,6 +26,7 @@ class Journal:
         self.predictions: list[dict] = []
         self.question_queue: list[dict] = []
         self.focus: str = ""                       # user-set investigation focus
+        self.last_domain: str = ""                 # last domain used on a run against this journal
         self.embeddings: dict[str, list[float]] = {}  # entry_id -> dense vector
         self._load()
 
@@ -40,6 +41,7 @@ class Journal:
                 self.predictions = data.get("predictions", [])
                 self.question_queue = data.get("question_queue", [])
                 self.focus = str(data.get("focus", ""))
+                self.last_domain = str(data.get("last_domain", ""))
                 self.embeddings = dict(data.get("embeddings", {}))
 
     def save(self):
@@ -52,6 +54,7 @@ class Journal:
                 "predictions": self.predictions,
                 "question_queue": self.question_queue,
                 "focus": self.focus,
+                "last_domain": self.last_domain,
                 "embeddings": self.embeddings,
                 "metadata": {
                     "last_updated": datetime.now(timezone.utc).isoformat(),
@@ -179,8 +182,14 @@ class Journal:
     def get_high_surprise_entries(self, threshold: float = 0.6) -> list[dict]:
         return [e for e in self.entries if e.get("surprise_delta", 0) >= threshold]
 
-    def enqueue_questions(self, questions: list[str], source: str):
-        """Push emergent questions onto the queue for future cycles."""
+    def enqueue_questions(self, questions: list[str], source: str, priority: float = 0.5):
+        """Push emergent questions onto the queue for future cycles.
+
+        `priority` is the expected-reward signal from the source (e.g. the parent
+        entry's surprise_delta, or the parent xref's novelty_score). Higher is
+        better. Questions are popped in priority-sorted order (human-sourced
+        questions still jump the queue via pop_questions_by_source).
+        """
         existing = {q.get("question") for q in self.question_queue}
         for q in questions:
             q_text = (q or "").strip()
@@ -190,16 +199,21 @@ class Journal:
                 "question": q_text,
                 "source": source,
                 "added_at": datetime.now(timezone.utc).isoformat(),
+                "priority": float(max(0.0, min(1.0, priority))),
             })
             existing.add(q_text)
         self.save()
 
     def pop_queued_questions(self, n: int) -> list[dict]:
-        """Take up to n queued questions off the front of the queue."""
+        """Take up to n queued questions off the queue, highest-priority first."""
         if n <= 0 or not self.question_queue:
             return []
-        popped = self.question_queue[:n]
-        self.question_queue = self.question_queue[n:]
+        # Stable sort: priority desc, then FIFO by original position for ties.
+        indexed = list(enumerate(self.question_queue))
+        indexed.sort(key=lambda it: (-float(it[1].get("priority", 0.5)), it[0]))
+        popped_indices = {i for i, _ in indexed[:n]}
+        popped = [q for i, q in indexed[:n]]
+        self.question_queue = [q for i, q in enumerate(self.question_queue) if i not in popped_indices]
         self.save()
         return popped
 
@@ -217,6 +231,12 @@ class Journal:
     def clear_focus(self):
         self.focus = ""
         self.save()
+
+    def set_last_domain(self, domain: str):
+        d = (domain or "").strip()
+        if d and d != self.last_domain:
+            self.last_domain = d
+            self.save()
 
     def questions_by_source(self, source_prefix: str) -> list[dict]:
         return [q for q in self.question_queue if (q.get("source") or "").startswith(source_prefix)]

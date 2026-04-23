@@ -6,6 +6,8 @@
 #   ./curiosity --cycles 3
 #   ./curiosity --list-tools
 #   ./curiosity --review-register
+#   ./curiosity web              # start the browser UI on http://localhost:8000
+#   ./curiosity web stop         # stop the web service
 #
 # On first run this builds the image. Use `./curiosity --rebuild` to force rebuild.
 
@@ -28,5 +30,30 @@ mkdir -p "${HOME}/.CuriosityEngine"
 
 export HOST_UID="$(id -u)"
 export HOST_GID="$(id -g)"
+
+# 'web' subcommand: manage the long-running web service instead of the CLI.
+if [[ "${1:-}" == "web" ]]; then
+  shift
+  case "${1:-up}" in
+    up|start|"")
+      docker compose up -d web
+      echo "Web UI running at http://localhost:8000"
+      ;;
+    stop|down)
+      docker compose stop web
+      ;;
+    logs)
+      docker compose logs -f web
+      ;;
+    restart)
+      docker compose restart web
+      ;;
+    *)
+      echo "usage: ./curiosity web [up|stop|logs|restart]" >&2
+      exit 1
+      ;;
+  esac
+  exit 0
+fi
 
 exec docker compose run --rm engine "$@"

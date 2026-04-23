@@ -1,0 +1,19 @@
+{% if error %}
+  <p class="text-sm text-red-600">{{ error }}</p>
+{% elif hits %}
+  <p class="text-xs text-slate-500 mb-2">Top {{ hits|length }} for {{ query|tojson }}:</p>
+  <ul class="space-y-1 text-sm">
+    {% for h in hits %}
+      {% set e = entries_by_id.get(h.entry_id) %}
+      <li class="p-2 rounded border border-slate-200 dark:border-slate-700">
+        <div class="flex items-baseline gap-2">
+          <span class="text-xs mono px-1.5 py-0.5 rounded bg-indigo-100 dark:bg-indigo-900/40">{{ '%.3f'|format(h.score) }}</span>
+          <span class="text-xs mono text-slate-500">{{ h.entry_id }}</span>
+        </div>
+        <div class="mt-0.5">{{ h.question[:200] }}</div>
+      </li>
+    {% endfor %}
+  </ul>
+{% else %}
+  <p class="text-sm text-slate-500">No results.</p>
+{% endif %}

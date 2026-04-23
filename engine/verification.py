@@ -73,15 +73,30 @@ class VerificationMixin:
 
         verdict = result.get("verdict", "refuted")
         verified_confidence = float(result.get("verified_confidence", 0.0))
-        print(f"  Verdict: {verdict}")
+        premises_supported = bool(result.get("premises_supported", True))
+        synthesis_findable = bool(result.get("synthesis_findable", False))
+        novelty_type = (result.get("novelty_type") or "").strip()
+
+        print(f"  Verdict: {verdict} · novelty={novelty_type or '?'} "
+              f"· premises={'✓' if premises_supported else '✗'} "
+              f"· synthesis_findable={'✓' if synthesis_findable else '✗'}")
         print(f"  Verified confidence: {verified_confidence:.2f}")
         summary = result.get("verification_summary", "")
         if summary:
             print(f"  {summary[:200]}...")
 
         floor = self.config.register_confidence_floor
-        if verdict != "validated" or verified_confidence < floor:
-            print(f"  Not registered (verdict={verdict}, floor={floor}).")
+        gate_reasons: list[str] = []
+        if verdict != "validated":
+            gate_reasons.append(f"verdict={verdict}")
+        if verified_confidence < floor:
+            gate_reasons.append(f"conf<{floor}")
+        if not premises_supported:
+            gate_reasons.append("premises_unsupported")
+        if synthesis_findable:
+            gate_reasons.append("synthesis_already_in_literature")
+        if gate_reasons:
+            print(f"  Not registered ({', '.join(gate_reasons)}).")
             return None
 
         supporting_sources: list[str] = []
@@ -92,6 +107,7 @@ class VerificationMixin:
                     supporting_sources.append(src)
                     seen.add(src)
 
+        synthesis_prior_art = result.get("synthesis_prior_art", []) or []
         register_entry = RegisterEntry(
             id=f"r-{uuid4().hex[:8]}",
             timestamp=datetime.now(timezone.utc).isoformat(),
@@ -106,11 +122,17 @@ class VerificationMixin:
             implications=insight.implications,
             verdict=verdict,
             verified_confidence=verified_confidence,
-            prior_art_found=bool(result.get("prior_art_found", False)),
-            prior_art_citations=result.get("prior_art_citations", []) or [],
+            # Legacy fields map to synthesis-level prior art for readers not on the new schema yet.
+            prior_art_found=synthesis_findable,
+            prior_art_citations=list(synthesis_prior_art),
             contradicting_findings=result.get("contradicting_findings", []) or [],
             reasoning_flaws_considered=result.get("reasoning_flaws", []) or [],
             verification_summary=summary,
+            premises_supported=premises_supported,
+            premises_support_citations=result.get("premises_support_citations", []) or [],
+            synthesis_findable=synthesis_findable,
+            synthesis_prior_art=list(synthesis_prior_art),
+            novelty_type=novelty_type,
             open_questions=insight.open_questions,
             counter_arguments=insight.counter_arguments,
         )

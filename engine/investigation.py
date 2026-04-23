@@ -7,7 +7,35 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from models import JournalEntry, ResearchQuestion
-from prompts import HYPOTHESIS_PROMPT, INVESTIGATE_PROMPT, SURPRISE_PROMPT
+from prompts import (
+    ANALOG_PROBE_PROMPT,
+    HYPOTHESIS_PROMPT,
+    INVESTIGATE_PROMPT,
+    SURPRISE_PROMPT,
+)
+
+
+def _calibrate_confidence_after(surprise: dict, c0: float) -> None:
+    """Enforce the calibration rules stated in SURPRISE_PROMPT in-place.
+
+    LLMs regularly bump confidence upward on partially_confirmed results even
+    though the evidence showed the prior was oversimplified. This is a tight
+    clamp that only fires when the model's C₁ clearly violates a rule — it never
+    invents values beyond what the verdict and delta justify.
+    """
+    verdict = (surprise.get("hypothesis_verdict") or "").strip().lower()
+    delta = float(surprise.get("surprise_delta", 0.0) or 0.0)
+    c1 = float(surprise.get("confidence_after", c0) or c0)
+
+    if verdict == "partially_confirmed" and delta < 0.2 and c1 > c0:
+        # Oversimplified prior, low surprise: cannot go up.
+        surprise["confidence_after"] = c0
+    elif verdict == "contradicted" and c1 > c0 - 0.2:
+        # Contradicted: must drop meaningfully.
+        surprise["confidence_after"] = max(0.0, c0 - 0.2)
+    elif verdict == "unresolved" and abs(c1 - c0) < 0.05:
+        # Unresolved: pull toward 0.5 by at least half the prior's deviation.
+        surprise["confidence_after"] = c0 + 0.5 * (0.5 - c0)
 
 
 class InvestigationMixin:
@@ -67,6 +95,7 @@ class InvestigationMixin:
 
         print("  [3/3] Assessing surprise against committed hypothesis...")
         surprise = self._assess_surprise(question, hypothesis, findings)
+        _calibrate_confidence_after(surprise, float(hypothesis.get("confidence_before", 0.5)))
 
         entry = JournalEntry(
             id=f"j-{uuid4().hex[:8]}",
@@ -83,6 +112,8 @@ class InvestigationMixin:
             key_takeaways=findings.get("key_takeaways", []),
             new_questions=surprise.get("new_questions", []),
             domain_tags=question.domain_tags,
+            hypothesis_verdict=surprise.get("hypothesis_verdict", ""),
+            surprise_explanation=surprise.get("surprise_explanation", ""),
         )
 
         print(f"  Surprise delta: {entry.surprise_delta:.2f}")
@@ -92,7 +123,19 @@ class InvestigationMixin:
             print(f"  Takeaway: {t[:80]}...")
 
         self.journal.add_entry(entry)
-        self._enqueue_questions(entry.new_questions, source=f"entry:{entry.id}")
+        # Priority: surprise is the best signal we have for "this question will reveal more"
+        # — surprising entries suggest adjacent unknowns. Nudge above baseline so surprising
+        # follow-ups beat stale low-signal leftovers.
+        followup_priority = max(0.3, min(1.0, 0.4 + 0.6 * entry.surprise_delta))
+        self._enqueue_questions(
+            entry.new_questions,
+            source=f"entry:{entry.id}",
+            priority=followup_priority,
+        )
+        # Cross-domain analog probe: on high-surprise entries, ask the engine which
+        # DISTANT fields have structural analogs and enqueue those reframed questions.
+        if getattr(self.config, "analog_probe_enabled", True):
+            self._run_analog_probe(entry)
         # Best-effort embed the new entry so semantic features stay current. If the
         # embedding client is unavailable or fails, we just skip — not a cycle-breaking
         # concern.
@@ -105,3 +148,52 @@ class InvestigationMixin:
             except Exception as e:  # noqa: BLE001
                 print(f"  [embed warn] skipped: {type(e).__name__}: {e}")
         return entry
+
+    def _run_analog_probe(self, entry: JournalEntry) -> int:
+        """Ask the primary model which DISTANT domains have structural analogs of
+        this finding and enqueue those as high-priority investigable questions.
+
+        Fires only when the entry's surprise_delta crosses the configured
+        threshold — a bigger surprise is a stronger signal that an unfamiliar
+        domain may have been grazed.
+        """
+        threshold = float(getattr(self.config, "analog_probe_surprise_threshold", 0.5))
+        if entry.surprise_delta < threshold:
+            return 0
+
+        recent_tags = self.journal.get_all_domain_tags()
+        prompt = ANALOG_PROBE_PROMPT.format(
+            entry_question=entry.question,
+            entry_surprise=entry.surprise_delta,
+            entry_takeaways=json.dumps(entry.key_takeaways, indent=2),
+            recent_tags=", ".join(recent_tags) if recent_tags else "(none)",
+        )
+        try:
+            result = self._call_primary(prompt)
+        except Exception as e:  # noqa: BLE001
+            print(f"  [analog probe] skipped: {type(e).__name__}: {e}")
+            return 0
+
+        analogs = result.get("analogs", []) or []
+        if not analogs:
+            print("  [analog probe] no strong cross-domain analogs proposed.")
+            return 0
+
+        questions: list[str] = []
+        for a in analogs[:3]:
+            q = (a.get("question") or "").strip()
+            domain = (a.get("domain") or "").strip()
+            if q:
+                prefix = f"[analog:{domain}] " if domain else ""
+                questions.append(prefix + q)
+
+        if questions:
+            self.journal.enqueue_questions(
+                questions,
+                source=f"analog:{entry.id}",
+                priority=0.85,
+            )
+            print(f"  [analog probe] enqueued {len(questions)} cross-domain question(s) @ pri 0.85:")
+            for a in analogs[:3]:
+                print(f"    · {a.get('domain','?')} → {a.get('mechanism','?')[:60]}")
+        return len(questions)

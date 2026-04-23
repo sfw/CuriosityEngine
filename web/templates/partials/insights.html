@@ -1,0 +1,134 @@
+{% if insights %}
+  <div class="space-y-3">
+    {% for i in insights %}
+      <details id="{{ i.id }}" class="rounded-xl border border-emerald-500/30 bg-emerald-500/5 overflow-hidden scroll-mt-24">
+        <summary class="p-4 cursor-pointer hover:bg-emerald-500/10">
+          {# Top row: title full-width + confidence chip + id #}
+          <div class="flex items-start justify-between gap-3 mb-3">
+            <h3 class="text-sm font-semibold text-slate-100 leading-snug flex-1">{{ i.title }}</h3>
+            <div class="flex items-center gap-2 flex-shrink-0 pt-0.5">
+              <span class="text-xs mono px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-200">
+                conf {{ '%.2f'|format(i.confidence or 0) }}
+              </span>
+              <span class="mono text-[10px] text-slate-600">{{ i.id }}</span>
+            </div>
+          </div>
+
+          {# Two side-by-side cells: Novelty assessment + Prior art check #}
+          <div class="grid gap-2 {% if i.novelty_assessment and i.prior_art_check %}md:grid-cols-2{% endif %}">
+            {% if i.novelty_assessment %}
+              <div class="rounded-lg border border-emerald-500/25 bg-emerald-500/5 p-3">
+                <div class="flex items-center gap-1.5 mb-1.5">
+                  <svg class="w-3.5 h-3.5 text-emerald-300" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                  </svg>
+                  <span class="text-[10px] uppercase tracking-wider font-semibold text-emerald-300">Novelty</span>
+                  <span class="text-[10px] text-slate-500 normal-case tracking-normal">— why this is genuinely new, not restatement</span>
+                </div>
+                <div class="text-sm text-slate-300 leading-relaxed whitespace-pre-wrap">{{ i.novelty_assessment }}</div>
+              </div>
+            {% endif %}
+            {% if i.prior_art_check %}
+              <div class="rounded-lg border border-amber-500/25 bg-amber-500/5 p-3">
+                <div class="flex items-center gap-1.5 mb-1.5">
+                  <svg class="w-3.5 h-3.5 text-amber-300" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                  </svg>
+                  <span class="text-[10px] uppercase tracking-wider font-semibold text-amber-300">Prior art</span>
+                  <span class="text-[10px] text-slate-500 normal-case tracking-normal">— model's self-check before verification</span>
+                </div>
+                <div class="text-sm text-slate-300 leading-relaxed whitespace-pre-wrap">{{ i.prior_art_check }}</div>
+              </div>
+            {% endif %}
+          </div>
+        </summary>
+
+        {# Expanded body: full description + implications + open questions + counter-args + supporting evidence #}
+        <div class="border-t border-emerald-500/20 bg-slate-950/60 p-4 space-y-4">
+          {% if i.description %}
+            <section>
+              <div class="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-1.5">Description</div>
+              <div class="text-sm text-slate-200 leading-relaxed whitespace-pre-wrap">{{ i.description }}</div>
+            </section>
+          {% endif %}
+
+          {% if i.implications %}
+            <section>
+              <div class="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-1.5">Implications</div>
+              <ul class="list-disc pl-5 space-y-1 text-sm text-slate-300">
+                {% for imp in i.implications %}<li>{{ imp }}</li>{% endfor %}
+              </ul>
+            </section>
+          {% endif %}
+
+          {% if i.open_questions %}
+            <section>
+              <div class="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-1.5">Open questions</div>
+              <ul class="list-disc pl-5 space-y-1 text-sm text-slate-400">
+                {% for q in i.open_questions %}<li>{{ q }}</li>{% endfor %}
+              </ul>
+            </section>
+          {% endif %}
+
+          {% if i.counter_arguments %}
+            <section>
+              <div class="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-1.5">Counter-arguments</div>
+              <ul class="list-disc pl-5 space-y-1 text-sm text-slate-400">
+                {% for c in i.counter_arguments %}<li>{{ c }}</li>{% endfor %}
+              </ul>
+            </section>
+          {% endif %}
+
+          {% if i.supporting_evidence %}
+            <section>
+              <div class="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-1.5">Supporting evidence</div>
+              <div class="flex flex-wrap gap-1.5">
+                {% for sid in i.supporting_evidence %}
+                  {% if sid.startswith('x-') %}
+                    {% set kind = 'xref' %}
+                    {% set chip_class = 'bg-amber-500/15 text-amber-300 hover:bg-amber-500/25' %}
+                  {% elif sid.startswith('j-') %}
+                    {% set kind = 'entry' %}
+                    {% set chip_class = 'bg-indigo-500/15 text-indigo-300 hover:bg-indigo-500/25' %}
+                  {% else %}
+                    {% set kind = None %}
+                    {% set chip_class = 'bg-slate-700/40 text-slate-400' %}
+                  {% endif %}
+                  {% if kind %}
+                    <a href="/journals/{{ name }}?tab=graph-view#{{ kind }}:{{ sid }}"
+                       title="Open in Graph"
+                       class="text-xs mono px-2 py-0.5 rounded no-underline transition-colors {{ chip_class }}">{{ sid }}</a>
+                  {% else %}
+                    <span class="text-xs mono px-2 py-0.5 rounded {{ chip_class }}">{{ sid }}</span>
+                  {% endif %}
+                {% endfor %}
+              </div>
+            </section>
+          {% endif %}
+
+          {% if i.timestamp %}
+            <div class="text-[11px] text-slate-600 mono">
+              Synthesized <span class="ce-localtime" data-utc="{{ i.timestamp }}" title="{{ i.timestamp }}">{{ i.timestamp[:19].replace('T',' ') }}</span>
+            </div>
+          {% endif %}
+        </div>
+      </details>
+    {% endfor %}
+  </div>
+
+  <script>
+    (() => {
+      document.querySelectorAll('.ce-localtime').forEach(el => {
+        const iso = el.getAttribute('data-utc');
+        if (!iso) return;
+        const d = new Date(iso);
+        if (isNaN(d.getTime())) return;
+        const date = d.toLocaleDateString(undefined, {year: 'numeric', month: '2-digit', day: '2-digit'});
+        const time = d.toLocaleTimeString(undefined, {hour: '2-digit', minute: '2-digit', second: '2-digit'});
+        el.textContent = `${date} ${time}`;
+      });
+    })();
+  </script>
+{% else %}
+  <p class="text-sm text-slate-500">No insights synthesized yet. Run more cycles until cross-reference finds a high-novelty connection.</p>
+{% endif %}

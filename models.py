@@ -48,6 +48,9 @@ class JournalEntry:
     domain_tags: list[str]
     connections_to: list[str] = field(default_factory=list)
     cross_reference_notes: list[str] = field(default_factory=list)
+    # Added so the UI can show *why* surprise is surprising without scanning raw_findings.
+    hypothesis_verdict: str = ""               # confirmed | partially_confirmed | contradicted | unresolved
+    surprise_explanation: str = ""             # one-paragraph reason for the surprise
 
 
 @dataclass
@@ -100,11 +103,18 @@ class RegisterEntry:
     # Verification
     verdict: str                             # "validated" (only these reach the register)
     verified_confidence: float
-    prior_art_found: bool
-    prior_art_citations: list[str]
+    prior_art_found: bool                    # legacy — kept for back-compat; = synthesis_findable
+    prior_art_citations: list[str]           # legacy — kept for back-compat; = synthesis_prior_art
     contradicting_findings: list[str]
     reasoning_flaws_considered: list[str]
     verification_summary: str
+
+    # Novelty decomposition (new axis — "premises supported, synthesis not findable" IS the novelty signature)
+    premises_supported: bool = True
+    premises_support_citations: list[str] = field(default_factory=list)
+    synthesis_findable: bool = False
+    synthesis_prior_art: list[str] = field(default_factory=list)
+    novelty_type: str = ""                   # new_synthesis | restatement | extension | correction | unsupported
 
     # Carried from the source insight
     open_questions: list[str] = field(default_factory=list)
@@ -156,4 +166,6 @@ class EngineConfig:
     verify_insights: bool = True
     register_confidence_floor: float = 0.6
     max_cycles: int = 10
+    analog_probe_enabled: bool = True
+    analog_probe_surprise_threshold: float = 0.5
     connection: "CuriosityEngineConfig | None" = None
