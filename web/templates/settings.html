@@ -283,6 +283,41 @@
                  value="{{ connection.engine.held_confidence_floor }}"
                  class="mt-1 w-32 px-3 py-2 rounded-lg border border-slate-700 bg-slate-900/60 text-sm mono" />
         </label>
+
+        <div class="md:col-span-3 pt-2 border-t border-slate-800">
+          <h3 class="text-xs uppercase tracking-wider text-slate-300 mb-1">Parallel fan-out</h3>
+          <p class="text-[11px] text-slate-500 mb-3">
+            Concurrency within a single cycle. Rate limiters are shared process-wide, so raising these redistributes
+            wait time rather than bursting upstream APIs. Default 1 = fully serial.
+          </p>
+          <div class="grid gap-4 md:grid-cols-2">
+            <label class="block">
+              <span class="text-xs uppercase tracking-wider text-slate-400">parallel_investigations</span>
+              <span class="block text-[11px] text-slate-500">concurrent investigate() calls per cycle (1–5)</span>
+              <input name="engine_parallel_investigations" type="number" min="1" max="5"
+                     value="{{ connection.engine.parallel_investigations }}"
+                     class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-700 bg-slate-900/60 text-sm mono" />
+            </label>
+            <label class="block">
+              <span class="text-xs uppercase tracking-wider text-slate-400">parallel_xref_pipeline</span>
+              <span class="block text-[11px] text-slate-500">concurrent synth→verify→register pipelines per cycle (1–5)</span>
+              <input name="engine_parallel_xref_pipeline" type="number" min="1" max="5"
+                     value="{{ connection.engine.parallel_xref_pipeline }}"
+                     class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-700 bg-slate-900/60 text-sm mono" />
+            </label>
+          </div>
+        </div>
+
+        <label class="block md:col-span-3">
+          <span class="text-xs uppercase tracking-wider text-slate-400">negative_space_min_entries</span>
+          <span class="block text-[11px] text-slate-500">
+            Minimum journal size before the (method × problem) gap scan will run. Below this threshold most empty
+            matrix cells are artifacts of a young journal rather than real field-level gaps.
+          </span>
+          <input name="engine_negative_space_min_entries" type="number" min="1" max="500"
+                 value="{{ connection.engine.negative_space_min_entries }}"
+                 class="mt-1 w-32 px-3 py-2 rounded-lg border border-slate-700 bg-slate-900/60 text-sm mono" />
+        </label>
       </div>
     </section>
 

@@ -1226,6 +1226,9 @@ def settings_save(
     engine_held_entries_enabled: str = Form(""),
     engine_held_confidence_floor: float = Form(0.7),
     engine_cross_ref_role: str = Form(""),
+    engine_parallel_investigations: int = Form(1),
+    engine_parallel_xref_pipeline: int = Form(1),
+    engine_negative_space_min_entries: int = Form(15),
 ):
     """Write engine.toml. Empty api_key fields keep the existing value (don't clobber).
     Every knob the engine recognises is written here so Saving doesn't silently
@@ -1318,6 +1321,9 @@ def settings_save(
             f"held_entries_enabled = {str(held_entries_on).lower()}\n"
             f"held_confidence_floor = {max(0.0, min(1.0, engine_held_confidence_floor))}\n"
             f'cross_ref_role = "{cross_ref_role}"\n'
+            f"parallel_investigations = {max(1, min(5, engine_parallel_investigations))}\n"
+            f"parallel_xref_pipeline = {max(1, min(5, engine_parallel_xref_pipeline))}\n"
+            f"negative_space_min_entries = {max(1, min(500, engine_negative_space_min_entries))}\n"
         )
     )
 
