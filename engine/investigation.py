@@ -184,8 +184,10 @@ class InvestigationMixin:
             print("  [analog probe] no strong cross-domain analogs proposed.")
             return 0
 
+        cap = max(1, int(getattr(self.config, "analog_probe_max_analogs", 3)))
+        top_analogs = analogs[:cap]
         questions: list[str] = []
-        for a in analogs[:3]:
+        for a in top_analogs:
             q = (a.get("question") or "").strip()
             domain = (a.get("domain") or "").strip()
             if q:
@@ -199,7 +201,7 @@ class InvestigationMixin:
                 priority=0.85,
             )
             print(f"  [analog probe] enqueued {len(questions)} cross-domain question(s) @ pri 0.85:")
-            for a in analogs[:3]:
+            for a in top_analogs:
                 print(f"    · {a.get('domain','?')} → {a.get('mechanism','?')[:60]}")
         return len(questions)
 
@@ -237,8 +239,10 @@ class InvestigationMixin:
             print("  [assumption probe] no substantive field-consensus assumptions proposed.")
             return 0
 
+        cap = max(1, int(getattr(self.config, "assumption_probe_max_assumptions", 3)))
+        top_assumptions = assumptions[:cap]
         questions: list[str] = []
-        for a in assumptions[:3]:
+        for a in top_assumptions:
             q = (a.get("question") or "").strip()
             premise = (a.get("assumption") or "").strip()
             if q:
@@ -252,6 +256,6 @@ class InvestigationMixin:
                 priority=0.80,
             )
             print(f"  [assumption probe] enqueued {len(questions)} assumption-negation question(s) @ pri 0.80:")
-            for a in assumptions[:3]:
+            for a in top_assumptions:
                 print(f"    · {a.get('assumption','?')[:75]}")
         return len(questions)

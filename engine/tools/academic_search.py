@@ -184,6 +184,67 @@ _SEARCHERS = {
 }
 
 
+def count_results_structured(
+    query: str,
+    limit_per_source: int = 5,
+    sources: Optional[list[str]] = None,
+) -> dict:
+    """Structured result count across sources — for callers that need an
+    authoritative count (not a string-parse of formatted output) and per-source
+    error tracking (e.g. gap verification in engine/negative_space.py).
+
+    Returns:
+        {
+            "total": int,                      # sum of successful-source counts
+            "per_source": {src: int | None},   # None = source errored
+            "errors": [str, ...],              # one human-readable entry per failure
+            "complete": bool,                  # all requested sources returned ok
+        }
+
+    `complete=False` is how callers detect "verification unreliable — don't
+    treat the count as authoritative." The raw-text count-substring approach
+    this replaces had no such signal; a silently-errored search looked the
+    same as a genuinely-empty gap.
+    """
+    query = (query or "").strip()
+    if not query:
+        return {"total": 0, "per_source": {}, "errors": ["empty query"], "complete": False}
+    srcs = list(sources) if sources else list(_SEARCHERS.keys())
+    unknown = [s for s in srcs if s not in _SEARCHERS]
+    if unknown:
+        return {
+            "total": 0,
+            "per_source": {},
+            "errors": [f"unknown source(s): {unknown}"],
+            "complete": False,
+        }
+    limit = max(1, min(50, int(limit_per_source)))
+
+    per_source: dict[str, Optional[int]] = {}
+    errors: list[str] = []
+    total = 0
+    for src in srcs:
+        try:
+            results = _SEARCHERS[src](query, limit)
+            per_source[src] = len(results)
+            total += len(results)
+        except ToolError as e:
+            per_source[src] = None
+            errors.append(f"{src}: {e}")
+        except httpx.HTTPError as e:
+            per_source[src] = None
+            errors.append(f"{src}: http error ({e})")
+        except Exception as e:  # noqa: BLE001 — surface any API quirk, don't crash caller
+            per_source[src] = None
+            errors.append(f"{src}: {type(e).__name__}: {e}")
+    return {
+        "total": total,
+        "per_source": per_source,
+        "errors": errors,
+        "complete": not errors,
+    }
+
+
 def _format_results(results: list[AcademicResult], max_chars: int = 20_000) -> str:
     lines: list[str] = []
     for r in results:

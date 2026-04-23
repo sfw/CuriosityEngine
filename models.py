@@ -180,9 +180,12 @@ class EngineConfig:
     max_cycles: int = 10
     analog_probe_enabled: bool = True
     analog_probe_surprise_threshold: float = 0.5
+    analog_probe_max_analogs: int = 3
     assumption_probe_enabled: bool = True
     assumption_probe_surprise_threshold: float = 0.3
+    assumption_probe_max_assumptions: int = 3
     negative_space_min_entries: int = 15
+    gap_verification_hit_threshold: int = 5
     held_entries_enabled: bool = True
     held_confidence_floor: float = 0.7
     # Parallel fan-out knobs. Default 1 = serial (preserves prior behavior

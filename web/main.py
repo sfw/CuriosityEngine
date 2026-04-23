@@ -469,15 +469,21 @@ async def maintenance_scan_gaps(name: str):
 @app.get("/journals/{name}/coverage", response_class=HTMLResponse)
 def journal_coverage(request: Request, name: str):
     """Coverage tab — shows the latest negative-space scan as a method × problem
-    matrix with empty cells color-coded by classification. Lists past scans so
-    the user can diff coverage over time."""
+    matrix with empty cells color-coded by classification. When ≥2 scans exist,
+    also surfaces a diff against the prior scan: gaps filled, still open, newly
+    emerged."""
     journal = _load_journal(name)
     scans = journal.coverage_scans
     latest = scans[-1] if scans else None
+    diff = None
+    if len(scans) >= 2:
+        from engine.negative_space import diff_coverage_scans
+        diff = diff_coverage_scans(scans[-2], scans[-1])
     return templates.TemplateResponse(request, "partials/coverage.html", {
         "name": name,
         "scans": list(reversed(scans)),  # newest first in list view
         "latest": latest,
+        "diff": diff,
         "min_entries": int(_connection().engine.negative_space_min_entries),
         "current_entries": len(journal.entries),
     })
@@ -1229,6 +1235,9 @@ def settings_save(
     engine_parallel_investigations: int = Form(1),
     engine_parallel_xref_pipeline: int = Form(1),
     engine_negative_space_min_entries: int = Form(15),
+    engine_gap_verification_hit_threshold: int = Form(5),
+    engine_analog_probe_max_analogs: int = Form(3),
+    engine_assumption_probe_max_assumptions: int = Form(3),
 ):
     """Write engine.toml. Empty api_key fields keep the existing value (don't clobber).
     Every knob the engine recognises is written here so Saving doesn't silently
@@ -1324,6 +1333,9 @@ def settings_save(
             f"parallel_investigations = {max(1, min(5, engine_parallel_investigations))}\n"
             f"parallel_xref_pipeline = {max(1, min(5, engine_parallel_xref_pipeline))}\n"
             f"negative_space_min_entries = {max(1, min(500, engine_negative_space_min_entries))}\n"
+            f"gap_verification_hit_threshold = {max(1, min(100, engine_gap_verification_hit_threshold))}\n"
+            f"analog_probe_max_analogs = {max(1, min(10, engine_analog_probe_max_analogs))}\n"
+            f"assumption_probe_max_assumptions = {max(1, min(10, engine_assumption_probe_max_assumptions))}\n"
         )
     )
 

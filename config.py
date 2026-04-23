@@ -51,6 +51,9 @@ class EngineSettings:
     # jumps come from.
     analog_probe_enabled: bool = True
     analog_probe_surprise_threshold: float = 0.5
+    # How many distant-field analogs the probe turns into enqueued questions.
+    # Keep modest — each enqueued question spends a future cycle's budget.
+    analog_probe_max_analogs: int = 3
     # Assumption probe: complementary to the analog probe — fires on LOW-surprise
     # CONFIRMED findings (the accepted-wisdom regime where load-bearing
     # assumptions hide). Asks the primary to name implicit premises the field
@@ -59,6 +62,9 @@ class EngineSettings:
     # which fires on HIGH-surprise entries to reach outward.
     assumption_probe_enabled: bool = True
     assumption_probe_surprise_threshold: float = 0.3
+    # Parallel of analog_probe_max_analogs: how many named assumptions the probe
+    # turns into enqueued negation questions per triggering entry.
+    assumption_probe_max_assumptions: int = 3
     # When the verifier returns `inconclusive` (could not reach the claim, not
     # refuted it), the insight becomes a held register entry pending settlement
     # rather than being silently rejected. Held entries have a separate (usually
@@ -80,6 +86,13 @@ class EngineSettings:
     # is young, not because the field ignored them. Triggered on-demand via the
     # Admin tab or `--scan-gaps` — not part of the cycle loop.
     negative_space_min_entries: int = 15
+    # During the gap-verification step of scan_gaps, a cell classified as
+    # "underexplored" is confirmed empty when total structured hits across its
+    # verification queries is below this threshold. 5 is a reasonable default
+    # for broad searches across 3 sources (crossref/arxiv/semantic_scholar);
+    # raise if you're getting false positives on well-covered topics, lower if
+    # nothing is ever confirmed empty.
+    gap_verification_hit_threshold: int = 5
     # Parallel fan-out — how many investigations / xref-synth+verify pipelines
     # run concurrently per cycle. Default 1 = fully serial (zero behavior change).
     # Rate limiters are shared across threads so raising these does not burst
@@ -196,11 +209,18 @@ class CuriosityEngineConfig:
             analog_probe_surprise_threshold=float(
                 eng_section.get("analog_probe_surprise_threshold", 0.5)
             ),
+            analog_probe_max_analogs=int(eng_section.get("analog_probe_max_analogs", 3)),
             assumption_probe_enabled=bool(eng_section.get("assumption_probe_enabled", True)),
             assumption_probe_surprise_threshold=float(
                 eng_section.get("assumption_probe_surprise_threshold", 0.3)
             ),
+            assumption_probe_max_assumptions=int(
+                eng_section.get("assumption_probe_max_assumptions", 3)
+            ),
             negative_space_min_entries=int(eng_section.get("negative_space_min_entries", 15)),
+            gap_verification_hit_threshold=int(
+                eng_section.get("gap_verification_hit_threshold", 5)
+            ),
             held_entries_enabled=bool(eng_section.get("held_entries_enabled", True)),
             held_confidence_floor=float(eng_section.get("held_confidence_floor", 0.7)),
             cross_ref_role=str(eng_section.get("cross_ref_role", "")).strip(),
@@ -467,16 +487,25 @@ verify_insights = {str(eng.verify_insights).lower()}
 # from one domain to another).
 analog_probe_enabled = {str(eng.analog_probe_enabled).lower()}
 analog_probe_surprise_threshold = {eng.analog_probe_surprise_threshold}
+# How many analogs the probe converts into enqueued questions per triggering entry.
+analog_probe_max_analogs = {eng.analog_probe_max_analogs}
 # Assumption probe — complement to the analog probe. Fires on LOW-surprise
 # confirmed findings (where field consensus most likely hides load-bearing
 # assumptions); asks the primary model to name implicit premises and enqueue
 # investigable questions that would test each. Opposite trigger from analog.
 assumption_probe_enabled = {str(eng.assumption_probe_enabled).lower()}
 assumption_probe_surprise_threshold = {eng.assumption_probe_surprise_threshold}
+# Parallel to analog_probe_max_analogs: how many assumptions → negation questions.
+assumption_probe_max_assumptions = {eng.assumption_probe_max_assumptions}
 # Negative-space gap scan — minimum entry count before Scan-for-gaps is allowed.
 # Below this threshold most empty matrix cells are artifacts of journal youth,
 # not real field-level gaps, so the scan would surface noise.
 negative_space_min_entries = {eng.negative_space_min_entries}
+# During the gap-verification step of scan_gaps, a cell classified as
+# "underexplored" is confirmed empty when structured hit count across its
+# verification queries is below this. Raise if well-covered topics are being
+# falsely confirmed as gaps; lower if nothing is ever confirmed empty.
+gap_verification_hit_threshold = {eng.gap_verification_hit_threshold}
 # Held-state pipeline — when the verifier returns `inconclusive` (couldn't reach
 # the claim, not refuted it), insights become held register entries pending
 # settlement rather than being silently rejected. Held entries usually require

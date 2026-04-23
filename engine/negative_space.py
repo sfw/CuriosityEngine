@@ -43,6 +43,122 @@ def _slim_entry_for_matrix(entry: dict) -> dict:
     }
 
 
+def _cell_key(cell: dict) -> tuple[str, str]:
+    return (
+        (cell.get("method") or "").strip(),
+        (cell.get("problem") or "").strip(),
+    )
+
+
+def diff_coverage_scans(older: dict, newer: dict) -> dict:
+    """Compute a structural diff between two coverage scans.
+
+    Returns:
+        {
+            "older_id": str, "newer_id": str,
+            "gaps_filled":      [{method, problem, older_status, ...}],  # were gaps, now have coverage
+            "gaps_still_open":  [{method, problem, status}],              # still verified_empty or incomplete
+            "gaps_emerged":     [{method, problem, status}],              # weren't gaps before; are now
+            "questions_enqueued_from_older_now_covered": [...],
+            "summary": str,
+        }
+
+    A cell is a "gap" in a scan iff its `verification_status` is
+    `verified_empty` OR `verification_incomplete`. Filling = the same
+    (method, problem) now has coverage in the newer scan's `cells` (or is no
+    longer classified as a gap). Emerging = the reverse.
+
+    Method/problem lists can shift between scans (the LLM extractor is not
+    deterministic), so cells only present in one scan's axis are reported as
+    `emerged` or `filled` heuristically — if a (method, problem) pair is
+    absent from the newer scan's matrix entirely, we treat it as "filled by
+    reframing" rather than a persistent gap.
+    """
+    _OPEN = ("verified_empty", "verification_incomplete")
+    older_gaps = {
+        _cell_key(g): g
+        for g in (older.get("gaps") or [])
+        if g.get("verification_status") in _OPEN
+    }
+    newer_gaps = {
+        _cell_key(g): g
+        for g in (newer.get("gaps") or [])
+        if g.get("verification_status") in _OPEN
+    }
+    newer_covered = {_cell_key(c) for c in (newer.get("cells") or [])}
+    # "Known to exist in newer scan" = covered OR classified (any status, open or not).
+    # Used to distinguish "cell was reclassified as non-gap" from "cell's axis
+    # dropped out of the newer matrix entirely".
+    newer_any_classified = {_cell_key(g) for g in (newer.get("gaps") or [])}
+    newer_known = newer_covered | newer_any_classified
+
+    gaps_filled = []
+    gaps_still_open = []
+    for key, older_gap in older_gaps.items():
+        m, p = key
+        if key in newer_covered:
+            gaps_filled.append({
+                "method": m, "problem": p,
+                "older_status": older_gap.get("verification_status"),
+                "resolution": "covered",
+                "entry_count_now": next(
+                    (c.get("entry_count", 0) for c in (newer.get("cells") or [])
+                     if _cell_key(c) == key),
+                    0,
+                ),
+            })
+        elif key in newer_gaps:
+            gaps_still_open.append({
+                "method": m, "problem": p,
+                "older_status": older_gap.get("verification_status"),
+                "current_status": newer_gaps[key].get("verification_status"),
+            })
+        elif key in newer_known:
+            # Cell appears in newer matrix classified as non-gap
+            # (adjacent_but_covered, tried_failed, etc.) — filled by reclassification.
+            gaps_filled.append({
+                "method": m, "problem": p,
+                "older_status": older_gap.get("verification_status"),
+                "resolution": "reclassified",
+                "entry_count_now": 0,
+            })
+        else:
+            # Axis shifted between scans — the (method, problem) pair isn't in
+            # the newer matrix at all (method or problem dropped from the
+            # LLM's extraction). Treat as filled-by-reframing; still notable.
+            gaps_filled.append({
+                "method": m, "problem": p,
+                "older_status": older_gap.get("verification_status"),
+                "resolution": "axis_shifted_or_dropped",
+                "entry_count_now": 0,
+            })
+
+    gaps_emerged = []
+    for key, newer_gap in newer_gaps.items():
+        if key in older_gaps:
+            continue
+        m, p = key
+        gaps_emerged.append({
+            "method": m, "problem": p,
+            "status": newer_gap.get("verification_status"),
+        })
+
+    summary = (
+        f"{len(gaps_filled)} filled · {len(gaps_still_open)} still open · "
+        f"{len(gaps_emerged)} newly emerged"
+    )
+    return {
+        "older_id": older.get("id", ""),
+        "older_timestamp": older.get("timestamp", ""),
+        "newer_id": newer.get("id", ""),
+        "newer_timestamp": newer.get("timestamp", ""),
+        "gaps_filled": gaps_filled,
+        "gaps_still_open": gaps_still_open,
+        "gaps_emerged": gaps_emerged,
+        "summary": summary,
+    }
+
+
 class NegativeSpaceMixin:
     """Structural absence analysis over the journal's accumulated state.
 
@@ -139,39 +255,62 @@ class NegativeSpaceMixin:
             print(f"        {k}: {v}")
 
         # Step 4: Verify `underexplored` classifications via academic_search.
+        # Uses `count_results_structured` — authoritative per-source result counts
+        # with explicit error tracking. Previously this path string-counted "doi:"
+        # occurrences in the formatted-text output AND mistakenly called
+        # `tool.execute(...)` on the class (not an instance), causing a silent
+        # TypeError that dropped the entire verification step to no-op.
+        from engine.tools.academic_search import count_results_structured
+        hit_threshold = int(getattr(self.config, "gap_verification_hit_threshold", 5))
         underexplored = [c for c in classified if c.get("classification") == "underexplored"]
         print(f"  [3/4] verifying {len(underexplored)} underexplored gap(s) via academic_search...")
         verified_gaps: list[dict] = []
+        incomplete_gaps: list[dict] = []
         for cell in underexplored:
-            queries = cell.get("verification_search_queries") or []
-            hits_per_query: list[int] = []
-            search_snippets: list[dict] = []
-            for q in queries[:2]:  # at most 2 queries per gap
-                if not q.strip():
-                    continue
-                try:
-                    tool = self.tool_registry.get("academic_search")
-                    if tool is None:
-                        break
-                    raw = tool.execute({"query": q, "limit_per_source": 5})
-                    hits = raw.count("doi:") + raw.count("arxiv:") + raw.count("http")
-                    hits_per_query.append(hits)
-                    search_snippets.append({"query": q, "hits_estimate": hits})
-                except Exception as e:  # noqa: BLE001
-                    print(f"        [warn] search failed on {q!r}: {type(e).__name__}: {e}")
-                    continue
-            total_hits = sum(hits_per_query)
-            # Heuristic: fewer than ~5 total hits across 2 queries → gap confirmed.
-            verified = total_hits < 5 if hits_per_query else False
-            if verified:
+            queries = [q for q in (cell.get("verification_search_queries") or []) if q.strip()][:2]
+            per_query: list[dict] = []
+            any_errors = False
+            total_hits = 0
+            for q in queries:
+                counted = count_results_structured(q, limit_per_source=5)
+                per_query.append({
+                    "query": q,
+                    "total_hits": counted["total"],
+                    "per_source": counted["per_source"],
+                    "errors": counted["errors"],
+                    "complete": counted["complete"],
+                })
+                total_hits += counted["total"]
+                if not counted["complete"]:
+                    any_errors = True
+
+            # Verification status requires ALL queries to have run cleanly. A
+            # partial failure (e.g. one source rate-limited) halves the
+            # evidence base; rather than silently accept it, mark the cell
+            # "verification_incomplete" so the scan artifact preserves the
+            # signal and the user can retry. Incomplete cells do NOT enqueue
+            # questions and are NOT counted among verified gaps.
+            cell_short = f"{cell.get('method','?')[:30]} × {cell.get('problem','?')[:30]}"
+            if not queries or any_errors:
+                incomplete_gaps.append({
+                    **cell,
+                    "search_verification": per_query,
+                    "total_hits_estimate": total_hits,
+                    "verification_status": "incomplete",
+                })
+                reason = "no queries" if not queries else "query errors"
+                print(f"        ⊘ {cell_short}  (verification incomplete: {reason})")
+                continue
+            if total_hits < hit_threshold:
                 verified_gaps.append({
                     **cell,
-                    "search_verification": search_snippets,
+                    "search_verification": per_query,
                     "total_hits_estimate": total_hits,
+                    "verification_status": "verified_empty",
                 })
-                print(f"        ✓ {cell.get('method','?')[:30]} × {cell.get('problem','?')[:30]}  (hits≈{total_hits})")
+                print(f"        ✓ {cell_short}  (hits={total_hits} < {hit_threshold})")
             else:
-                print(f"        ✗ {cell.get('method','?')[:30]} × {cell.get('problem','?')[:30]}  (hits≈{total_hits}, likely adjacent_but_covered)")
+                print(f"        ✗ {cell_short}  (hits={total_hits} ≥ {hit_threshold}, likely adjacent_but_covered)")
 
         # Step 5: Generate investigable questions for verified gaps.
         gap_questions: dict[tuple[str, str], list[str]] = {}
@@ -208,11 +347,15 @@ class NegativeSpaceMixin:
         else:
             print("  [done] no verified gaps — no questions enqueued.")
 
+        incomplete_note = (
+            f" {len(incomplete_gaps)} verification_incomplete (retry-worthy);"
+            if incomplete_gaps else ""
+        )
         summary = (
             f"Scan over {n_entries} entries. Matrix: {len(methods)} methods × "
             f"{len(problems)} problems. "
             f"{len(covered)} cells covered, {len(empty_cells)} empty. "
-            f"{len(underexplored)} classified underexplored; "
+            f"{len(underexplored)} classified underexplored;{incomplete_note} "
             f"{len(verified_gaps)} verified by search; "
             f"{sum(len(qs) for qs in gap_questions.values())} questions enqueued."
         )
@@ -221,6 +364,7 @@ class NegativeSpaceMixin:
         scan = self._persist_scan(
             methods=methods, problems=problems, covered=covered,
             classified=classified, verified_gaps=verified_gaps,
+            incomplete_gaps=incomplete_gaps,
             gap_questions=gap_questions, summary=summary,
         )
         return scan
@@ -235,6 +379,7 @@ class NegativeSpaceMixin:
         verified_gaps: list[dict],
         gap_questions: dict[tuple[str, str], list[str]],
         summary: str,
+        incomplete_gaps: Optional[list[dict]] = None,
     ) -> dict:
         """Persist the scan into journal.coverage_scans."""
         cells = [
@@ -248,28 +393,40 @@ class NegativeSpaceMixin:
             ((c.get("method") or "").strip(), (c.get("problem") or "").strip()): c
             for c in classified
         }
-        verified_keys = {((g.get("method") or "").strip(), (g.get("problem") or "").strip())
-                         for g in verified_gaps}
+        verified_by_key: dict[tuple[str, str], dict] = {
+            ((g.get("method") or "").strip(), (g.get("problem") or "").strip()): g
+            for g in verified_gaps
+        }
+        incomplete_by_key: dict[tuple[str, str], dict] = {
+            ((g.get("method") or "").strip(), (g.get("problem") or "").strip()): g
+            for g in (incomplete_gaps or [])
+        }
         for cell_key, cell_info in class_by_cell.items():
             m, p = cell_key
-            is_verified = cell_key in verified_keys
-            verification = None
-            if is_verified:
-                verification = next(
-                    (v for v in verified_gaps
-                     if (v.get("method") or "").strip() == m
-                     and (v.get("problem") or "").strip() == p),
-                    None,
-                )
+            if cell_key in verified_by_key:
+                verification_status = "verified_empty"
+                verification = verified_by_key[cell_key]
+            elif cell_key in incomplete_by_key:
+                verification_status = "verification_incomplete"
+                verification = incomplete_by_key[cell_key]
+            else:
+                # Classified but either not "underexplored" or verified to have
+                # coverage (adjacent_but_covered). Neither enqueued nor retry-worthy.
+                verification_status = cell_info.get("classification", "?")
+                verification = None
             gaps.append({
                 "method": m,
                 "problem": p,
                 "classification": cell_info.get("classification", "?"),
                 "reasoning": cell_info.get("reasoning", ""),
                 "verification_search_queries": cell_info.get("verification_search_queries", []),
-                "verified_empty": is_verified,
+                "verified_empty": verification_status == "verified_empty",
+                "verification_status": verification_status,
                 "verification_hits_estimate": (
                     verification.get("total_hits_estimate") if verification else None
+                ),
+                "search_verification": (
+                    verification.get("search_verification") if verification else []
                 ),
                 "questions_enqueued": gap_questions.get(cell_key, []),
             })

@@ -54,6 +54,100 @@
     </a>
   </div>
 
+  {# ─── Diff against prior scan (only when ≥2 scans exist) ─── #}
+  {% if diff %}
+  <details class="mb-4 rounded-xl border border-slate-700/60 bg-slate-900/40" {% if diff.gaps_filled or diff.gaps_emerged %}open{% endif %}>
+    <summary class="px-4 py-2.5 cursor-pointer flex items-center gap-2 flex-wrap">
+      <svg class="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+      </svg>
+      <span class="text-sm font-semibold text-slate-200">Change since prior scan</span>
+      <span class="text-[11px] text-slate-500">{{ diff.summary }}</span>
+      <span class="mono text-[10px] text-slate-600 ml-auto">
+        {{ diff.older_id }} → {{ diff.newer_id }}
+      </span>
+    </summary>
+    <div class="px-4 pb-4 grid gap-3 md:grid-cols-3">
+      {# Filled #}
+      <div>
+        <div class="flex items-center gap-1.5 mb-2 text-[11px] uppercase tracking-wider text-emerald-300">
+          <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+          Gaps filled ({{ diff.gaps_filled|length }})
+        </div>
+        {% if diff.gaps_filled %}
+          <ul class="space-y-1.5">
+            {% for g in diff.gaps_filled %}
+              <li class="text-[11px] bg-emerald-500/5 border border-emerald-500/20 rounded-lg p-2">
+                <div class="text-emerald-300 mono truncate" title="{{ g.method }} × {{ g.problem }}">
+                  {{ g.method[:28] }} × {{ g.problem[:28] }}
+                </div>
+                <div class="text-[10px] text-slate-500 mt-0.5">
+                  {{ g.older_status.replace('_', ' ') }}
+                  {% if g.resolution == 'covered' %}
+                    → now {{ g.entry_count_now }} entr{{ 'y' if g.entry_count_now == 1 else 'ies' }}
+                  {% elif g.resolution == 'reclassified' %}
+                    → reclassified as non-gap
+                  {% else %}
+                    → axis shifted or dropped
+                  {% endif %}
+                </div>
+              </li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <p class="text-[11px] text-slate-600 italic">None — no gaps were filled since the prior scan.</p>
+        {% endif %}
+      </div>
+      {# Still open #}
+      <div>
+        <div class="flex items-center gap-1.5 mb-2 text-[11px] uppercase tracking-wider text-amber-300">
+          <span class="w-2 h-2 rounded-full bg-amber-400"></span>
+          Still open ({{ diff.gaps_still_open|length }})
+        </div>
+        {% if diff.gaps_still_open %}
+          <ul class="space-y-1.5">
+            {% for g in diff.gaps_still_open %}
+              <li class="text-[11px] bg-amber-500/5 border border-amber-500/20 rounded-lg p-2">
+                <div class="text-amber-300 mono truncate" title="{{ g.method }} × {{ g.problem }}">
+                  {{ g.method[:28] }} × {{ g.problem[:28] }}
+                </div>
+                <div class="text-[10px] text-slate-500 mt-0.5">
+                  {{ g.current_status.replace('_', ' ') }}
+                </div>
+              </li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <p class="text-[11px] text-slate-600 italic">None — every prior gap has moved.</p>
+        {% endif %}
+      </div>
+      {# Emerged #}
+      <div>
+        <div class="flex items-center gap-1.5 mb-2 text-[11px] uppercase tracking-wider text-rose-300">
+          <span class="w-2 h-2 rounded-full bg-rose-400"></span>
+          Newly emerged ({{ diff.gaps_emerged|length }})
+        </div>
+        {% if diff.gaps_emerged %}
+          <ul class="space-y-1.5">
+            {% for g in diff.gaps_emerged %}
+              <li class="text-[11px] bg-rose-500/5 border border-rose-500/20 rounded-lg p-2">
+                <div class="text-rose-300 mono truncate" title="{{ g.method }} × {{ g.problem }}">
+                  {{ g.method[:28] }} × {{ g.problem[:28] }}
+                </div>
+                <div class="text-[10px] text-slate-500 mt-0.5">
+                  {{ g.status.replace('_', ' ') }}
+                </div>
+              </li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <p class="text-[11px] text-slate-600 italic">None — no new gaps this scan.</p>
+        {% endif %}
+      </div>
+    </div>
+  </details>
+  {% endif %}
+
   {# ─── Legend ─── #}
   <div class="mb-3 flex items-center gap-4 flex-wrap text-[11px]">
     <span class="text-slate-500 uppercase tracking-wider">Cell colors:</span>

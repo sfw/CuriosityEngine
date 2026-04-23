@@ -208,6 +208,9 @@ def main():
         held_confidence_floor=_override(args.held_confidence_floor, connection.engine.held_confidence_floor),
         parallel_investigations=connection.engine.parallel_investigations,
         parallel_xref_pipeline=connection.engine.parallel_xref_pipeline,
+        analog_probe_max_analogs=connection.engine.analog_probe_max_analogs,
+        assumption_probe_max_assumptions=connection.engine.assumption_probe_max_assumptions,
+        gap_verification_hit_threshold=connection.engine.gap_verification_hit_threshold,
     )
 
     engine = CuriosityEngine(config)

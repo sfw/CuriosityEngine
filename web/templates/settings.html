@@ -245,6 +245,15 @@
                  value="{{ connection.engine.analog_probe_surprise_threshold }}"
                  class="mt-1 w-32 px-3 py-2 rounded-lg border border-slate-700 bg-slate-900/60 text-sm mono" />
         </label>
+        <label class="block md:col-span-3">
+          <span class="text-xs uppercase tracking-wider text-slate-400">analog_probe_max_analogs</span>
+          <span class="block text-[11px] text-slate-500">
+            Max analogs to convert into enqueued questions per triggering entry (1–10; default 3).
+          </span>
+          <input name="engine_analog_probe_max_analogs" type="number" min="1" max="10"
+                 value="{{ connection.engine.analog_probe_max_analogs }}"
+                 class="mt-1 w-32 px-3 py-2 rounded-lg border border-slate-700 bg-slate-900/60 text-sm mono" />
+        </label>
 
         <label class="flex items-center gap-2 md:col-span-3">
           <input type="checkbox" name="engine_assumption_probe_enabled"
@@ -262,6 +271,15 @@
           </span>
           <input name="engine_assumption_probe_surprise_threshold" type="number" step="0.05" min="0" max="1"
                  value="{{ connection.engine.assumption_probe_surprise_threshold }}"
+                 class="mt-1 w-32 px-3 py-2 rounded-lg border border-slate-700 bg-slate-900/60 text-sm mono" />
+        </label>
+        <label class="block md:col-span-3">
+          <span class="text-xs uppercase tracking-wider text-slate-400">assumption_probe_max_assumptions</span>
+          <span class="block text-[11px] text-slate-500">
+            Max named assumptions the probe converts into negation questions per triggering entry (1–10; default 3).
+          </span>
+          <input name="engine_assumption_probe_max_assumptions" type="number" min="1" max="10"
+                 value="{{ connection.engine.assumption_probe_max_assumptions }}"
                  class="mt-1 w-32 px-3 py-2 rounded-lg border border-slate-700 bg-slate-900/60 text-sm mono" />
         </label>
 
@@ -316,6 +334,17 @@
           </span>
           <input name="engine_negative_space_min_entries" type="number" min="1" max="500"
                  value="{{ connection.engine.negative_space_min_entries }}"
+                 class="mt-1 w-32 px-3 py-2 rounded-lg border border-slate-700 bg-slate-900/60 text-sm mono" />
+        </label>
+        <label class="block md:col-span-3">
+          <span class="text-xs uppercase tracking-wider text-slate-400">gap_verification_hit_threshold</span>
+          <span class="block text-[11px] text-slate-500">
+            During gap verification, a cell classified as <span class="mono">underexplored</span> is confirmed empty
+            when total structured hits across its verification queries is below this. Default 5. Raise if
+            well-covered topics are being falsely confirmed as gaps; lower if nothing is ever confirmed empty.
+          </span>
+          <input name="engine_gap_verification_hit_threshold" type="number" min="1" max="100"
+                 value="{{ connection.engine.gap_verification_hit_threshold }}"
                  class="mt-1 w-32 px-3 py-2 rounded-lg border border-slate-700 bg-slate-900/60 text-sm mono" />
         </label>
       </div>
