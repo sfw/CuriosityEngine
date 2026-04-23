@@ -1,6 +1,7 @@
 repos:
+  # Secret scanning — refuse commits containing verified secrets.
   - repo: https://github.com/trufflesecurity/trufflehog
-    rev: v3.82.0  # Use the latest release version
+    rev: v3.82.0
     hooks:
       - id: trufflehog
         name: TruffleHog
@@ -8,3 +9,24 @@ repos:
         entry: trufflehog git file://. --only-verified --fail
         language: system
         pass_filenames: false
+
+  # Ruff lint — mirrors the `Lint (ruff)` step in .github/workflows/ci.yml.
+  # Catches issues like F541 (f-string without placeholders) locally BEFORE
+  # they break the CI build. Runs automatically on `git commit`; run
+  # `pre-commit run --all-files` to scan the whole repo on demand.
+  #
+  # Bump `rev` when ruff ships new rules you want to adopt. Pin explicit
+  # versions (not "stable") so hook behavior is deterministic across machines.
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.4
+    hooks:
+      - id: ruff
+        name: ruff
+        args:
+          - check
+          - --exclude
+          - .venv
+          - --exclude
+          - data
+          - --exclude
+          - __pycache__

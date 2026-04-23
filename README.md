@@ -4,22 +4,24 @@ A proof-of-concept research loop that generates its own questions from self-asse
 
 The engine is designed to be **driven iteratively**: you set a focus, run cycles, inspect the knowledge graph it builds, inject your own questions or reject shallow claims, and continue. It won't produce novel ideas on its own; with steering it will surface candidates that survive real adversarial scrutiny.
 
-> **Status**: proof of concept. Phases 1–4 and 6 of the roadmap are implemented; Phase 5 (multi-agent disagreement) is planned. Knowledge graph + semantic retrieval + human review loop + containerized runtime + cross-domain analog probe + premises/synthesis verification split + inconclusive/held pipeline + per-phase model routing + challenged-hedge guardrail + admin maintenance operations are all in. See [Honest limitations](#honest-limitations) for what this system genuinely *can't* do.
+> **Status**: proof of concept. Phases 1–4 and 6 of the roadmap are implemented; Phase 5 (multi-agent disagreement) is planned. Knowledge graph + semantic retrieval + human review loop + containerized runtime + cross-domain analog probe + within-domain assumption probe + negative-space gap mapping + premises/synthesis verification split + inconclusive/held pipeline + per-phase model routing + challenged-hedge guardrail + admin maintenance operations + coverage tab are all in. See [Honest limitations](#honest-limitations) for what this system genuinely *can't* do.
 
 ---
 
 ## Core thesis
 
-> Novel insight rarely emerges from a single query. It emerges at the **intersection** of knowledge gaps, when an investigation forces a prior hypothesis to collide with fresh evidence, when a reframing through a foreign domain reveals an analogous mechanism, and when an independent reviewer can verify that *the premises are real* but *the synthesis itself is not yet in the literature*.
+> Novel insight rarely emerges from a single query. It emerges when four directions of search compose — **reaching outward** to foreign domains, **reaching inward** to premise-level assumptions, **connecting existing** findings into non-obvious cross-references, and **locating missing** combinations in the possibility space. Adversarial verification then separates genuine synthesis (*premises real, composite claim not in literature*) from articulate restatement.
 
 The engine operationalizes this by:
 
 1. **Committing to hypotheses** before searching, so surprise is a comparison rather than a self-report.
-2. **Cross-referencing** accumulated findings across many sessions to surface connections no single prompt would produce — prioritized by a knowledge graph that biases toward *cross-domain* neighbors and away from already-explored attractor basins.
-3. **Probing cross-domain analogs** on high-surprise findings — the engine asks which distant fields (immunology, population ecology, statistical mechanics, …) have structurally analogous mechanisms, and enqueues investigable translations of those analogs. Biology → algorithmics-style novelty, made structural.
-4. **Adversarially verifying** synthesized insights with a *different model family* using a **premises-vs-synthesis decomposition**: the verifier must separately establish that the ingredients are real (premises_supported=TRUE) and that the composite claim is NOT in the literature (synthesis_findable=FALSE). The signature of genuine novelty is `supported premises + unfindable synthesis` — exactly the pattern the prior verifier schema was rejecting as "challenged."
-5. **Attaching falsifiable predictions** to every validated insight, so the test of time separates predictive claims from post-hoc narrative fitting.
-6. **Keeping the human in the loop.** Focus, question injection, register review — the engine is a research *partner*, not an oracle.
+2. **Cross-referencing** accumulated findings across many sessions to surface connections no single prompt would produce — prioritized by a knowledge graph that biases toward *cross-domain* neighbors and away from already-explored attractor basins. *(Reaching outward across existing entries.)*
+3. **Cross-domain analog probe** on high-surprise findings — the engine asks which distant fields (immunology, population ecology, statistical mechanics, …) have structurally analogous mechanisms and enqueues investigable translations of those analogs. Biology → algorithmics-style novelty, made structural. *(Reaching outward to foreign fields.)*
+4. **Within-domain assumption probe** on low-surprise *confirmed* findings — the accepted-wisdom regime is precisely where load-bearing assumptions hide unexamined. The engine asks for implicit premises the field takes for granted and produces investigable questions that would test each. *(Reaching inward to the premise layer.)*
+5. **Negative-space gap mapping** on demand — builds a (method × problem) matrix over accumulated journal entries, identifies empty cells, classifies each as *underexplored* / *tried-failed* / *trivially-uninteresting* / *regulated-boundary* / *adjacent-but-covered*, verifies `underexplored` classifications via `academic_search`, and enqueues investigable questions for verified gaps. *(Locating missing combinations in possibility space.)*
+6. **Adversarially verifying** synthesized insights with a *different model family* using a **premises-vs-synthesis decomposition**: the verifier must separately establish that the ingredients are real (premises_supported=TRUE) and that the composite claim is NOT in the literature (synthesis_findable=FALSE). The signature of genuine novelty is `supported premises + unfindable synthesis` — exactly the pattern the prior verifier schema was rejecting as "challenged."
+7. **Attaching falsifiable predictions** to every validated insight, so the test of time separates predictive claims from post-hoc narrative fitting.
+8. **Keeping the human in the loop.** Focus, question injection, register review — the engine is a research *partner*, not an oracle.
 
 ---
 
@@ -38,6 +40,9 @@ The engine operationalizes this by:
   (analog probe)    →  on surprise ≥ threshold, ask for distant-domain analogs
                        (named sub-fields + mechanisms + translated questions)
                        enqueued at priority 0.85
+  (assumption probe)→  on surprise ≤ threshold AND verdict=confirmed, surface
+                       implicit premises the field takes for granted; produce
+                       questions that would test each → enqueued at priority 0.80
   (embed)           →  OpenAI embeddings on question + takeaways
   cross-reference   →  graph-aware entry selection biased toward CROSS-DOMAIN
                        neighbors; anti-attractor gate skips candidates whose
@@ -55,6 +60,14 @@ The engine operationalizes this by:
   check predictions (later, on demand)
     └─ revisit due predictions via verifier+tools
     └─ update register entry lifecycle status
+
+  negative-space scan (ADMIN-triggered only — gated on min entries)
+    ├─ hybrid matrix extraction: tags as anchors, LLM enriches from takeaways
+    ├─ empty cells = Cartesian(methods × problems) − covered
+    ├─ classify each empty cell: underexplored | tried_failed | trivial | regulated | adjacent_but_covered
+    ├─ verify `underexplored` cells with academic_search
+    ├─ generate investigable questions for verified gaps → enqueue at priority 0.85
+    └─ persist full scan to journal.coverage_scans (diff coverage over time)
 ```
 
 Every step persists to `research_journal.json`. The human-readable artifact is `register.md`, auto-written whenever the register changes.
@@ -85,6 +98,12 @@ The engine's design is a direct response to each of these failure modes.
 
 Critically, the engine *does not* decide which analog domain to use ahead of time. The LLM picks it based on the specific finding. Research has shown LLMs are particularly good at this kind of conceptual analogical reasoning; the engine leverages it rather than hard-coding a rotation.
 
+**2b. Within-domain assumption probe.** Complementary to the analog probe's outward reach — fires on *low-surprise, confirmed* findings, where field consensus has the most room to hide load-bearing assumptions unexamined. The trigger is inverse: `surprise_delta ≤ assumption_probe_surprise_threshold` (default 0.3) AND `hypothesis_verdict == "confirmed"`.
+
+The prompt (`ASSUMPTION_PROBE_PROMPT`) asks the primary model to list 3–5 implicit premises the finding depends on — things practitioners in the field treat as obviously true — and for each, emit an investigable question that would test whether the assumption actually holds. Output is enqueued at priority 0.80 with source `assumption:<entry-id>`.
+
+Why low-surprise-confirmed specifically? A high-surprise finding is by definition at the frontier where premises are actively contested; there's nothing settled to challenge. A low-surprise confirmed finding is where the field has collectively stopped looking — "of course activation functions matter for generalization"; "of course OOD detection requires distributional assumptions." Those are the assumptions worth negating. Together with the analog probe, this covers the two directions of within-journal generative novelty: reach outward (analog) and reach inward (assumption).
+
 **3. Priority-ordered question queue.** All emergent questions — entry follow-ups, cross-reference follow-ups, analog probes — carry a `priority` score at enqueue time:
 - Human-directed questions: 1.0 (always highest).
 - Analog probe questions: 0.85 (cross-domain material is the rarest signal).
@@ -105,6 +124,18 @@ The result: the cross-reference prompt is fed participant pairs that span domain
 - *Code-level.* In `engine/cross_reference.py`, after the LLM returns candidates, the engine computes an overlap coefficient against each existing xref's participant set. Candidates with overlap ≥0.5 and claimed novelty < 0.85 are skipped (printed as `Skipped N attractor-basin cross-reference(s)`). Novel angles on the same participants are allowed, but they have to prove novelty.
 
 **6. Synthesis with self-check.** High-novelty xrefs (`novelty_score ≥ novelty_threshold`, default 0.7) get synthesized into full Insights via `SYNTHESIZE_PROMPT`. The synthesis prompt includes a `prior_art_check` self-interrogation ("if I searched for this claim, would I find it plainly stated?") — this is a weak but cheap filter before the much more expensive cross-model verification.
+
+**6b. Negative-space gap mapping (admin-triggered, not part of the cycle loop).** A fundamentally different kind of search: instead of connecting what's in the journal, it locates *what isn't*. Gated on journal maturity — requires at least `negative_space_min_entries` entries (default 15), because below that threshold most empty cells are artifacts of journal youth rather than field-level gaps.
+
+The pipeline is four LLM-driven steps plus a structural middle:
+
+1. **Hybrid matrix extraction** (`NEGATIVE_SPACE_EXTRACT_PROMPT`) — the primary model receives slimmed entries + the journal's `domain_tags` as anchors, extracts canonical `(method, problem)` pairs (e.g. "ensemble disagreement" × "escaping self-grading"), and identifies which pairs the journal has already covered and with which entries. Tags provide deterministic skeleton; the LLM enriches from `key_takeaways`.
+2. **Compute empty cells** — pure Python. Any pair in `Cartesian(methods × problems)` not in the covered set is a candidate gap.
+3. **Classify each empty cell** (`NEGATIVE_SPACE_CLASSIFY_PROMPT`) — the LLM assigns one of: `underexplored` (genuine gap worth probing), `tried_failed` (literature shows the combination doesn't work), `trivially_uninteresting` (the combination is technically possible but doesn't make sense), `regulated_boundary` (ethics/infrastructure/capability constraints), or `adjacent_but_covered` (studied under different terminology). The prompt biases toward `underexplored` when uncertain — the verification step filters false positives.
+4. **Verify `underexplored` classifications** with `academic_search` — 1–2 queries per candidate gap. Gaps with few search hits are confirmed empty; gaps with many hits are downgraded to `adjacent_but_covered` (the literature has them; the journal just hasn't absorbed it).
+5. **Generate investigable questions** for verified gaps (`NEGATIVE_SPACE_QUESTIONS_PROMPT`) — 1–2 concrete questions per gap, enqueued at priority 0.85 with source `gap:<short-id>`.
+
+The full scan (matrix + cells + classifications + verification hits + enqueued questions + summary) is persisted to `journal.coverage_scans` as a first-class artifact, viewable in the **Coverage** tab. This lets you *diff coverage over time* — which gaps got filled, which remain, which turned out to be adjacent-but-covered once the literature was actually searched. Most valuable on mature journals where the question "what is conspicuously absent?" has real signal.
 
 ### Phase-by-phase: how novelty is *verified*
 
@@ -332,8 +363,9 @@ Pages:
   - *Predictions*: status tracker with review history.
   - *Focus & Queue*: set focus, add/clear user-directed questions, semantic search. Queue items display their `priority` chip and are sorted priority-descending — highest-priority questions are investigated first on the next run.
   - *Graph*: interactive force-directed graph (sigma.js) with node-kind coloring and click-to-detail. Clicking any node fetches a full-text HTML fragment with no text cropping — covers all 7 node kinds (entry / xref / insight / register / prediction / source / tag).
-  - *Runs*: per-journal run history with status chips (running / complete / failed); click to expand the full log; live SSE reconnect for any still-streaming run.
-  - *Admin*: consolidated maintenance operations with work-to-do counters (unregistered insights / orphaned xrefs / due predictions / held entries). Buttons for: re-run cross-reference (with optional `cross_ref_window` + model-role overrides), synthesize orphaned xrefs (recover from mid-run crashes between cross-ref and synthesis), re-verify unregistered insights under current rules, and check due predictions. Each action spawns a subprocess through the standard run-tracking infrastructure — the top-bar indicator lights up, the log streams in the Runs tab.
+  - *Runs*: per-journal run history with status chips (running / complete / failed); click to expand the full log; live SSE reconnect for any still-streaming run. Failed runs are collapsed behind a single disclosure at the bottom ("N failed runs — click to expand · kept for debugging / log inspection") so the day-to-day view stays focused on active and complete runs.
+  - *Coverage*: shows the latest negative-space gap scan as a visual (method × problem) matrix. Filled cells color-coded emerald with entry counts (click → Entries tab); empty cells color-coded by classification (amber = underexplored verified, dim amber = underexplored unverified, sky = adjacent-but-covered, slate = tried/trivial/regulated). Legend above the matrix. Gap detail list below the matrix expands each `underexplored` / `adjacent_but_covered` cell with LLM reasoning, verification search queries, and enqueued question ids. Past scans listed at the bottom so you can diff coverage across runs. Empty state when no scans yet points to the Admin tab.
+  - *Admin*: consolidated maintenance operations with work-to-do counters (unregistered insights / orphaned xrefs / due predictions / held entries). Buttons for: re-run cross-reference (with optional `cross_ref_window` + model-role overrides), synthesize orphaned xrefs (recover from mid-run crashes between cross-ref and synthesis), re-verify unregistered insights under current rules, check due predictions, and **scan for unexplored gaps** (hard-gated on journal having ≥ `negative_space_min_entries` entries, default 15). Each action spawns a subprocess through the standard run-tracking infrastructure — the top-bar indicator lights up, the log streams in the Runs tab.
 - **Run** (`/run`) — form to start a cycle, live SSE stream of output. Domain is pre-filled from the journal's `last_domain` after the first run. Cycles input is stepped in multiples of `cross_ref_frequency` so a run never wastes an investigation on a cycle that doesn't reach cross-ref. Collapsed "Run overrides" panel exposes every engine knob for per-invocation override (dirty-detected server-side so unchanged values don't bloat the command line).
 - **Settings** (`/settings`) — edit `engine.toml` in-place: model profiles (provider / name / api_key / base_url / max_tokens / temperature / **timeout_seconds**), retry policy, and every engine knob including `cross_ref_role`, analog probe enable + threshold, held pipeline enable + confidence floor. Save is non-destructive — any additional `[models.<name>]` profiles you've added manually are preserved through round-trips. Config is re-read on every request + every subprocess spawn, so saves apply immediately with no restart.
 - **Top bar** — activity indicator: dim emerald dot when idle, amber pulsing dot with a soft glow when one or more runs are streaming. Clicking the amber dot drops you onto the active journal's Runs tab.
@@ -426,6 +458,7 @@ python curiosity_engine.py --check-predictions-all     # force-review every pend
 python curiosity_engine.py --reverify-insights         # re-verify every unregistered insight under current verifier rules
 python curiosity_engine.py --reverify-insight i-abc    # re-verify a single insight by id
 python curiosity_engine.py --synth-orphaned-xrefs      # synth + verify xrefs that lack a matching insight (recovery)
+python curiosity_engine.py --scan-gaps                 # negative-space scan: matrix × gaps × academic_search verification × questions (gated on min-entries)
 
 # Model overrides for a single run
 # Name-only override (keeps profile's provider/endpoint/key — use when the endpoint supports multiple models):
@@ -509,11 +542,21 @@ cross_ref_role = ""
 # questions at high priority. Set enabled=false or raise the threshold to disable.
 analog_probe_enabled = true
 analog_probe_surprise_threshold = 0.5
+# Within-domain assumption probe — on LOW-surprise confirmed entries, ask the
+# primary model to name implicit premises the field takes for granted and emit
+# questions that would test each. Opposite trigger direction from analog probe;
+# complementary novelty-reach mechanism.
+assumption_probe_enabled = true
+assumption_probe_surprise_threshold = 0.3
 # Held-state pipeline — when the verifier returns `inconclusive` (couldn't reach
 # the claim, not refuted it), insights become held register entries pending
 # settlement rather than being silently rejected.
 held_entries_enabled = true
 held_confidence_floor = 0.7
+# Negative-space gap mapping — minimum journal size before the Admin action is
+# unlocked. Below this threshold most empty (method × problem) cells are just
+# journal-young rather than genuine field-level gaps, so the scan would be noise.
+negative_space_min_entries = 15
 ```
 
 **OpenAI-compat endpoint shortcuts** (any value works in `base_url`):
@@ -543,9 +586,12 @@ Defaults live on `EngineSettings` (in `config.py`, persisted under `[engine]` in
 - `verify_insights = True` — toggle cross-model verification.
 - `analog_probe_enabled = True` — run the cross-domain analog probe on high-surprise entries.
 - `analog_probe_surprise_threshold = 0.5` — minimum surprise_delta required to trigger the analog probe (higher = more selective).
+- `assumption_probe_enabled = True` — run the within-domain assumption probe on low-surprise confirmed entries.
+- `assumption_probe_surprise_threshold = 0.3` — max surprise_delta for the assumption probe to fire (probe triggers when `verdict==confirmed` AND `surprise_delta ≤ threshold`).
 - `cross_ref_role = ""` — per-phase model routing for cross-reference. Empty = use `primary`. Set to `"verifier"` or any custom role matching a `[models.<name>]` section to offload cross-ref to a faster non-reasoning model.
 - `held_entries_enabled = True` — toggle the inconclusive → held pipeline.
 - `held_confidence_floor = 0.7` — minimum verifier confidence for a held register entry (usually tighter than active's floor).
+- `negative_space_min_entries = 15` — minimum journal size before the Admin tab's "Scan for unexplored gaps" action is unlocked. Below this threshold most empty matrix cells are artifacts of journal youth rather than field-level gaps.
 
 Per-profile setting:
 
@@ -733,6 +779,11 @@ What this **is** good for:
 | P | Role-based profile swap (`--primary-role` / `--verifier-role` / `--cross-ref-role`) — copies whole profile, not just model name | **done** |
 | Q | Challenged-hedge guardrail — code-level upgrade from `challenged` to `validated` when decomposition is unambiguous and reasoning_flaws contain no substantive markers | **done** |
 | R | Configurable per-request HTTP timeout (`timeout_seconds` on each profile, default 300s) — handles reasoning-mode first-token latency | **done** |
+| S | Within-domain assumption probe — fires on low-surprise confirmed entries to surface implicit premises the field takes for granted | **done** |
+| T | Negative-space gap mapping — admin-triggered (method × problem) matrix scan; classifies empty cells; verifies underexplored gaps via `academic_search`; enqueues questions | **done** |
+| U | Coverage tab — persistent gap-scan artifact + visual matrix + past-scan diffing | **done** |
+| V | Cycle-level failure isolation + retry patience tuning (max_delay 90s, max_attempts 10) — single failed investigation no longer kills a multi-cycle run | **done** |
+| W | Collapsed failed-runs disclosure in the Runs tab — failed runs retained for debugging but not in the primary view | **done** |
 | — | Controlled parallelism — parallel investigation fan-out + synth fan-out + verify fan-out with shared per-tool rate limiters | backlog |
 | — | Foreign-lens phase (scheduled cross-domain creativity burst) | backlog |
 | — | Insight de-duplication via embeddings (drop near-duplicate syntheses) | backlog |
