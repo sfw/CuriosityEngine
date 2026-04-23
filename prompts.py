@@ -235,6 +235,14 @@ Render a verdict:
 - "validated": premises_supported=TRUE, synthesis_findable=FALSE, no decisive contradictions, reasoning holds. A new_synthesis, correction, or strong extension.
 - "challenged": one condition holds weakly — e.g. premises partially supported, synthesis partially findable, reasoning has fixable gaps. Use this SPARINGLY and ONLY with a specific, nameable weakness — not because "the ingredients existed separately" (that is the definition of new_synthesis, not a weakness).
 - "refuted": premises_supported=FALSE, or synthesis_findable=TRUE, or decisive contradictions, or fatal reasoning flaw.
+- "inconclusive": your adversarial search could not reach the claim, but nothing you found refuted it either. Use THIS verdict ONLY when one or more of these conditions hold:
+    • Your searches returned no meaningful results for the specific synthesis AND the claim cannot be rephrased into something searchable.
+    • The claim requires data or methods you cannot access (proprietary datasets, pre-publication work, clinical evidence, industrial telemetry, GPU-scale experiments, paywalled journals).
+    • The claim is empirical and resolves only with an experiment you cannot run inside `code_execution`.
+    • The claim sits in a field where public literature is genuinely thin (e.g. active research frontier with no surveys yet, or heterodox area with sparse coverage).
+  When you return `inconclusive`, you MUST name the specific epistemic gap in `verification_summary` (e.g. "the claim hinges on unpublished benchmark results for model X, which are not in the public literature") — a summary that just hedges without naming the gap will be downgraded to `challenged` by the engine.
+
+  Do NOT use `inconclusive` as a softer `challenged`. If you found specific weaknesses, those are `challenged`. If you found specific refutations, those are `refuted`. `inconclusive` means "search did not have purchase — this needs a settlement signal outside my reach."
 
 **Guardrails against the "ingredients existed" failure mode:**
 - If your justification for `challenged` or `refuted` amounts to "individual components are documented but this specific combination is not," that is evidence of novelty — revisit and likely upgrade to `validated`.
@@ -250,6 +258,13 @@ FINALLY — if and only if your verdict is "validated" — produce 1-3 FALSIFIAB
 
 A prediction that cannot be checked, or that is trivially true either way, is worse than no prediction. Be specific or produce none. If your verdict is "challenged" or "refuted", omit predictions (emit an empty list).
 
+IF AND ONLY IF your verdict is "inconclusive" — emit a SETTLEMENT PLAN instead of predictions. The plan describes how reality (or future work) could eventually settle the claim:
+- `settlement_method`: a concrete method — a paper to watch for, a benchmark release to check, a dataset/code release that would unlock verification, an industrial telemetry signal, a specific experiment that would answer it.
+- `settlement_horizon`: ISO YYYY-MM-DD target by when the settlement signal might be checkable (3–36 months typical).
+- `settlement_triggers`: 1–3 specific observable outcomes, each of which would either PROMOTE the held insight to active (confirming settlement) or REFUTE it. State each trigger in the "if X is observed, then Y" form.
+
+If your verdict is "validated", emit predictions and omit settlement fields. If "inconclusive", emit settlement fields and omit predictions. If "challenged" or "refuted", omit both.
+
 Respond with EXACTLY this JSON structure (no other text):
 {{
   "premises_supported": true,
@@ -260,9 +275,9 @@ Respond with EXACTLY this JSON structure (no other text):
   "contradicting_findings": ["specific findings or papers that contradict the composite claim"],
   "reasoning_flaws": ["specific flaws in the evidence-to-claim connection"],
   "motivation": "one-paragraph explanation of why this insight matters if validated",
-  "verdict": "validated|challenged|refuted",
+  "verdict": "validated|challenged|refuted|inconclusive",
   "verified_confidence": 0.0-1.0,
-  "verification_summary": "one-paragraph justification citing what the adversarial search found or failed to find, and WHY the verdict follows from premises_supported × synthesis_findable",
+  "verification_summary": "one-paragraph justification citing what the adversarial search found or failed to find, and WHY the verdict follows from premises_supported × synthesis_findable; for `inconclusive`, explicitly name the epistemic gap that prevented verification",
   "predictions": [
     {{
       "claim": "specific empirical prediction that follows from the insight",
@@ -270,7 +285,10 @@ Respond with EXACTLY this JSON structure (no other text):
       "check_method": "concrete method for verifying the prediction",
       "target_date": "YYYY-MM-DD"
     }}
-  ]
+  ],
+  "settlement_method": "only when verdict is inconclusive — concrete method for eventually settling the claim",
+  "settlement_horizon": "YYYY-MM-DD",
+  "settlement_triggers": ["observable outcomes that would promote or refute the held claim"]
 }}"""
 
 

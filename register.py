@@ -7,6 +7,10 @@ def render_markdown(register_entries: list[dict], predictions: list[dict] | None
     """Render the register as a human-readable markdown document.
 
     predictions: optional flat list of Prediction dicts keyed to entries by register_entry_id.
+
+    The register is split into two sections:
+      - Active insights (verified + registered)
+      - Held insights (verifier returned `inconclusive` — awaiting settlement)
     """
     lines: list[str] = [
         "# Curiosity Engine — Verified Insights Register",
@@ -26,10 +30,28 @@ def render_markdown(register_entries: list[dict], predictions: list[dict] | None
     for p in predictions or []:
         predictions_by_entry.setdefault(p.get("register_entry_id", ""), []).append(p)
 
-    for entry in register_entries:
-        entry_predictions = predictions_by_entry.get(entry.get("id", ""), [])
-        lines.extend(_render_entry(entry, entry_predictions))
+    active_entries = [e for e in register_entries if e.get("status") != "held"]
+    held_entries = [e for e in register_entries if e.get("status") == "held"]
+
+    if active_entries:
+        lines.append("## Active insights")
         lines.append("")
+        for entry in active_entries:
+            entry_predictions = predictions_by_entry.get(entry.get("id", ""), [])
+            lines.extend(_render_entry(entry, entry_predictions))
+            lines.append("")
+
+    if held_entries:
+        lines.append("## Held — unable to verify, awaiting settlement")
+        lines.append("")
+        lines.append("The verifier returned `inconclusive` on these — adversarial search could not")
+        lines.append("reach the claim, but nothing refuted it either. Each carries a settlement plan")
+        lines.append("describing how reality could eventually resolve it.")
+        lines.append("")
+        for entry in held_entries:
+            entry_predictions = predictions_by_entry.get(entry.get("id", ""), [])
+            lines.extend(_render_entry(entry, entry_predictions))
+            lines.append("")
 
     return "\n".join(lines)
 
@@ -71,6 +93,25 @@ def _render_entry(entry: dict, predictions: list[dict]) -> list[str]:
         out.append("### Motivation")
         out.append("")
         out.append(motivation)
+        out.append("")
+
+    if entry.get("status") == "held":
+        sm = (entry.get("settlement_method") or "").strip()
+        sh = (entry.get("settlement_horizon") or "").strip()
+        st = entry.get("settlement_triggers") or []
+        hr = (entry.get("held_reason") or "").strip()
+        out.append("### Settlement plan (held)")
+        out.append("")
+        if hr:
+            out.append(f"- **Held reason:** {hr}")
+        if sm:
+            out.append(f"- **Method:** {sm}")
+        if sh:
+            out.append(f"- **Horizon:** {sh}")
+        if st:
+            out.append("- **Triggers:**")
+            for t in st:
+                out.append(f"  - {t}")
         out.append("")
 
     out.append("### Substantiation")

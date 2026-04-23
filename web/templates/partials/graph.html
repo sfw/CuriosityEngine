@@ -35,7 +35,8 @@
       <div class="flex items-center gap-2"><span class="inline-block w-2.5 h-2.5 rounded-full" style="background:#818cf8"></span><span class="text-slate-300">Entry</span></div>
       <div class="flex items-center gap-2"><span class="inline-block w-2.5 h-2.5 rounded-full" style="background:#fbbf24"></span><span class="text-slate-300">Cross-reference</span></div>
       <div class="flex items-center gap-2"><span class="inline-block w-2.5 h-2.5 rounded-full" style="background:#34d399"></span><span class="text-slate-300">Insight</span></div>
-      <div class="flex items-center gap-2"><span class="inline-block w-2.5 h-2.5 rounded-full" style="background:#10b981"></span><span class="text-slate-300">Registered</span></div>
+      <div class="flex items-center gap-2"><span class="inline-block w-2.5 h-2.5 rounded-full" style="background:#10b981"></span><span class="text-slate-300">Registered (active)</span></div>
+      <div class="flex items-center gap-2"><span class="inline-block w-2.5 h-2.5 rounded-full" style="background:#f59e0b"></span><span class="text-slate-300">Held — awaiting settlement</span></div>
       <div class="flex items-center gap-2"><span class="inline-block w-2.5 h-2.5 rounded-full" style="background:#f472b6"></span><span class="text-slate-300">Prediction</span></div>
       <div class="flex items-center gap-2"><span class="inline-block w-2.5 h-2.5 rounded-full" style="background:#64748b"></span><span class="text-slate-300">Source</span></div>
       <div class="flex items-center gap-2"><span class="inline-block w-2.5 h-2.5 rounded-full" style="background:#c084fc"></span><span class="text-slate-300">Tag</span></div>
@@ -60,6 +61,7 @@
     xref:       "#fbbf24",
     insight:    "#34d399",
     register:   "#10b981",
+    register_held: "#f59e0b",     // amber — held, awaiting settlement
     prediction: "#f472b6",
     source:     "#64748b",
     tag:        "#c084fc",
@@ -88,11 +90,14 @@
       const k = n.attributes.kind;
       if (k === "source" && !showSources) continue;
       if (k === "tag" && !showTags) continue;
+      // Register nodes have two sub-palettes: active vs held.
+      let color = palette[k] || "#94a3b8";
+      if (k === "register" && n.attributes.status === "held") color = palette.register_held;
       g.addNode(n.key, {
         ...n.attributes,
         x: randPos(),
         y: randPos(),
-        color: palette[k] || "#94a3b8",
+        color,
       });
     }
     for (const e of rawData.edges) {

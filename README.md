@@ -133,7 +133,7 @@ and the prompt explicitly warns the verifier against the "ingredients existed se
 
 > **Do NOT penalize an insight for being composed of published ingredients. Penalize only if the *full synthesis itself* is published, or if the reasoning from premises to synthesis is broken.**
 
-**9. The register gate.** A candidate reaches the register only if ALL of:
+**9. The register gate.** A candidate reaches the *active* register only if ALL of:
 - `verdict = validated`
 - `premises_supported = true`
 - `synthesis_findable = false`
@@ -148,6 +148,41 @@ The `novelty_type` classifier distinguishes between the five outcomes a verifier
 | `correction` | Challenges a published claim with new reasoning/evidence | Registerable as a novel critique |
 | `restatement` | Full synthesis is already in the literature under some name | Rejected — not novel |
 | `unsupported` | Premises themselves are shaky | Rejected regardless of synthesis |
+
+**9b. When the verifier cannot reach — the `inconclusive` / held path.**
+
+Genuine novelty often lives exactly where verification is hardest: behind paywalls, in proprietary datasets, in pre-publication work, in experiments that require resources the verifier's tools can't access. Treating "I couldn't verify this" as equivalent to "I found a decisive flaw" selects against the very claims that are most likely to be novel.
+
+The verifier therefore has a fourth verdict — `inconclusive` — with explicit trigger conditions. It is used ONLY when:
+
+- Searches returned no meaningful results AND the claim cannot be rephrased into something searchable;
+- The claim depends on data or methods the verifier cannot access (proprietary, pre-publication, clinical, GPU-scale, paywalled);
+- The claim is empirical and resolves only via an experiment the verifier cannot run;
+- The claim sits in a field with genuinely thin public literature.
+
+When verdict is `inconclusive` AND `premises_supported = true` AND confidence ≥ `held_confidence_floor` (default 0.7, usually tighter than the active floor), the insight becomes a **held register entry** — preserved with full provenance, distinguishable from both rejected and active entries, and carrying a **settlement plan**:
+
+- `settlement_method`: the concrete method by which reality could eventually resolve it (paper to watch, benchmark release, dataset/code release, industrial observation).
+- `settlement_horizon`: ISO date by when a signal might appear.
+- `settlement_triggers`: specific observable outcomes, each of which would either promote the held entry to active or refute it.
+
+Held entries can be promoted to active three ways:
+
+1. **Automatic via prediction.** Settlement triggers can be converted to Prediction records (during human review, or automatically by selecting the "attach triggers as predictions" checkbox on promotion). When `--check-predictions` runs later and all attached predictions resolve `confirmed`, the held entry is promoted to active automatically.
+2. **Human review.** `--review-register` presents held entries with a `[p]romote-to-active` action. The user can promote based on domain knowledge even before any prediction resolves.
+3. **Manual in web UI.** The Register tab's held cards have a *Promote to active* button.
+
+**Guardrail against misuse of `inconclusive`.** LLMs may instinctively use `inconclusive` as a soft `challenged` to avoid committing. Two defenses:
+
+1. The prompt explicitly rules this out and requires that `verification_summary` name the specific epistemic gap when verdict is `inconclusive`.
+2. `engine/verification.py` pattern-matches the summary for gap-naming phrases (`cannot access`, `paywalled`, `pre-publication`, `requires an experiment`, etc.). If none match, the engine downgrades `inconclusive` → `challenged` and logs the downgrade.
+
+**Re-reviewing previously-unregistered insights.** Because verifier prompts and rules evolve, you can replay verification over every insight that doesn't yet have a register entry:
+
+- CLI: `curiosity_engine.py --reverify-insights` (all unregistered) or `--reverify-insight <id>` (targeted).
+- Web: a **Re-verify unregistered** button on the Insights tab spawns the same subprocess; the run appears in the Runs tab with streaming logs.
+
+Each candidate's verification flows through the current gate — so an insight that was rejected under an older verifier schema may now land as `active` (if it's a `new_synthesis`) or `held` (if the verifier genuinely can't reach it). Insights that already have a register entry (any status) are skipped.
 
 **10. Prior-human-rejection feedback.** Every human rejection (`--review-register` with a required reason) gets fed into future verifier prompts as *"patterns to avoid repeating — reasons a domain expert rejected previous register entries."* The verifier uses this to apply the same skepticism to candidates with similar weaknesses. A user's taste becomes a learned bar over time.
 
@@ -425,6 +460,11 @@ verify_insights = true
 # questions at high priority. Set enabled=false or raise the threshold to disable.
 analog_probe_enabled = true
 analog_probe_surprise_threshold = 0.5
+# Held-state pipeline — when the verifier returns `inconclusive` (couldn't reach
+# the claim, not refuted it), insights become held register entries pending
+# settlement rather than being silently rejected.
+held_entries_enabled = true
+held_confidence_floor = 0.7
 ```
 
 **OpenAI-compat endpoint shortcuts** (any value works in `base_url`):
@@ -629,6 +669,8 @@ What this **is** good for:
 | H | Cross-domain bias in entry-selection graph heuristic | **done** |
 | I | Surprise confidence calibration (prompt rules + post-hoc clamp) | **done** |
 | J | Source normalization (arXiv/DOI/title → canonical id) | **done** |
+| K | `inconclusive` verdict + held register pipeline + settlement plans | **done** |
+| L | Re-verification of previously-unregistered insights under current rules (CLI + web button) | **done** |
 | — | Foreign-lens phase (scheduled cross-domain creativity burst) | backlog |
 | — | Insight de-duplication via embeddings (drop near-duplicate syntheses) | backlog |
 | — | GPU-backed experimental executor | backlog |

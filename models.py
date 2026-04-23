@@ -120,8 +120,20 @@ class RegisterEntry:
     open_questions: list[str] = field(default_factory=list)
     counter_arguments: list[str] = field(default_factory=list)
 
-    # Lifecycle (updated by prediction checks)
-    status: str = "active"                   # active | validated_by_prediction | challenged_by_prediction
+    # Lifecycle (updated by prediction checks + human review)
+    # active                     — verified, in the durable register
+    # held                       — verifier returned `inconclusive` (couldn't reach, not refuted); awaiting settlement
+    # validated_by_prediction    — promoted to active after attached prediction(s) resolved confirmed
+    # challenged_by_prediction   — one or more attached predictions resolved refuted
+    status: str = "active"
+
+    # Held-state metadata — populated when the verdict was `inconclusive`.
+    held_reason: str = ""
+    settlement_method: str = ""               # concrete method for settling this later
+    settlement_horizon: str = ""              # ISO YYYY-MM-DD target for the settlement signal
+    settlement_triggers: list[str] = field(default_factory=list)  # observable outcomes that would promote or refute
+    promoted_at: str = ""                     # timestamp when held → active
+    promoted_by: str = ""                     # "human:<reviewer>" | "prediction:<id>"
 
     # Human review (updated by --review-register)
     human_review_status: str = "unreviewed"   # unreviewed | approved | rejected | deferred
@@ -168,4 +180,6 @@ class EngineConfig:
     max_cycles: int = 10
     analog_probe_enabled: bool = True
     analog_probe_surprise_threshold: float = 0.5
+    held_entries_enabled: bool = True
+    held_confidence_floor: float = 0.7
     connection: "CuriosityEngineConfig | None" = None

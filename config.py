@@ -51,6 +51,12 @@ class EngineSettings:
     # jumps come from.
     analog_probe_enabled: bool = True
     analog_probe_surprise_threshold: float = 0.5
+    # When the verifier returns `inconclusive` (could not reach the claim, not
+    # refuted it), the insight becomes a held register entry pending settlement
+    # rather than being silently rejected. Held entries have a separate (usually
+    # tighter) confidence floor.
+    held_entries_enabled: bool = True
+    held_confidence_floor: float = 0.7
 
 CONFIG_DIR = Path.home() / ".CuriosityEngine"
 CONFIG_PATH = CONFIG_DIR / "engine.toml"
@@ -138,6 +144,8 @@ class CuriosityEngineConfig:
             analog_probe_surprise_threshold=float(
                 eng_section.get("analog_probe_surprise_threshold", 0.5)
             ),
+            held_entries_enabled=bool(eng_section.get("held_entries_enabled", True)),
+            held_confidence_floor=float(eng_section.get("held_confidence_floor", 0.7)),
         )
 
         return cls(primary=primary, verifier=verifier, retry=retry, engine=engine)
@@ -371,6 +379,12 @@ verify_insights = {str(eng.verify_insights).lower()}
 # from one domain to another).
 analog_probe_enabled = {str(eng.analog_probe_enabled).lower()}
 analog_probe_surprise_threshold = {eng.analog_probe_surprise_threshold}
+# Held-state pipeline — when the verifier returns `inconclusive` (couldn't reach
+# the claim, not refuted it), insights become held register entries pending
+# settlement rather than being silently rejected. Held entries usually require
+# slightly higher confidence than active ones to avoid hedged noise.
+held_entries_enabled = {str(eng.held_entries_enabled).lower()}
+held_confidence_floor = {eng.held_confidence_floor}
 """
     )
     return header + "\n".join(sections)

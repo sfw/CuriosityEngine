@@ -115,6 +115,27 @@ class Journal:
                 self._write_register_markdown()
                 return
 
+    def promote_register_entry(self, register_entry_id: str, *, promoted_by: str):
+        """Promote a held register entry to `active`. Records who/when did it."""
+        for e in self.register:
+            if e.get("id") == register_entry_id:
+                if e.get("status") != "held":
+                    return False
+                e["status"] = "active"
+                e["promoted_at"] = datetime.now(timezone.utc).isoformat()
+                e["promoted_by"] = promoted_by
+                self.save()
+                self._write_register_markdown()
+                return True
+        return False
+
+    def held_register_entries(self) -> list[dict]:
+        return [e for e in self.register if e.get("status") == "held"]
+
+    def registered_insight_ids(self) -> set[str]:
+        """Insight ids that already have a corresponding register entry (any status)."""
+        return {e.get("insight_id") for e in self.register if e.get("insight_id")}
+
     def update_register_entry_review(
         self,
         register_entry_id: str,

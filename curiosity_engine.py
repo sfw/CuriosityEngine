@@ -75,6 +75,14 @@ def main():
                         help="Toggle cross-domain analog probe for this run")
     parser.add_argument("--analog-probe-threshold", type=float, default=None,
                         help="Override [engine].analog_probe_surprise_threshold for this run (0.0–1.0)")
+    parser.add_argument("--held-entries-enabled", action=argparse.BooleanOptionalAction, default=None,
+                        help="Allow `inconclusive` verdicts to create held register entries (--held-entries-enabled / --no-held-entries-enabled)")
+    parser.add_argument("--held-confidence-floor", type=float, default=None,
+                        help="Override [engine].held_confidence_floor (minimum confidence for held entries, 0.0–1.0)")
+    parser.add_argument("--reverify-insights", action="store_true",
+                        help="Re-run verification on every insight that does NOT already have a register entry — elevates previously-rejected insights under current rules.")
+    parser.add_argument("--reverify-insight", type=str, default=None, metavar="INSIGHT_ID",
+                        help="Re-verify a single insight by id (e.g. i-abc12345). Overrides --reverify-insights scope.")
     args = parser.parse_args()
 
     if args.list_tools:
@@ -110,6 +118,8 @@ def main():
         or args.graph_export is not None
         or args.find_similar is not None
         or args.embed_backfill
+        or args.reverify_insights
+        or args.reverify_insight is not None
     )
     if args.domain is None:
         if read_only:
@@ -142,6 +152,8 @@ def main():
         verify_insights=_override(args.verify_insights, connection.engine.verify_insights),
         analog_probe_enabled=_override(args.analog_probe_enabled, connection.engine.analog_probe_enabled),
         analog_probe_surprise_threshold=_override(args.analog_probe_threshold, connection.engine.analog_probe_surprise_threshold),
+        held_entries_enabled=_override(args.held_entries_enabled, connection.engine.held_entries_enabled),
+        held_confidence_floor=_override(args.held_confidence_floor, connection.engine.held_confidence_floor),
     )
 
     engine = CuriosityEngine(config)
@@ -227,6 +239,10 @@ def main():
         engine.show_predictions()
     elif args.check_predictions or args.check_predictions_all:
         engine.check_predictions(all_pending=args.check_predictions_all)
+    elif args.reverify_insight is not None:
+        engine.reverify_unregistered_insights(only_ids=[args.reverify_insight])
+    elif args.reverify_insights:
+        engine.reverify_unregistered_insights()
     elif args.show_journal:
         engine.show_journal_summary()
     elif args.cross_ref_only:

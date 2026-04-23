@@ -1,10 +1,26 @@
+{% set lifecycles = [('', 'all'), ('active', 'active'), ('held', 'held')] %}
+<div class="mb-2 flex flex-wrap gap-1 items-center text-xs">
+  <span class="text-slate-500 mr-1">Lifecycle:</span>
+  {% for val, label in lifecycles %}
+    {% set count = (active_count or 0) if val == 'active' else ((held_count or 0) if val == 'held' else ((active_count or 0) + (held_count or 0))) %}
+    <button type="button"
+            class="px-2 py-0.5 rounded hover:bg-indigo-100 dark:hover:bg-indigo-900
+                   {% if lifecycle == val %}ring-1 ring-indigo-500 bg-slate-200 dark:bg-slate-700{% else %}bg-slate-100 dark:bg-slate-800{% endif %}
+                   {% if val == 'held' and held_count %}text-amber-700 dark:text-amber-300{% endif %}"
+            hx-get="/journals/{{ name }}/register?lifecycle={{ val }}{% if filter_status %}&filter_status={{ filter_status }}{% endif %}"
+            hx-target="#tab-body">
+      {{ label }} {% if count %}<span class="mono text-[10px] opacity-75">{{ count }}</span>{% endif %}
+    </button>
+  {% endfor %}
+</div>
+
 {% set statuses = [('', 'all'), ('unreviewed', 'unreviewed'), ('approved', 'approved'), ('rejected', 'rejected'), ('deferred', 'deferred')] %}
 <div class="mb-3 flex flex-wrap gap-1 items-center text-xs">
-  <span class="text-slate-500">Status:</span>
+  <span class="text-slate-500">Review:</span>
   {% for val, label in statuses %}
     <button type="button"
             class="px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-700 hover:bg-indigo-100 dark:hover:bg-indigo-900 {% if filter_status == val %}ring-1 ring-indigo-600{% endif %}"
-            hx-get="/journals/{{ name }}/register{% if val %}?filter_status={{ val }}{% endif %}"
+            hx-get="/journals/{{ name }}/register?{% if val %}filter_status={{ val }}&{% endif %}{% if lifecycle %}lifecycle={{ lifecycle }}{% endif %}"
             hx-target="#tab-body">
       {{ label }}
     </button>
@@ -15,14 +31,19 @@
   <div class="space-y-4">
     {% for r in register %}
       {% set status = r.human_review_status or 'unreviewed' %}
+      {% set is_held = r.status == 'held' %}
       <article class="p-4 rounded-md border
-                      {% if status == 'approved' %}border-emerald-400 bg-emerald-50 dark:bg-emerald-900/20
+                      {% if is_held %}border-amber-500 bg-amber-500/10
+                      {% elif status == 'approved' %}border-emerald-400 bg-emerald-50 dark:bg-emerald-900/20
                       {% elif status == 'rejected' %}border-red-400 bg-red-50 dark:bg-red-900/20
                       {% elif status == 'deferred' %}border-amber-400 bg-amber-50 dark:bg-amber-900/20
                       {% else %}border-slate-200 dark:border-slate-700{% endif %}">
         <div class="flex items-baseline justify-between">
           <div class="flex items-baseline gap-2 flex-wrap">
             <span class="text-xs mono text-slate-500">{{ r.id }}</span>
+            {% if is_held %}
+              <span class="text-xs mono px-1.5 py-0.5 rounded bg-amber-500/30 text-amber-200 border border-amber-500/40" title="Verifier returned `inconclusive` — awaiting settlement">held</span>
+            {% endif %}
             <span class="text-xs mono px-1.5 py-0.5 rounded bg-slate-200 dark:bg-slate-700">verdict {{ r.verdict }}</span>
             <span class="text-xs mono px-1.5 py-0.5 rounded bg-emerald-200 dark:bg-emerald-800">conf {{ '%.2f'|format(r.verified_confidence or 0) }}</span>
             {% if r.novelty_type %}
@@ -64,6 +85,59 @@
           <div class="mt-2 text-xs">
             <span class="font-semibold text-slate-700 dark:text-slate-300">Verifier's summary:</span>
             <span class="text-slate-600 dark:text-slate-400">{{ r.verification_summary }}</span>
+          </div>
+        {% endif %}
+
+        {% if is_held %}
+          <div class="mt-3 p-3 rounded-lg border border-amber-500/40 bg-amber-500/5">
+            <div class="flex items-center gap-1.5 mb-2">
+              <svg class="w-3.5 h-3.5 text-amber-300" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+              </svg>
+              <span class="text-[11px] uppercase tracking-wider font-semibold text-amber-300">Settlement plan</span>
+              <span class="text-[11px] text-slate-500 normal-case tracking-normal">— how reality could resolve this held claim</span>
+            </div>
+            {% if r.held_reason %}
+              <div class="text-xs text-slate-300 mb-2">
+                <span class="text-slate-500 uppercase tracking-wider text-[10px] block">Epistemic gap</span>
+                {{ r.held_reason }}
+              </div>
+            {% endif %}
+            {% if r.settlement_method %}
+              <div class="text-xs text-slate-200 mb-2">
+                <span class="text-slate-500 uppercase tracking-wider text-[10px] block">Method</span>
+                {{ r.settlement_method }}
+              </div>
+            {% endif %}
+            {% if r.settlement_horizon %}
+              <div class="text-xs text-slate-200 mb-2">
+                <span class="text-slate-500 uppercase tracking-wider text-[10px] block">Horizon</span>
+                <span class="mono">{{ r.settlement_horizon }}</span>
+              </div>
+            {% endif %}
+            {% if r.settlement_triggers %}
+              <div class="text-xs">
+                <span class="text-slate-500 uppercase tracking-wider text-[10px] block mb-1">Triggers</span>
+                <ul class="list-disc pl-5 space-y-0.5 text-slate-300">
+                  {% for t in r.settlement_triggers %}<li>{{ t }}</li>{% endfor %}
+                </ul>
+              </div>
+            {% endif %}
+            <form method="post"
+                  action="/journals/{{ name }}/register/{{ r.id }}/promote"
+                  class="mt-3 flex items-center gap-2 flex-wrap"
+                  onsubmit="return confirm('Promote {{ r.id }} from held to active? This moves it into the durable register.');">
+              <input name="reviewer" placeholder="Your name (optional)"
+                     class="flex-1 min-w-[160px] px-2 py-1 rounded border border-slate-700 bg-slate-900/60 text-xs mono" />
+              <label class="flex items-center gap-1 text-xs text-slate-400">
+                <input type="checkbox" name="convert_triggers" value="1" class="accent-indigo-500" checked />
+                Attach triggers as predictions
+              </label>
+              <button type="submit"
+                      class="px-3 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium">
+                Promote to active
+              </button>
+            </form>
           </div>
         {% endif %}
 

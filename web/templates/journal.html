@@ -39,20 +39,25 @@
 
   <!-- Stats strip -->
   <div class="grid grid-cols-2 md:grid-cols-6 gap-2 mb-6">
+    {% set register_active = journal.register | rejectattr('status', 'equalto', 'held') | list | length %}
+    {% set register_held   = journal.register | selectattr('status', 'equalto', 'held') | list | length %}
     {% set stats = [
-      ('Entries',     journal.entries|length,           'text-indigo-300',  'entries',     'Open the Entries tab'),
-      ('Cross-refs',  journal.cross_references|length,  'text-amber-300',   'graph-view',  'Cross-references appear as nodes in the Graph'),
-      ('Insights',    journal.insights|length,          'text-emerald-300', 'insights',    'Open the Insights tab'),
-      ('Registered',  journal.register|length,          'text-emerald-200', 'register',    'Open the Register tab'),
-      ('Predictions', journal.predictions|length,       'text-pink-300',    'predictions', 'Open the Predictions tab'),
-      ('Queued',      journal.question_queue|length,    'text-slate-300',   'queue',       'Open the Focus & Queue tab'),
+      ('Entries',     journal.entries|length,           'text-indigo-300',  'entries',     'Open the Entries tab', None),
+      ('Cross-refs',  journal.cross_references|length,  'text-amber-300',   'graph-view',  'Cross-references appear as nodes in the Graph', None),
+      ('Insights',    journal.insights|length,          'text-emerald-300', 'insights',    'Open the Insights tab', None),
+      ('Registered',  register_active,                  'text-emerald-200', 'register',    'Verified insights in the durable register', register_held),
+      ('Predictions', journal.predictions|length,       'text-pink-300',    'predictions', 'Open the Predictions tab', None),
+      ('Queued',      journal.question_queue|length,    'text-slate-300',   'queue',       'Open the Focus & Queue tab', None),
     ] %}
-    {% for label, value, text_class, target_tab, tip in stats %}
+    {% for label, value, text_class, target_tab, tip, held in stats %}
       <a href="/journals/{{ name }}?tab={{ target_tab }}"
          title="{{ tip }}"
          class="card rounded-xl px-4 py-3 no-underline hover:border-indigo-500/40 hover:bg-slate-800/40 transition-colors">
         <div class="text-xs text-slate-500 uppercase tracking-wider">{{ label }}</div>
         <div class="mt-1 text-2xl font-semibold {{ text_class }}">{{ value }}</div>
+        {% if held %}
+          <div class="mt-0.5 text-[10px] text-amber-300 mono uppercase tracking-wider" title="Held — verifier inconclusive, awaiting settlement">+ {{ held }} held</div>
+        {% endif %}
       </a>
     {% endfor %}
   </div>

@@ -238,17 +238,135 @@ def journal_insights(request: Request, name: str):
 
 
 @app.get("/journals/{name}/register", response_class=HTMLResponse)
-def journal_register(request: Request, name: str, filter_status: Optional[str] = None):
+def journal_register(
+    request: Request,
+    name: str,
+    filter_status: Optional[str] = None,
+    lifecycle: Optional[str] = None,
+):
     journal = _load_journal(name)
     register = list(reversed(journal.register))
     if filter_status:
         register = [r for r in register if r.get("human_review_status", "unreviewed") == filter_status]
+    if lifecycle and lifecycle in ("active", "held"):
+        if lifecycle == "active":
+            register = [r for r in register if r.get("status") != "held"]
+        else:  # "held"
+            register = [r for r in register if r.get("status") == "held"]
+    held_count = sum(1 for r in journal.register if r.get("status") == "held")
+    active_count = len(journal.register) - held_count
     return templates.TemplateResponse(request, "partials/register.html", {
         "name": name,
         "register": register,
         "predictions": journal.predictions,
         "filter_status": filter_status or "",
+        "lifecycle": lifecycle or "",
+        "held_count": held_count,
+        "active_count": active_count,
     })
+
+
+@app.post("/journals/{name}/register/{entry_id}/promote")
+def promote_register_entry(
+    name: str,
+    entry_id: str,
+    reviewer: str = Form(""),
+    convert_triggers: str = Form(""),
+):
+    """Promote a held register entry to active. Optionally convert
+    settlement_triggers into Predictions so --check-predictions can track them."""
+    journal = _load_journal(name)
+    entry = next((r for r in journal.register if r.get("id") == entry_id), None)
+    if entry is None:
+        raise HTTPException(404, f"register entry not found: {entry_id}")
+    if entry.get("status") != "held":
+        raise HTTPException(400, f"entry {entry_id} is not in held state")
+    promoted = journal.promote_register_entry(
+        entry_id, promoted_by=f"human:{(reviewer or 'unknown').strip()}",
+    )
+    if not promoted:
+        raise HTTPException(500, "promotion failed")
+
+    # Optionally persist settlement_triggers as predictions.
+    if convert_triggers.strip():
+        from uuid import uuid4 as _uuid4
+        horizon = (entry.get("settlement_horizon") or "").strip()
+        for t in (entry.get("settlement_triggers") or []):
+            trigger = (t or "").strip()
+            if not trigger:
+                continue
+            pred = Prediction(
+                id=f"p-{_uuid4().hex[:8]}",
+                register_entry_id=entry_id,
+                created_at=datetime.now(timezone.utc).isoformat(),
+                target_date=horizon,
+                claim=f"Settlement trigger for promoted entry: {trigger}",
+                falsifiable_condition=trigger,
+                check_method="Reuse the settlement_method recorded on the originally-held register entry.",
+            )
+            journal.add_prediction(pred)
+
+    # Also mark human_review_status so the entry doesn't clutter the unreviewed list.
+    journal.update_register_entry_review(
+        entry_id, status="approved", notes="promoted from held", reviewer=reviewer,
+    )
+    return RedirectResponse(f"/journals/{name}?tab=register", status_code=303)
+
+
+@app.post("/journals/{name}/insights/reverify")
+async def insights_reverify(
+    name: str,
+    insight_id: str = Form(""),
+):
+    """Spawn a curiosity_engine.py subprocess to reverify unregistered insights.
+
+    Reuses the same run-tracking infrastructure as /run/start so the top-bar
+    indicator lights up and the Runs tab streams the log.
+    """
+    journal_path = _journal_path(name)
+    if not journal_path.exists():
+        raise HTTPException(404, f"journal not found: {journal_path.name}")
+    cmd = ["python", "/app/curiosity_engine.py", "--journal", str(journal_path)]
+    if insight_id.strip():
+        cmd += ["--reverify-insight", insight_id.strip()]
+    else:
+        cmd += ["--reverify-insights"]
+
+    run_id = uuid.uuid4().hex
+    journal_stem = journal_path.stem
+    meta = {
+        "run_id": run_id,
+        "journal": journal_stem,
+        "cmd": " ".join(cmd),
+        "domain": "",
+        "cycles": 0,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "completed_at": None,
+        "returncode": None,
+        "status": "running",
+        "kind": "reverify",
+    }
+    _run_meta_path(journal_stem, run_id).write_text(json.dumps(meta, indent=2))
+    log_path = _run_log_path(journal_stem, run_id)
+    log_path.write_text(f"$ {' '.join(cmd)}\n")
+
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+        cwd="/workspace",
+        env={**os.environ, "PYTHONUNBUFFERED": "1"},
+    )
+    _active_runs[run_id] = {
+        "proc": proc,
+        "lines": [],
+        "done": False,
+        "cmd": " ".join(cmd),
+        "journal": journal_stem,
+        "log_path": log_path,
+    }
+    asyncio.create_task(_collect_run_output(run_id, proc))
+    return JSONResponse({"run_id": run_id, "cmd": " ".join(cmd), "journal": journal_stem})
 
 
 @app.get("/journals/{name}/predictions", response_class=HTMLResponse)
@@ -375,6 +493,8 @@ def journal_graph_json(name: str):
                 "citation_count": int(data.get("citation_count", 0) or 0),
                 "usage": int(data.get("usage", 0) or 0),
                 "raw_id": node.split(":", 1)[1] if ":" in node else node,
+                # status lets the client colour held register nodes distinctly.
+                "status": str(data.get("status", "") or ""),
             },
         })
 
