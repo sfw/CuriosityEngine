@@ -68,9 +68,35 @@
           <li class="rounded-xl border border-slate-700/60 {% if q.source.startswith('human') %}bg-indigo-500/10 border-indigo-500/30{% else %}bg-slate-800/30{% endif %} p-3 flex items-start gap-3">
             <div class="flex-1 min-w-0">
               <div class="flex items-baseline gap-2 mb-0.5 flex-wrap">
-                <span class="mono text-xs {% if q.source.startswith('human') %}text-indigo-300{% else %}text-slate-500{% endif %}">
-                  {{ q.source }}
-                </span>
+                {# Source can be: "human", "entry:j-xxx", "xref:x-xxx",
+                   "analog:j-xxx" (analog probe from entry), "assumption:j-xxx"
+                   (assumption probe from entry), "gap:cs-xxx" (negative-space
+                   scan). Link the ones that point at a specific data object. #}
+                {% if q.source.startswith('entry:') %}
+                  <a href="/journals/{{ name }}?tab=entries#{{ q.source.split(':', 1)[1] }}"
+                     title="Jump to the entry that generated this question"
+                     class="mono text-xs text-indigo-400 hover:text-indigo-300 no-underline">{{ q.source }}</a>
+                {% elif q.source.startswith('xref:') %}
+                  <a href="/journals/{{ name }}?tab=graph-view#{{ q.source }}"
+                     title="Open this cross-reference in the Graph"
+                     class="mono text-xs text-amber-400 hover:text-amber-300 no-underline">{{ q.source }}</a>
+                {% elif q.source.startswith('analog:') %}
+                  <a href="/journals/{{ name }}?tab=entries#{{ q.source.split(':', 1)[1] }}"
+                     title="Analog probe fired from this entry"
+                     class="mono text-xs text-purple-400 hover:text-purple-300 no-underline">{{ q.source }}</a>
+                {% elif q.source.startswith('assumption:') %}
+                  <a href="/journals/{{ name }}?tab=entries#{{ q.source.split(':', 1)[1] }}"
+                     title="Assumption probe fired from this entry"
+                     class="mono text-xs text-sky-400 hover:text-sky-300 no-underline">{{ q.source }}</a>
+                {% elif q.source.startswith('gap:') %}
+                  <a href="/journals/{{ name }}?tab=coverage"
+                     title="Negative-space scan that identified this gap"
+                     class="mono text-xs text-purple-400 hover:text-purple-300 no-underline">{{ q.source }}</a>
+                {% else %}
+                  <span class="mono text-xs {% if q.source.startswith('human') %}text-indigo-300{% else %}text-slate-500{% endif %}">
+                    {{ q.source }}
+                  </span>
+                {% endif %}
                 <span class="mono text-[10px] px-1.5 py-0.5 rounded
                              {% if pri >= 0.8 %}bg-emerald-500/20 text-emerald-300
                              {% elif pri >= 0.6 %}bg-sky-500/20 text-sky-300

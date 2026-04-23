@@ -32,7 +32,7 @@
     {% for r in register %}
       {% set status = r.human_review_status or 'unreviewed' %}
       {% set is_held = r.status == 'held' %}
-      <article class="p-4 rounded-md border
+      <article id="{{ r.id }}" class="p-4 rounded-md border scroll-mt-24
                       {% if is_held %}border-amber-500 bg-amber-500/10
                       {% elif status == 'approved' %}border-emerald-400 bg-emerald-50 dark:bg-emerald-900/20
                       {% elif status == 'rejected' %}border-red-400 bg-red-50 dark:bg-red-900/20

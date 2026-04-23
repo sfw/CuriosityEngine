@@ -1,17 +1,54 @@
 <div>
-  <!-- Toolbar -->
+  {# Toolbar — filter pills for every node kind (matching the legend), plus
+     similarity-edges toggle, plus action buttons. Each filter pill carries a
+     colored dot matching the node's legend color. All default-checked. #}
   <div class="flex items-center justify-between flex-wrap gap-3 mb-3">
-    <div class="flex items-center gap-1.5 text-xs">
+    <div class="flex items-center gap-1.5 text-xs flex-wrap">
       <span class="text-slate-500 mr-1">show:</span>
-      <label class="flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-slate-700 hover:bg-slate-800 cursor-pointer">
-        <input type="checkbox" id="show-sources" checked class="accent-indigo-500" />
+      {# Node-kind filters #}
+      <label class="graph-filter flex items-center gap-1.5 px-2 py-1 rounded-md border border-slate-700 hover:bg-slate-800 cursor-pointer">
+        <input type="checkbox" id="show-entry" checked class="accent-indigo-500" data-kind="entry" />
+        <span class="inline-block w-2 h-2 rounded-full" style="background:#818cf8"></span>
+        <span class="text-slate-300">entries</span>
+      </label>
+      <label class="graph-filter flex items-center gap-1.5 px-2 py-1 rounded-md border border-slate-700 hover:bg-slate-800 cursor-pointer">
+        <input type="checkbox" id="show-xref" checked class="accent-indigo-500" data-kind="xref" />
+        <span class="inline-block w-2 h-2 rounded-full" style="background:#fbbf24"></span>
+        <span class="text-slate-300">xrefs</span>
+      </label>
+      <label class="graph-filter flex items-center gap-1.5 px-2 py-1 rounded-md border border-slate-700 hover:bg-slate-800 cursor-pointer">
+        <input type="checkbox" id="show-insight" checked class="accent-indigo-500" data-kind="insight" />
+        <span class="inline-block w-2 h-2 rounded-full" style="background:#34d399"></span>
+        <span class="text-slate-300">insights</span>
+      </label>
+      <label class="graph-filter flex items-center gap-1.5 px-2 py-1 rounded-md border border-slate-700 hover:bg-slate-800 cursor-pointer">
+        <input type="checkbox" id="show-register" checked class="accent-indigo-500" data-kind="register" />
+        <span class="inline-block w-2 h-2 rounded-full" style="background:#22d3ee"></span>
+        <span class="text-slate-300">register</span>
+      </label>
+      <label class="graph-filter flex items-center gap-1.5 px-2 py-1 rounded-md border border-slate-700 hover:bg-slate-800 cursor-pointer">
+        <input type="checkbox" id="show-held" checked class="accent-indigo-500" data-kind="register-held" />
+        <span class="inline-block w-2 h-2 rounded-full" style="background:#f59e0b"></span>
+        <span class="text-slate-300">held</span>
+      </label>
+      <label class="graph-filter flex items-center gap-1.5 px-2 py-1 rounded-md border border-slate-700 hover:bg-slate-800 cursor-pointer">
+        <input type="checkbox" id="show-prediction" checked class="accent-indigo-500" data-kind="prediction" />
+        <span class="inline-block w-2 h-2 rounded-full" style="background:#f472b6"></span>
+        <span class="text-slate-300">predictions</span>
+      </label>
+      <label class="graph-filter flex items-center gap-1.5 px-2 py-1 rounded-md border border-slate-700 hover:bg-slate-800 cursor-pointer">
+        <input type="checkbox" id="show-source" checked class="accent-indigo-500" data-kind="source" />
+        <span class="inline-block w-2 h-2 rounded-full" style="background:#64748b"></span>
         <span class="text-slate-300">sources</span>
       </label>
-      <label class="flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-slate-700 hover:bg-slate-800 cursor-pointer">
-        <input type="checkbox" id="show-tags" checked class="accent-indigo-500" />
+      <label class="graph-filter flex items-center gap-1.5 px-2 py-1 rounded-md border border-slate-700 hover:bg-slate-800 cursor-pointer">
+        <input type="checkbox" id="show-tag" checked class="accent-indigo-500" data-kind="tag" />
+        <span class="inline-block w-2 h-2 rounded-full" style="background:#c084fc"></span>
         <span class="text-slate-300">tags</span>
       </label>
-      <label class="flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-slate-700 hover:bg-slate-800 cursor-pointer">
+      <span class="text-slate-700 mx-1">·</span>
+      {# Edge filter (only one exposed; other edges follow their endpoint nodes) #}
+      <label class="graph-filter flex items-center gap-1.5 px-2 py-1 rounded-md border border-slate-700 hover:bg-slate-800 cursor-pointer">
         <input type="checkbox" id="show-similarity" checked class="accent-indigo-500" />
         <span class="text-slate-300">similarity edges</span>
       </label>
@@ -35,7 +72,7 @@
       <div class="flex items-center gap-2"><span class="inline-block w-2.5 h-2.5 rounded-full" style="background:#818cf8"></span><span class="text-slate-300">Entry</span></div>
       <div class="flex items-center gap-2"><span class="inline-block w-2.5 h-2.5 rounded-full" style="background:#fbbf24"></span><span class="text-slate-300">Cross-reference</span></div>
       <div class="flex items-center gap-2"><span class="inline-block w-2.5 h-2.5 rounded-full" style="background:#34d399"></span><span class="text-slate-300">Insight</span></div>
-      <div class="flex items-center gap-2"><span class="inline-block w-2.5 h-2.5 rounded-full" style="background:#10b981"></span><span class="text-slate-300">Registered (active)</span></div>
+      <div class="flex items-center gap-2"><span class="inline-block w-2.5 h-2.5 rounded-full" style="background:#22d3ee"></span><span class="text-slate-300">Registered (active)</span></div>
       <div class="flex items-center gap-2"><span class="inline-block w-2.5 h-2.5 rounded-full" style="background:#f59e0b"></span><span class="text-slate-300">Held — awaiting settlement</span></div>
       <div class="flex items-center gap-2"><span class="inline-block w-2.5 h-2.5 rounded-full" style="background:#f472b6"></span><span class="text-slate-300">Prediction</span></div>
       <div class="flex items-center gap-2"><span class="inline-block w-2.5 h-2.5 rounded-full" style="background:#64748b"></span><span class="text-slate-300">Source</span></div>
@@ -60,8 +97,8 @@
     entry:      "#818cf8",
     xref:       "#fbbf24",
     insight:    "#34d399",
-    register:   "#10b981",
-    register_held: "#f59e0b",     // amber — held, awaiting settlement
+    register:   "#22d3ee",           // cyan-400 — distinct from insight's emerald
+    register_held: "#f59e0b",        // amber — held, awaiting settlement
     prediction: "#f472b6",
     source:     "#64748b",
     tag:        "#c084fc",
@@ -72,7 +109,7 @@
     "semantic-similarity": "rgba(52,211,153,0.3)",
     "cross-referenced-by": "rgba(251,191,36,0.8)",
     "supports-insight":    "rgba(52,211,153,0.8)",
-    "registered-as":       "rgba(5,150,105,0.9)",
+    "registered-as":       "rgba(34,211,238,0.9)",   // cyan to match register palette
     "predicts":            "rgba(244,114,182,0.8)",
     "cites":               "rgba(100,116,139,0.35)",
     "has-tag":             "rgba(192,132,252,0.35)",
@@ -84,15 +121,20 @@
 
   const randPos = () => (Math.random() - 0.5) * 200;
 
-  function buildGraph(showSources, showTags, showSimilarity) {
+  function buildGraph(filters) {
+    // filters.nodeKinds: Set<string> of visible node kinds — e.g. "entry",
+    //   "xref", "insight", "register" (active), "register-held", "prediction",
+    //   "source", "tag". Each node is included iff its kind (or, for register,
+    //   its active/held sub-kind) is in the set.
+    // filters.showSimilarity: boolean for semantic-similarity edges.
     const g = new graphology.MultiUndirectedGraph();
     for (const n of rawData.nodes) {
       const k = n.attributes.kind;
-      if (k === "source" && !showSources) continue;
-      if (k === "tag" && !showTags) continue;
-      // Register nodes have two sub-palettes: active vs held.
+      const isHeld = k === "register" && n.attributes.status === "held";
+      const filterKey = isHeld ? "register-held" : k;
+      if (!filters.nodeKinds.has(filterKey)) continue;
       let color = palette[k] || "#94a3b8";
-      if (k === "register" && n.attributes.status === "held") color = palette.register_held;
+      if (isHeld) color = palette.register_held;
       g.addNode(n.key, {
         ...n.attributes,
         x: randPos(),
@@ -102,7 +144,7 @@
     }
     for (const e of rawData.edges) {
       if (!g.hasNode(e.source) || !g.hasNode(e.target)) continue;
-      if (e.attributes.kind === "semantic-similarity" && !showSimilarity) continue;
+      if (e.attributes.kind === "semantic-similarity" && !filters.showSimilarity) continue;
       try {
         g.addEdgeWithKey(e.key, e.source, e.target, {
           ...e.attributes,
@@ -124,13 +166,20 @@
     return g;
   }
 
-  function render() {
-    const showSources = document.getElementById("show-sources").checked;
-    const showTags = document.getElementById("show-tags").checked;
-    const showSimilarity = document.getElementById("show-similarity").checked;
-    if (renderer) { renderer.kill(); renderer = null; }
+  function readFilters() {
+    const nodeKinds = new Set();
+    document.querySelectorAll("input[type=checkbox][data-kind]").forEach(cb => {
+      if (cb.checked) nodeKinds.add(cb.dataset.kind);
+    });
+    return {
+      nodeKinds,
+      showSimilarity: document.getElementById("show-similarity").checked,
+    };
+  }
 
-    graph = buildGraph(showSources, showTags, showSimilarity);
+  function render() {
+    if (renderer) { renderer.kill(); renderer = null; }
+    graph = buildGraph(readFilters());
 
     const container = document.getElementById("graph-container");
     renderer = new Sigma(graph, container, {
@@ -231,9 +280,10 @@
     }
   }
 
-  document.getElementById("show-sources").addEventListener("change", render);
-  document.getElementById("show-tags").addEventListener("change", render);
-  document.getElementById("show-similarity").addEventListener("change", render);
+  // Every filter checkbox (all node-kind pills + similarity-edges) triggers a re-render.
+  document.querySelectorAll(".graph-filter input[type=checkbox]").forEach(cb => {
+    cb.addEventListener("change", render);
+  });
   document.getElementById("graph-reset").addEventListener("click", () => {
     if (renderer) renderer.getCamera().animatedReset({ duration: 300 });
   });

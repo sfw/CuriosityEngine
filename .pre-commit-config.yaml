@@ -22,8 +22,10 @@ repos:
     hooks:
       - id: ruff
         name: ruff
+        # The `ruff` hook-id already runs `ruff check` — args listed here are
+        # extra flags, NOT another `check` subcommand. Pre-commit appends the
+        # staged files as positional args, so excludes filter those.
         args:
-          - check
           - --exclude
           - .venv
           - --exclude

@@ -760,13 +760,22 @@ def graph_node_detail(request: Request, name: str, key: str):
             (r for r in journal.register if r.get("id") == parent_id), None,
         )
     elif kind == "source":
-        # raw_id is a SHA1 hash; find the entry citing it and recover the URL.
+        # raw_id is a SHA1 hash of the NORMALIZED source string (arxiv IDs
+        # lowercased, DOIs de-prefixed, titles whitespace-collapsed — see
+        # engine.graph._normalize_source). Match that exact hashing so the
+        # lookup agrees with the graph node's key. Earlier we hashed the raw
+        # string here, which worked by accident for already-canonical sources
+        # but 404'd any time the original string needed normalization
+        # (e.g. "arXiv:2302.03668 (Geiping et al., 2023) — ..." vs the
+        # canonical "arxiv:2302.03668").
         import hashlib
+        from engine.graph import _normalize_source
         citing: list[dict] = []
         url = ""
         for e in journal.entries:
             for src in e.get("sources", []) or []:
-                h = hashlib.sha1(str(src).encode("utf-8")).hexdigest()[:10]
+                canonical = _normalize_source(str(src))
+                h = hashlib.sha1(canonical.encode("utf-8")).hexdigest()[:10]
                 if h == raw_id:
                     url = str(src)
                     citing.append(e)
