@@ -69,7 +69,8 @@ class CrossReferenceMixin:
             existing_xrefs_json=existing_xrefs_json,
         )
 
-        result = self._call_primary(prompt)
+        # Routes to self.primary when no cross_ref profile is configured.
+        result = self._call_cross_ref(prompt)
         existing_keys = {
             (tuple(sorted(x.get("source_entries", []))), x.get("connection_type"))
             for x in self.journal.cross_references

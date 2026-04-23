@@ -144,6 +144,101 @@ class VerificationMixin:
                       "epistemic gap — downgrading to challenged.")
                 verdict = "challenged"
 
+        # Challenged-hedge guardrail: the verifier frequently returns
+        # `challenged` on insights whose decomposition unambiguously says
+        # "genuine new synthesis" — novelty_type ∈ {new_synthesis, correction},
+        # premises supported, synthesis not findable, confidence clear the
+        # register floor. That configuration IS the signature the prompt tells
+        # the LLM to mark `validated`. RLHF-trained hedging still pushes models
+        # to `challenged` despite the instruction.
+        #
+        # Rule: if the signature holds, default to UPGRADE to validated. Block
+        # the upgrade only when `reasoning_flaws` contains a specific,
+        # substantive critique (not a restatement of ingredient-existence,
+        # which the prompt explicitly tells the LLM not to count).
+        floor = float(getattr(self.config, "register_confidence_floor", 0.6))
+        if (
+            verdict == "challenged"
+            and novelty_type in ("new_synthesis", "correction")
+            and premises_supported
+            and not synthesis_findable
+            and verified_confidence >= floor
+        ):
+            reasoning_flaws = result.get("reasoning_flaws", []) or []
+            # Markers of a REAL synthesis-level flaw — the kind that legitimately
+            # justifies `challenged` even on a new-synthesis decomposition.
+            # If any flaw matches one of these, respect the verdict.
+            #
+            # Marker list is pattern-matched case-insensitively against each
+            # reasoning_flaw string. Expand when you observe hedge phrasings
+            # being wrongly flagged as substantive or vice-versa.
+            substantive_flaw_markers = (
+                # Inferential leap / claim-doesn't-follow patterns
+                "leap", "does not follow", "doesn't follow",
+                "does not show", "doesn't show",
+                "does not establish", "doesn't establish",
+                "does not support", "doesn't support",
+                "does not validate", "doesn't validate",
+                "not established", "not validated", "not supported",
+                "not justified", "without justification",
+                "not equivalent",
+                # Scope / overclaim / generalization issues
+                "generaliz",  # generalize, generalization, overgeneralization
+                "overclaim", "overstate", "overstatement",
+                "overextend",
+                "too strong", "too broad", "too general",
+                "beyond the scope", "outside the scope",
+                # Transfer / domain-mismatch assumptions
+                "assumes transfer", "assumes this transfer",
+                "transfers to",  # "assumes this transfers to [new domain]"
+                "depends on a",   # "depends on a <setting> that doesn't apply"
+                "not shown to transfer",
+                # Alternatives undermine "necessary" claims
+                "viable alternative", "alternative architecture",
+                "alternative mechanism", "alternative approach",
+                "other approach",
+                # Assumption / evidence issues
+                "assumes without", "unsupported assumption",
+                "unfounded", "without warrant",
+                "insufficient evidence",
+                # Conflation / mechanism / causal
+                "conflat",  # conflate, conflation
+                "no mechanism", "mechanism is missing", "mechanism missing",
+                "causal direction", "causal is unclear",
+                "reverse causation", "spurious",
+                # Sample / scope-of-evidence
+                "sample too narrow", "sample size",
+                # Contradiction / consistency
+                "contradicts", "inconsistent with",
+                # Interpretive moves not justified by cited work
+                "treated as if", "treated as though",
+                "cross-model interpretation",
+                "does not prove", "doesn't prove",
+            )
+            substantive_flaws = [
+                fl for fl in reasoning_flaws
+                if fl and any(m in fl.lower() for m in substantive_flaw_markers)
+            ]
+            # Log the decision inputs so the user can spot-check guardrail calls.
+            if reasoning_flaws:
+                print(f"  [guardrail-check] verifier listed {len(reasoning_flaws)} reasoning_flaw(s):")
+                for fl in reasoning_flaws:
+                    print(f"    - {str(fl)[:200]}")
+            if substantive_flaws:
+                print(
+                    f"  [guardrail-check] {len(substantive_flaws)} flaw(s) matched substantive markers — "
+                    f"respecting `challenged` verdict."
+                )
+            else:
+                print(
+                    f"  [guardrail] verdict=challenged but decomposition is unambiguous "
+                    f"(novelty={novelty_type}, premises=✓, synthesis_findable=✗) and "
+                    f"reasoning_flaws "
+                    f"{'is empty' if not reasoning_flaws else 'contains no substantive critique markers'} — "
+                    f"upgrading to validated."
+                )
+                verdict = "validated"
+
         print(f"  Verdict: {verdict} · novelty={novelty_type or '?'} "
               f"· premises={'✓' if premises_supported else '✗'} "
               f"· synthesis_findable={'✓' if synthesis_findable else '✗'}")

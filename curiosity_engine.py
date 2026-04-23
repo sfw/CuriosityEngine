@@ -59,10 +59,18 @@ def main():
     parser.add_argument("--top-k", type=int, default=10, help="K for --find-similar (default 10)")
     parser.add_argument("--journal", type=str, default=engine_defaults.journal_path, help="Path to journal file")
     parser.add_argument("--domain", type=str, default=None, help="Research domain (prompts if omitted on a TTY)")
-    parser.add_argument("--primary-model", type=str, default=None, help="Override primary model name (keeps TOML provider/endpoint)")
-    parser.add_argument("--verifier-model", type=str, default=None, help="Override verifier model name")
+    parser.add_argument("--primary-model", type=str, default=None, help="Override primary model name only (keeps primary profile's provider/endpoint; useful for same-endpoint model switching)")
+    parser.add_argument("--verifier-model", type=str, default=None, help="Override verifier model name only (keeps verifier profile's provider/endpoint)")
+    parser.add_argument("--primary-role", type=str, default=None, metavar="ROLE",
+                        help="Copy a configured profile (by role, e.g. 'verifier') INTO the primary slot — swaps the whole profile including provider/base_url/api_key, not just the name.")
+    parser.add_argument("--verifier-role", type=str, default=None, metavar="ROLE",
+                        help="Copy a configured profile into the verifier slot.")
+    parser.add_argument("--cross-ref-role", type=str, default=None, metavar="ROLE",
+                        help="Override the profile used for the cross-reference phase (e.g. 'verifier' to offload cross-ref to the verifier's model for this run).")
     parser.add_argument("--cross-ref-freq", type=int, default=engine_defaults.cross_ref_frequency, help="Run cross-ref every N cycles")
     # Per-run engine-knob overrides. default=None means "inherit from engine.toml".
+    parser.add_argument("--cross-ref-window", type=int, default=None,
+                        help="Override [engine].cross_ref_window for this run (max entries sent to cross-ref prompt)")
     parser.add_argument("--investigations-per-cycle", type=int, default=None,
                         help="Override [engine].investigations_per_cycle for this run")
     parser.add_argument("--novelty-threshold", type=float, default=None,
@@ -132,6 +140,38 @@ def main():
         else:
             args.domain = engine_defaults.domain
 
+    # Role-based swap first (copies the full profile — provider, base_url, api_key, name),
+    # then name-only override refines the name within the (possibly swapped) slot.
+    def _resolve_role(role_name: str):
+        rn = role_name.strip().lower()
+        if rn == "primary":
+            return connection.primary
+        if rn == "verifier":
+            return connection.verifier
+        extras = getattr(connection, "extras", {}) or {}
+        if rn in extras:
+            return extras[rn]
+        return None
+
+    if args.primary_role:
+        src = _resolve_role(args.primary_role)
+        if src is None:
+            parser.error(f"--primary-role: unknown profile role {args.primary_role!r}")
+        connection.primary = replace(src)
+    if args.verifier_role:
+        src = _resolve_role(args.verifier_role)
+        if src is None:
+            parser.error(f"--verifier-role: unknown profile role {args.verifier_role!r}")
+        connection.verifier = replace(src)
+
+    if args.cross_ref_role:
+        src = _resolve_role(args.cross_ref_role)
+        if src is None:
+            parser.error(f"--cross-ref-role: unknown profile role {args.cross_ref_role!r}")
+        # Copy the resolved profile into the cross_ref slot so the engine
+        # builds a dedicated client for it (or aliases to primary if same).
+        connection.cross_ref = replace(src)
+
     if args.primary_model:
         connection.primary = replace(connection.primary, name=args.primary_model)
     if args.verifier_model:
@@ -147,7 +187,7 @@ def main():
         cross_ref_frequency=args.cross_ref_freq,
         connection=connection,
         # Engine-level behavior pulled from [engine] section of engine.toml, with CLI overrides.
-        cross_ref_window=connection.engine.cross_ref_window,
+        cross_ref_window=_override(args.cross_ref_window, connection.engine.cross_ref_window),
         questions_per_cycle=connection.engine.questions_per_cycle,
         investigations_per_cycle=_override(args.investigations_per_cycle, connection.engine.investigations_per_cycle),
         novelty_threshold=_override(args.novelty_threshold, connection.engine.novelty_threshold),

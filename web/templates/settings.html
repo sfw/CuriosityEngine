@@ -8,7 +8,7 @@
 
   {% if saved %}
     <div class="mb-6 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-2 text-sm text-emerald-200">
-      Settings saved. Restart the web and engine containers to apply changes.
+      Settings saved. Changes apply immediately — no restart required. The config is re-read on every request and every subprocess spawn, so the next run / admin action picks up the new values automatically.
     </div>
   {% endif %}
 
@@ -71,14 +71,24 @@
                    class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-700 bg-slate-900/60 text-sm mono" />
           </label>
 
-          <label class="block md:col-span-2">
+          <label class="block">
             <span class="text-xs uppercase tracking-wider text-slate-400">temperature</span>
-            <span class="text-[11px] text-slate-500">
-              — 1.0 for reasoning models (Kimi K2.x, GPT-5 thinking, o-series); 0.3–0.7 for deterministic non-thinking models
+            <span class="block text-[11px] text-slate-500">
+              1.0 for reasoning models (Kimi K2.x, GPT-5 thinking, o-series); 0.3–0.7 for deterministic non-thinking
             </span>
             <input name="{{ role }}_temperature" type="number" step="0.05" min="0" max="2"
                    value="{{ profile.temperature if profile.temperature is defined else 1.0 }}"
-                   class="mt-1 w-32 px-3 py-2 rounded-lg border border-slate-700 bg-slate-900/60 text-sm mono" />
+                   class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-700 bg-slate-900/60 text-sm mono" />
+          </label>
+
+          <label class="block">
+            <span class="text-xs uppercase tracking-wider text-slate-400">timeout_seconds</span>
+            <span class="block text-[11px] text-slate-500">
+              Per-request HTTP timeout. Reasoning models need 300+ on big prompts.
+            </span>
+            <input name="{{ role }}_timeout_seconds" type="number" step="10" min="10" max="3600"
+                   value="{{ profile.timeout_seconds if profile.timeout_seconds is defined else 300.0 }}"
+                   class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-700 bg-slate-900/60 text-sm mono" />
           </label>
         </div>
       </section>
@@ -170,6 +180,32 @@
                  value="{{ connection.engine.register_confidence_floor }}"
                  class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-700 bg-slate-900/60 text-sm mono" />
         </label>
+        <label class="block md:col-span-3">
+          <span class="text-xs uppercase tracking-wider text-slate-400">cross_ref_role</span>
+          <span class="block text-[11px] text-slate-500">
+            Which configured profile runs the cross-reference pass. Defaults to
+            <span class="mono">primary</span>. Set to <span class="mono">verifier</span> to offload
+            cross-ref to a faster non-reasoning model while keeping reasoning on investigation.
+          </span>
+          <select name="engine_cross_ref_role"
+                  class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-700 bg-slate-900/60 text-sm mono">
+            <option value="" {% if not connection.engine.cross_ref_role %}selected{% endif %}>
+              (default — use primary)
+            </option>
+            <option value="primary" {% if connection.engine.cross_ref_role == 'primary' %}selected{% endif %}>
+              primary · {{ connection.primary.name }}
+            </option>
+            <option value="verifier" {% if connection.engine.cross_ref_role == 'verifier' %}selected{% endif %}>
+              verifier · {{ connection.verifier.name }}
+            </option>
+            {% for extra_role, extra_profile in (connection.extras or {}).items() %}
+              <option value="{{ extra_role }}" {% if connection.engine.cross_ref_role == extra_role %}selected{% endif %}>
+                {{ extra_role }} · {{ extra_profile.name }}
+              </option>
+            {% endfor %}
+          </select>
+        </label>
+
         <label class="flex items-center gap-2 md:col-span-3">
           <input type="checkbox" name="engine_verify_insights"
                  {% if connection.engine.verify_insights %}checked{% endif %}
@@ -178,6 +214,44 @@
             <span class="text-slate-200">verify_insights</span>
             <span class="text-xs text-slate-500">— route synthesized insights through the cross-family verifier (recommended)</span>
           </span>
+        </label>
+
+        <label class="flex items-center gap-2 md:col-span-3">
+          <input type="checkbox" name="engine_analog_probe_enabled"
+                 {% if connection.engine.analog_probe_enabled %}checked{% endif %}
+                 class="accent-violet-500" />
+          <span class="text-sm">
+            <span class="text-slate-200">analog_probe_enabled</span>
+            <span class="text-xs text-slate-500">— on high-surprise entries, ask the primary for structurally-analogous mechanisms in distant fields (biology→algorithms-style reach)</span>
+          </span>
+        </label>
+        <label class="block md:col-span-3">
+          <span class="text-xs uppercase tracking-wider text-slate-400">analog_probe_surprise_threshold</span>
+          <span class="block text-[11px] text-slate-500">
+            Surprise_delta required to trigger the analog probe (0-1; default 0.5).
+          </span>
+          <input name="engine_analog_probe_surprise_threshold" type="number" step="0.05" min="0" max="1"
+                 value="{{ connection.engine.analog_probe_surprise_threshold }}"
+                 class="mt-1 w-32 px-3 py-2 rounded-lg border border-slate-700 bg-slate-900/60 text-sm mono" />
+        </label>
+
+        <label class="flex items-center gap-2 md:col-span-3">
+          <input type="checkbox" name="engine_held_entries_enabled"
+                 {% if connection.engine.held_entries_enabled %}checked{% endif %}
+                 class="accent-violet-500" />
+          <span class="text-sm">
+            <span class="text-slate-200">held_entries_enabled</span>
+            <span class="text-xs text-slate-500">— when verifier returns <span class="mono">inconclusive</span>, create a held register entry with a settlement plan instead of rejecting</span>
+          </span>
+        </label>
+        <label class="block md:col-span-3">
+          <span class="text-xs uppercase tracking-wider text-slate-400">held_confidence_floor</span>
+          <span class="block text-[11px] text-slate-500">
+            Minimum verifier confidence required for a held entry (0-1; default 0.7 — tighter than active's floor).
+          </span>
+          <input name="engine_held_confidence_floor" type="number" step="0.05" min="0" max="1"
+                 value="{{ connection.engine.held_confidence_floor }}"
+                 class="mt-1 w-32 px-3 py-2 rounded-lg border border-slate-700 bg-slate-900/60 text-sm mono" />
         </label>
       </div>
     </section>

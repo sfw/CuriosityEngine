@@ -379,13 +379,56 @@ async def insights_reverify(name: str, insight_id: str = Form("")):
 
 
 @app.post("/journals/{name}/maintenance/cross-ref")
-async def maintenance_cross_ref(name: str):
+async def maintenance_cross_ref(
+    name: str,
+    cross_ref_window: str = Form(""),
+    cross_ref_role: str = Form(""),
+    primary_role: str = Form(""),
+    verifier_role: str = Form(""),
+):
     """Re-run the cross-reference phase: generates NEW xrefs from the current
     journal state, synthesizes high-novelty ones into insights, and verifies
     them. Dedup is handled by the cross-ref phase's existing participant-set
-    check + anti-attractor gate, so it's safe to re-run repeatedly."""
+    check + anti-attractor gate, so it's safe to re-run repeatedly.
+
+    Optional overrides (only propagated when they differ from defaults):
+    cross_ref_window slims the prompt; primary_role/verifier_role copy a
+    configured profile (by role — e.g. 'verifier') into the slot, swapping
+    the whole provider/base_url/api_key/name, not just the model name.
+    """
+    extra = ["--cross-ref-only"]
+    conn = _connection()
+
+    raw = (cross_ref_window or "").strip()
+    if raw:
+        try:
+            v = int(raw)
+            if v != int(conn.engine.cross_ref_window):
+                extra += ["--cross-ref-window", str(v)]
+        except ValueError:
+            pass
+
+    # Dirty-detection against the *currently effective* cross_ref role (engine.toml
+    # default). If user didn't change the dropdown, no flag is sent.
+    effective_cr_role = "primary"
+    if conn.cross_ref is not None:
+        if conn.cross_ref is conn.verifier or conn.cross_ref.name == conn.verifier.name:
+            effective_cr_role = "verifier"
+        else:
+            effective_cr_role = "cross_ref"  # configured via [models.cross_ref]
+    cr = cross_ref_role.strip().lower()
+    if cr and cr != effective_cr_role:
+        extra += ["--cross-ref-role", cr]
+
+    pr = primary_role.strip().lower()
+    if pr and pr != "primary":
+        extra += ["--primary-role", pr]
+    vr = verifier_role.strip().lower()
+    if vr and vr != "verifier":
+        extra += ["--verifier-role", vr]
+
     result = await _spawn_maintenance_subprocess(
-        _journal_path(name), ["--cross-ref-only"], kind="cross-ref-only",
+        _journal_path(name), extra, kind="cross-ref-only",
     )
     return JSONResponse(result)
 
@@ -429,13 +472,14 @@ def journal_admin(request: Request, name: str):
     """Admin tab — consolidated maintenance operations with counters showing
     how much work each one has to do (so no-ops are visible up front)."""
     journal = _load_journal(name)
+    conn = _connection()
 
     # Orphaned xrefs: xref.id not in any insight.supporting_evidence.
     insight_supports: set[str] = set()
     for i in journal.insights:
         for sid in (i.get("supporting_evidence") or []):
             insight_supports.add(sid)
-    threshold = float(_connection().engine.novelty_threshold)
+    threshold = float(conn.engine.novelty_threshold)
     orphan_xrefs = [
         x for x in journal.cross_references
         if x.get("id") and x.get("id") not in insight_supports
@@ -455,6 +499,27 @@ def journal_admin(request: Request, name: str):
     # Held entries awaiting settlement
     held_entries = [r for r in journal.register if r.get("status") == "held"]
 
+    # Model profiles for the cross-ref override dropdowns.
+    model_profiles: list[dict] = [
+        {"role": "primary",  "name": conn.primary.name},
+        {"role": "verifier", "name": conn.verifier.name},
+    ]
+    for role, profile in (getattr(conn, "extras", {}) or {}).items():
+        model_profiles.append({"role": role, "name": profile.name})
+
+    # Effective cross_ref role: whatever engine.toml currently resolves to.
+    # This is what the "Cross-ref model" dropdown defaults to; dirty-detection
+    # only fires when the user picks something different.
+    effective_cr_role = "primary"
+    if conn.cross_ref is not None:
+        if conn.cross_ref.name == conn.verifier.name and conn.cross_ref.base_url == conn.verifier.base_url:
+            effective_cr_role = "verifier"
+        else:
+            for role, profile in (getattr(conn, "extras", {}) or {}).items():
+                if profile.name == conn.cross_ref.name and profile.base_url == conn.cross_ref.base_url:
+                    effective_cr_role = role
+                    break
+
     return templates.TemplateResponse(request, "partials/admin.html", {
         "name": name,
         "orphan_xref_count": len(orphan_xrefs),
@@ -463,6 +528,9 @@ def journal_admin(request: Request, name: str):
         "pending_prediction_count": len(pending_predictions),
         "held_count": len(held_entries),
         "novelty_threshold": threshold,
+        "cross_ref_window": int(conn.engine.cross_ref_window),
+        "model_profiles": model_profiles,
+        "effective_cross_ref_role": effective_cr_role,
     })
 
 
@@ -867,6 +935,8 @@ async def run_start(
     cycles: int = Form(1),
     primary_model: str = Form(""),
     verifier_model: str = Form(""),
+    primary_role: str = Form(""),
+    verifier_role: str = Form(""),
     focus: str = Form(""),
     questions: str = Form(""),
     # Optional per-run engine-knob overrides. Empty string / default means "inherit from engine.toml".
@@ -897,13 +967,22 @@ async def run_start(
 
     cmd = [
         "python", "/app/curiosity_engine.py",
-        "--cycles", str(max(0, min(20, int(cycles)))),
+        "--cycles", str(max(0, min(200, int(cycles)))),
         "--journal", str(journal_path),
     ]
     if domain.strip():
         cmd += ["--domain", domain.strip()]
-    # Model dropdowns post the current role's model name by default, so only
-    # propagate when the selection differs from the engine.toml default.
+    # Model dropdowns post the role name ("primary" / "verifier") so only
+    # propagate when the selection differs from the default role for that slot.
+    # Role-based swap copies the whole profile; name-only override (if present)
+    # is still accepted for backward compat with CLI callers.
+    pr = (primary_role or "").strip().lower()
+    if pr and pr != "primary":
+        cmd += ["--primary-role", pr]
+    vr = (verifier_role or "").strip().lower()
+    if vr and vr != "verifier":
+        cmd += ["--verifier-role", vr]
+
     conn_for_cmd = _connection()
     if primary_model.strip() and primary_model.strip() != conn_for_cmd.primary.name:
         cmd += ["--primary-model", primary_model.strip()]
@@ -1080,6 +1159,7 @@ def settings_save(
     primary_investigation_max_tokens: int = Form(8192),
     primary_api_key: str = Form(""),
     primary_temperature: float = Form(1.0),
+    primary_timeout_seconds: float = Form(300.0),
     verifier_provider: str = Form(...),
     verifier_name: str = Form(...),
     verifier_base_url: str = Form(""),
@@ -1087,6 +1167,7 @@ def settings_save(
     verifier_investigation_max_tokens: int = Form(8192),
     verifier_api_key: str = Form(""),
     verifier_temperature: float = Form(1.0),
+    verifier_timeout_seconds: float = Form(300.0),
     retry_max_attempts: int = Form(5),
     retry_base_delay_seconds: float = Form(0.5),
     retry_max_delay_seconds: float = Form(8.0),
@@ -1097,14 +1178,22 @@ def settings_save(
     engine_cross_ref_frequency: int = Form(3),
     engine_novelty_threshold: float = Form(0.7),
     engine_register_confidence_floor: float = Form(0.6),
-    engine_verify_insights: str = Form("on"),
+    engine_verify_insights: str = Form(""),
+    engine_analog_probe_enabled: str = Form(""),
+    engine_analog_probe_surprise_threshold: float = Form(0.5),
+    engine_held_entries_enabled: str = Form(""),
+    engine_held_confidence_floor: float = Form(0.7),
+    engine_cross_ref_role: str = Form(""),
 ):
-    """Write engine.toml. Empty api_key fields keep the existing value (don't clobber)."""
+    """Write engine.toml. Empty api_key fields keep the existing value (don't clobber).
+    Every knob the engine recognises is written here so Saving doesn't silently
+    revert previously-configured values to their code defaults."""
     connection = _connection()
 
     def _profile_toml(role: str, provider: str, name: str, base_url: str,
                       max_tokens: int, inv_max_tokens: int, api_key: str,
-                      existing_api_key: str, temperature: float) -> str:
+                      existing_api_key: str, temperature: float,
+                      timeout_seconds: float) -> str:
         key = api_key if api_key.strip() else existing_api_key
         key_line = f'api_key = "{key}"' if key else '# api_key = "..."'
         base_line = f'base_url = "{base_url.strip()}"' if base_url.strip() else '# base_url = "..."'
@@ -1117,21 +1206,51 @@ def settings_save(
             f"max_tokens = {max_tokens}\n"
             f"investigation_max_tokens = {inv_max_tokens}\n"
             f"temperature = {temperature}\n"
+            f"timeout_seconds = {timeout_seconds}\n"
         )
 
-    verify_insights_on = engine_verify_insights.strip().lower() in ("on", "true", "1", "yes")
+    # Checkbox semantics: browsers omit the field entirely when unchecked.
+    def _checkbox(v: str) -> bool:
+        return v.strip().lower() in ("on", "true", "1", "yes")
+
+    verify_insights_on = _checkbox(engine_verify_insights)
+    analog_probe_on    = _checkbox(engine_analog_probe_enabled)
+    held_entries_on    = _checkbox(engine_held_entries_enabled)
+
+    # Validate cross_ref_role against the configured roles we know about,
+    # so a typo doesn't silently save a broken config.
+    known_roles = {"", "primary", "verifier"}
+    known_roles.update(getattr(connection, "extras", {}) or {})
+    cross_ref_role = engine_cross_ref_role.strip().lower()
+    if cross_ref_role and cross_ref_role not in known_roles:
+        cross_ref_role = ""  # treat unknown role as "default"
+
+    # Render any extra [models.<name>] profiles back out verbatim — we don't
+    # expose them in the web form yet, but we mustn't erase them on save.
+    extras_toml = ""
+    for role_name, profile in (getattr(connection, "extras", {}) or {}).items():
+        extras_toml += _profile_toml(
+            role_name,
+            profile.provider, profile.name, profile.base_url,
+            profile.max_tokens, profile.investigation_max_tokens,
+            "", profile.api_key, profile.temperature,
+            profile.timeout_seconds,
+        ) + "\n"
 
     toml_text = (
         "# Curiosity Engine — model connection + engine settings.\n"
         "# Edited via web UI.\n\n"
         + _profile_toml("primary", primary_provider, primary_name, primary_base_url,
                         primary_max_tokens, primary_investigation_max_tokens,
-                        primary_api_key, connection.primary.api_key, primary_temperature)
+                        primary_api_key, connection.primary.api_key, primary_temperature,
+                        primary_timeout_seconds)
         + "\n"
         + _profile_toml("verifier", verifier_provider, verifier_name, verifier_base_url,
                         verifier_max_tokens, verifier_investigation_max_tokens,
-                        verifier_api_key, connection.verifier.api_key, verifier_temperature)
+                        verifier_api_key, connection.verifier.api_key, verifier_temperature,
+                        verifier_timeout_seconds)
         + "\n"
+        + extras_toml
         + (
             "[retry]\n"
             f"max_attempts = {retry_max_attempts}\n"
@@ -1149,6 +1268,11 @@ def settings_save(
             f"novelty_threshold = {max(0.0, min(1.0, engine_novelty_threshold))}\n"
             f"register_confidence_floor = {max(0.0, min(1.0, engine_register_confidence_floor))}\n"
             f"verify_insights = {str(verify_insights_on).lower()}\n"
+            f"analog_probe_enabled = {str(analog_probe_on).lower()}\n"
+            f"analog_probe_surprise_threshold = {max(0.0, min(1.0, engine_analog_probe_surprise_threshold))}\n"
+            f"held_entries_enabled = {str(held_entries_on).lower()}\n"
+            f"held_confidence_floor = {max(0.0, min(1.0, engine_held_confidence_floor))}\n"
+            f'cross_ref_role = "{cross_ref_role}"\n'
         )
     )
 

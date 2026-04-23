@@ -99,7 +99,17 @@
       target.dataset.ceLoaded = "1";
       fetch(url)
         .then(r => r.ok ? r.text() : Promise.reject(new Error(`HTTP ${r.status}`)))
-        .then(html => { target.innerHTML = html; })
+        .then(html => {
+          target.innerHTML = html;
+          // innerHTML doesn't execute <script> tags — manually re-instate any
+          // inline scripts in the swapped content (e.g. local-time formatter).
+          target.querySelectorAll('script').forEach(oldScript => {
+            const newScript = document.createElement('script');
+            for (const attr of oldScript.attributes) newScript.setAttribute(attr.name, attr.value);
+            newScript.textContent = oldScript.textContent;
+            oldScript.parentNode.replaceChild(newScript, oldScript);
+          });
+        })
         .catch(err => { target.innerHTML = `<div class="p-4 text-xs text-rose-400">Failed to load: ${err.message}</div>`; });
     }
 

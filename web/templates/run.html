@@ -69,11 +69,16 @@
 
       <div>
         <label class="text-xs uppercase tracking-wider text-slate-400">Cycles</label>
-        <input name="cycles" type="number" min="1" max="20" value="3"
+        {% set freq = connection.engine.cross_ref_frequency or 3 %}
+        <input name="cycles" id="cycles-input" type="number"
+               min="{{ freq }}" max="{{ freq * 20 }}" step="{{ freq }}"
+               value="{{ freq }}"
                class="mt-1 w-24 px-3 py-2 rounded-lg border border-slate-700 bg-slate-900/60 text-sm mono" />
-        {% if existing %}
-          <p class="text-xs text-slate-500 mt-1">Each cycle runs one investigation. Cross-reference + verification fire every 3 cycles.</p>
-        {% endif %}
+        <p class="text-xs text-slate-500 mt-1" id="cycles-help">
+          Each cycle runs one investigation. Cross-reference + synthesis + verification fire every
+          <span class="mono" id="cycles-help-freq">{{ freq }}</span> cycle{{ '' if freq == 1 else 's' }},
+          so cycles is stepped in multiples of {{ freq }} to avoid wasting an investigation whose xref cycle never fires.
+        </p>
       </div>
 
       <details class="rounded-lg border border-indigo-500/30 bg-indigo-500/5" {% if not existing %}open{% endif %}>
@@ -195,10 +200,10 @@
             <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
               <label class="block">
                 <span class="text-xs text-slate-400">Primary</span>
-                <select name="primary_model"
+                <select name="primary_role"
                         class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-700 bg-slate-900/60 text-sm mono">
                   {% for profile in model_profiles %}
-                    <option value="{{ profile.name }}" {% if profile.role == 'primary' %}selected{% endif %}>
+                    <option value="{{ profile.role }}" {% if profile.role == 'primary' %}selected{% endif %}>
                       {{ profile.role }} · {{ profile.name }}
                     </option>
                   {% endfor %}
@@ -206,10 +211,10 @@
               </label>
               <label class="block">
                 <span class="text-xs text-slate-400">Verifier</span>
-                <select name="verifier_model"
+                <select name="verifier_role"
                         class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-700 bg-slate-900/60 text-sm mono">
                   {% for profile in model_profiles %}
-                    <option value="{{ profile.name }}" {% if profile.role == 'verifier' %}selected{% endif %}>
+                    <option value="{{ profile.role }}" {% if profile.role == 'verifier' %}selected{% endif %}>
                       {{ profile.role }} · {{ profile.name }}
                     </option>
                   {% endfor %}
@@ -246,7 +251,7 @@
         <span class="text-xs uppercase tracking-wider text-slate-400">Live log</span>
       </div>
       <pre id="log-output"
-           class="mono text-xs whitespace-pre-wrap leading-snug text-slate-300 bg-slate-950/60 rounded-md p-3 border border-slate-800/60 flex-1 min-h-[26rem] overflow-auto">Waiting for a run…</pre>
+           class="mono text-xs whitespace-pre-wrap leading-snug text-slate-300 bg-slate-950/60 rounded-md p-3 border border-slate-800/60 flex-1 min-h-[26rem] max-h-[calc(100vh-14rem)] overflow-auto">Waiting for a run…</pre>
     </section>
   </div>
 
@@ -255,6 +260,27 @@
   const form = document.getElementById('run-form');
   const log = document.getElementById('log-output');
   const indicator = document.getElementById('run-indicator');
+
+  // Keep the Cycles input's min/max/step in sync with whatever the user sets
+  // cross_ref_freq to in the overrides panel. Rounds a mis-stepped cycles
+  // value UP to the next multiple so the form never submits something that
+  // wastes a final-cycle investigation without a cross-ref fire.
+  const cyclesInput = document.getElementById('cycles-input');
+  const crossRefInput = form.querySelector('input[name="cross_ref_freq"]');
+  const cyclesHelpFreq = document.getElementById('cycles-help-freq');
+  const syncCyclesToFreq = () => {
+    if (!cyclesInput || !crossRefInput) return;
+    const freq = Math.max(1, parseInt(crossRefInput.value, 10) || 1);
+    cyclesInput.min = String(freq);
+    cyclesInput.max = String(freq * 20);
+    cyclesInput.step = String(freq);
+    const current = parseInt(cyclesInput.value, 10) || freq;
+    // Round UP to the nearest multiple of freq so we don't lose work.
+    const rounded = Math.ceil(current / freq) * freq;
+    if (rounded !== current) cyclesInput.value = String(rounded);
+    if (cyclesHelpFreq) cyclesHelpFreq.textContent = String(freq);
+  };
+  if (crossRefInput) crossRefInput.addEventListener('input', syncCyclesToFreq);
 
   form.addEventListener('submit', async (ev) => {
     ev.preventDefault();

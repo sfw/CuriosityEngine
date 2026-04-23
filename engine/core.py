@@ -47,6 +47,16 @@ class CuriosityEngine(
 
         self.primary: ModelClient = build_client(self.connection.primary)
         self.verifier: ModelClient = build_client(self.connection.verifier)
+        # cross_ref client: defaults to primary (backward compatible). When
+        # connection.cross_ref is set (via [engine].cross_ref_role or
+        # [models.cross_ref]), cross-reference calls go there instead — lets
+        # the user offload cross-ref to a fast non-reasoning model while
+        # keeping reasoning for investigation / synthesis / analog-probe.
+        cross_ref_profile = getattr(self.connection, "cross_ref", None)
+        if cross_ref_profile is None or cross_ref_profile is self.connection.primary:
+            self.cross_ref_client: ModelClient = self.primary
+        else:
+            self.cross_ref_client = build_client(cross_ref_profile)
 
         self.journal = Journal(
             config.journal_path,
@@ -60,6 +70,10 @@ class CuriosityEngine(
 
         print(f"  primary:  {self.connection.primary.provider} / {self.connection.primary.name}")
         print(f"  verifier: {self.connection.verifier.provider} / {self.connection.verifier.name}")
+        if self.cross_ref_client is not self.primary:
+            cr_profile = getattr(self.connection, "cross_ref", None)
+            if cr_profile is not None:
+                print(f"  cross_ref: {cr_profile.provider} / {cr_profile.name}")
         tool_names = self.tool_registry.names()
         if tool_names:
             print(f"  tools:    {', '.join(tool_names)}")
@@ -95,6 +109,22 @@ class CuriosityEngine(
         return self.primary.complete_json(
             prompt,
             tools=tools if self.primary.supports_server_web_search else None,
+            max_tokens=max_tokens,
+            policy=self.connection.retry,
+            on_retry=self._on_retry,
+        )
+
+    def _call_cross_ref(
+        self,
+        prompt: str,
+        *,
+        max_tokens: Optional[int] = None,
+    ) -> dict:
+        """Route cross-reference generation to the dedicated cross_ref client.
+        Falls back to the primary client when no cross_ref profile is set."""
+        return self.cross_ref_client.complete_json(
+            prompt,
+            tools=None,
             max_tokens=max_tokens,
             policy=self.connection.retry,
             on_retry=self._on_retry,

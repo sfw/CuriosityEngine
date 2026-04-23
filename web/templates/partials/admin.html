@@ -41,25 +41,71 @@
   <div class="space-y-2">
 
     {# 1. Re-run cross-reference #}
-    <div class="rounded-xl border border-slate-700/60 bg-slate-900/40 p-4 flex items-start gap-4 flex-wrap">
-      <div class="flex-1 min-w-[240px]">
-        <div class="flex items-center gap-2 mb-1">
-          <svg class="w-4 h-4 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/>
-          </svg>
-          <h4 class="text-sm font-semibold text-slate-200">Re-run cross-reference</h4>
+    <div class="rounded-xl border border-slate-700/60 bg-slate-900/40 p-4">
+      <div class="flex items-start gap-4 flex-wrap">
+        <div class="flex-1 min-w-[240px]">
+          <div class="flex items-center gap-2 mb-1">
+            <svg class="w-4 h-4 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/>
+            </svg>
+            <h4 class="text-sm font-semibold text-slate-200">Re-run cross-reference</h4>
+          </div>
+          <p class="text-xs text-slate-500 leading-relaxed">
+            Runs cross-reference + synthesize + verify on the current journal state. Generates
+            <em>new</em> xrefs only — the LLM sees existing xrefs as priors, the participant-set
+            dedup + anti-attractor gate skip near-duplicates. Useful after a failed run, or when
+            new entries have accumulated since the last cross-ref cycle.
+          </p>
         </div>
-        <p class="text-xs text-slate-500 leading-relaxed">
-          Runs cross-reference + synthesize + verify on the current journal state. Generates
-          <em>new</em> xrefs only — the LLM sees existing xrefs as priors, the participant-set
-          dedup + anti-attractor gate skip near-duplicates. Useful after a failed run, or when
-          new entries have accumulated since the last cross-ref cycle.
-        </p>
+        <button type="button" data-action="cross-ref" data-form="#cross-ref-form"
+                data-confirm="Run cross-reference + synthesis + verification on the current journal state?"
+                class="admin-btn px-3 py-1.5 rounded-lg bg-amber-500/80 hover:bg-amber-500 text-slate-950 text-xs font-medium shadow-lg shadow-amber-900/30 flex items-center gap-1.5 flex-shrink-0">
+          Run cross-reference →
+        </button>
       </div>
-      <button type="button" data-action="cross-ref" data-confirm="Run cross-reference + synthesis + verification on the current journal state?"
-              class="admin-btn px-3 py-1.5 rounded-lg bg-amber-500/80 hover:bg-amber-500 text-slate-950 text-xs font-medium shadow-lg shadow-amber-900/30 flex items-center gap-1.5 flex-shrink-0">
-        Run cross-reference →
-      </button>
+
+      {# Optional per-invocation overrides for this run only (engine.toml untouched). #}
+      <details class="mt-3 rounded-lg border border-slate-700/50 bg-slate-950/40">
+        <summary class="px-3 py-1.5 text-[11px] uppercase tracking-wider text-slate-500 cursor-pointer hover:bg-slate-800/30 flex items-center justify-between">
+          <span>Override for this invocation (optional)</span>
+          <span class="normal-case tracking-normal text-slate-600">window · models</span>
+        </summary>
+        <form id="cross-ref-form" class="p-3 border-t border-slate-700/50 grid grid-cols-1 md:grid-cols-3 gap-3">
+          <label class="block">
+            <span class="text-xs text-slate-400">cross_ref_window</span>
+            <input name="cross_ref_window" type="number" min="2" max="60" step="1"
+                   value="{{ cross_ref_window }}"
+                   class="mt-1 w-full px-2 py-1 rounded border border-slate-700 bg-slate-900/60 text-xs mono" />
+            <p class="mt-1 text-[11px] text-slate-600">Slim the prompt — lower to cut first-token latency on reasoning models (e.g. Kimi). Graph-aware selection keeps the highest-signal entries.</p>
+          </label>
+          <label class="block">
+            <span class="text-xs text-slate-400">Cross-ref model</span>
+            <select name="cross_ref_role" class="mt-1 w-full px-2 py-1 rounded border border-slate-700 bg-slate-900/60 text-xs mono">
+              {% for profile in model_profiles %}
+                <option value="{{ profile.role }}" {% if profile.role == effective_cross_ref_role %}selected{% endif %}>
+                  {{ profile.role }} · {{ profile.name }}
+                </option>
+              {% endfor %}
+            </select>
+            <p class="mt-1 text-[11px] text-slate-600">
+              Which profile does the cross-reference pass. Default is
+              <span class="mono">{{ effective_cross_ref_role }}</span>
+              (from <span class="mono">[engine].cross_ref_role</span>). Swap to a non-reasoning model if reasoning-mode primaries time out.
+            </p>
+          </label>
+          <label class="block">
+            <span class="text-xs text-slate-400">Verifier</span>
+            <select name="verifier_role" class="mt-1 w-full px-2 py-1 rounded border border-slate-700 bg-slate-900/60 text-xs mono">
+              {% for profile in model_profiles %}
+                <option value="{{ profile.role }}" {% if profile.role == 'verifier' %}selected{% endif %}>
+                  {{ profile.role }} · {{ profile.name }}
+                </option>
+              {% endfor %}
+            </select>
+            <p class="mt-1 text-[11px] text-slate-600">Only applies if any xref hits <span class="mono">novelty_threshold</span> and gets synthesized+verified.</p>
+          </label>
+        </form>
+      </details>
     </div>
 
     {# 2. Synthesize orphaned xrefs #}
@@ -188,7 +234,17 @@
         btn.disabled = true;
         btn.innerHTML = "Starting…";
 
-        const body = new FormData();
+        // If the button points at a form via data-form, post that form's
+        // fields; otherwise start from an empty body. Per-action extras
+        // (like check-predictions-all) are still set below.
+        let body;
+        const formSel = btn.dataset.form;
+        if (formSel) {
+          const form = document.querySelector(formSel);
+          body = form ? new FormData(form) : new FormData();
+        } else {
+          body = new FormData();
+        }
         if (action === "check-predictions-all") body.set("all_pending", "1");
 
         try {

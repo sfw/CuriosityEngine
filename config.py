@@ -57,6 +57,14 @@ class EngineSettings:
     # tighter) confidence floor.
     held_entries_enabled: bool = True
     held_confidence_floor: float = 0.7
+    # Cross-ref is a one-shot generation over a large context (pattern-matching
+    # across entries). Reasoning-mode models (Kimi K2.x, Claude extended thinking,
+    # o-series) spend most of their first-token budget on thinking that cross-ref
+    # doesn't benefit from. Set this to any configured role name (e.g. "verifier",
+    # or a custom profile defined under [models.<name>]) to offload cross-ref to a
+    # faster non-reasoning model while keeping reasoning on investigation.
+    # Empty / "primary" = use the primary profile (backward-compatible default).
+    cross_ref_role: str = ""
 
 CONFIG_DIR = Path.home() / ".CuriosityEngine"
 CONFIG_PATH = CONFIG_DIR / "engine.toml"
@@ -86,6 +94,21 @@ class CuriosityEngineConfig:
     verifier: ModelProfile            # falls back to a copy of primary if not configured
     retry: RetryPolicy = field(default_factory=RetryPolicy)
     engine: EngineSettings = field(default_factory=EngineSettings)
+    # Any additional [models.<name>] profiles beyond primary/verifier (e.g. a
+    # dedicated cross_ref profile). Resolved by role name via resolve_profile().
+    extras: dict[str, ModelProfile] = field(default_factory=dict)
+    # Resolved cross-ref profile (None = use primary). Computed at load time from
+    # [engine].cross_ref_role or [models.cross_ref].
+    cross_ref: "ModelProfile | None" = None
+
+    def resolve_profile(self, role: str) -> "ModelProfile | None":
+        """Look up a configured profile by role name."""
+        rn = (role or "").strip().lower()
+        if rn == "primary":
+            return self.primary
+        if rn == "verifier":
+            return self.verifier
+        return self.extras.get(rn)
 
     @classmethod
     def load(cls, path: Path = CONFIG_PATH) -> CuriosityEngineConfig:
@@ -123,6 +146,13 @@ class CuriosityEngineConfig:
         else:
             verifier = replace(primary)
 
+        # Any [models.<name>] beyond primary/verifier → extras dict
+        extras: dict[str, ModelProfile] = {}
+        for role_name, profile_data in models.items():
+            if role_name in ("primary", "verifier"):
+                continue
+            extras[role_name] = _profile_from_dict(profile_data, role_name)
+
         retry_section = data.get("retry", {})
         retry = RetryPolicy(
             max_attempts=int(retry_section.get("max_attempts", 5)),
@@ -146,9 +176,33 @@ class CuriosityEngineConfig:
             ),
             held_entries_enabled=bool(eng_section.get("held_entries_enabled", True)),
             held_confidence_floor=float(eng_section.get("held_confidence_floor", 0.7)),
+            cross_ref_role=str(eng_section.get("cross_ref_role", "")).strip(),
         )
 
-        return cls(primary=primary, verifier=verifier, retry=retry, engine=engine)
+        # Resolve cross_ref profile:
+        #   1. [engine].cross_ref_role (explicit role name) — takes precedence
+        #   2. [models.cross_ref] auto-pickup — convenient for dedicated profile
+        #   3. None (falls back to primary in the engine)
+        cross_ref_profile: ModelProfile | None = None
+        cr_role = (engine.cross_ref_role or "").strip().lower()
+        if cr_role and cr_role != "primary":
+            if cr_role == "verifier":
+                cross_ref_profile = verifier
+            elif cr_role in extras:
+                cross_ref_profile = extras[cr_role]
+            else:
+                raise ValueError(
+                    f"[engine].cross_ref_role = {cr_role!r} but no matching profile "
+                    f"is configured. Add [models.{cr_role}] or pick an existing role."
+                )
+        elif "cross_ref" in extras:
+            cross_ref_profile = extras["cross_ref"]
+
+        return cls(
+            primary=primary, verifier=verifier,
+            retry=retry, engine=engine,
+            extras=extras, cross_ref=cross_ref_profile,
+        )
 
 
 def _migrate_legacy_schema(data: dict, path: Path) -> dict:
@@ -192,6 +246,7 @@ def _profile_from_dict(data: dict, role: str) -> ModelProfile:
         max_tokens=int(data.get("max_tokens", 4096)),
         investigation_max_tokens=int(data.get("investigation_max_tokens", 8192)),
         temperature=float(data.get("temperature", 1.0)),
+        timeout_seconds=float(data.get("timeout_seconds", 300.0)),
     )
 
 
@@ -335,6 +390,10 @@ name = "{profile.name}"
 max_tokens = {profile.max_tokens}
 investigation_max_tokens = {profile.investigation_max_tokens}
 temperature = {profile.temperature}
+# Per-request HTTP timeout in seconds. Raise for reasoning models on big prompts
+# (Kimi K2.x, GPT-5 thinking, o-series, Claude extended thinking can spend
+# 60-180s "thinking" before streaming the first token).
+timeout_seconds = {profile.timeout_seconds}
 """
 
 
@@ -385,6 +444,12 @@ analog_probe_surprise_threshold = {eng.analog_probe_surprise_threshold}
 # slightly higher confidence than active ones to avoid hedged noise.
 held_entries_enabled = {str(eng.held_entries_enabled).lower()}
 held_confidence_floor = {eng.held_confidence_floor}
+# cross-ref phase is a one-shot pattern-match over a large context; reasoning
+# models spend their latency budget on thinking that cross-ref doesn't benefit
+# from. Set to any configured role name ("verifier" or a role matching a
+# [models.<name>] section) to offload cross-ref to a faster model while
+# keeping reasoning for investigation. Empty / "primary" = use primary.
+cross_ref_role = "{eng.cross_ref_role}"
 """
     )
     return header + "\n".join(sections)

@@ -248,6 +248,15 @@ Render a verdict:
 - If your justification for `challenged` or `refuted` amounts to "individual components are documented but this specific combination is not," that is evidence of novelty — revisit and likely upgrade to `validated`.
 - Do NOT penalize an insight for being composed of published ingredients. Penalize only if the *full synthesis itself* is published, or if the reasoning from premises to synthesis is broken.
 
+**Self-consistency check — read this BEFORE writing the verdict field:**
+If you are about to write `"verdict": "challenged"` while ALSO setting:
+  • `novelty_type` to `new_synthesis` or `correction`, AND
+  • `premises_supported` to `true`, AND
+  • `synthesis_findable` to `false`,
+then STOP — those four values together ARE the signature of a genuine new synthesis (premises real, composite claim not in literature). A `challenged` verdict in that configuration is self-contradicting unless `reasoning_flaws` names a specific, substantive flaw that is NOT about ingredients existing separately.
+
+If you cannot name such a substantive flaw (in `reasoning_flaws`), the correct verdict is `validated`. The engine will programmatically upgrade the verdict to `validated` if you return `challenged` in this configuration without a substantive flaw, and will log the upgrade — so hedging here costs you nothing and gives up a correct register entry.
+
 Also provide MOTIVATION: if this insight holds up, WHY does it matter? What does it explain or unlock that wasn't clear before?
 
 FINALLY — if and only if your verdict is "validated" — produce 1-3 FALSIFIABLE PREDICTIONS that follow from the insight. Each prediction must:

@@ -69,6 +69,12 @@ class ModelProfile:
     # OpenAI o1/o3/GPT-5 thinking). Setting anything else can make these models
     # return empty content. For non-thinking models, drop to 0.3-0.7 for determinism.
     temperature: float = 1.0
+    # Per-request HTTP timeout in seconds. Reasoning models (Kimi, o-series,
+    # GPT-5 thinking, Claude extended thinking) can spend 60-180s "thinking"
+    # before the first token streams — the SDK default of 60s causes
+    # APITimeoutError on large cross-ref prompts. 300s is a generous ceiling
+    # that covers common reasoning workloads without masking true hangs.
+    timeout_seconds: float = 300.0
 
 
 class ModelClient(ABC):
@@ -122,6 +128,8 @@ class AnthropicClient(ModelClient):
             kwargs["api_key"] = profile.api_key
         if profile.base_url:
             kwargs["base_url"] = profile.base_url
+        if profile.timeout_seconds > 0:
+            kwargs["timeout"] = profile.timeout_seconds
         self._client = anthropic.Anthropic(**kwargs)
 
     def complete_json(
@@ -249,6 +257,8 @@ class OpenAICompatClient(ModelClient):
             kwargs["api_key"] = profile.api_key
         if profile.base_url:
             kwargs["base_url"] = profile.base_url
+        if profile.timeout_seconds > 0:
+            kwargs["timeout"] = profile.timeout_seconds
         self._client = openai.OpenAI(**kwargs)
 
     def complete_json(

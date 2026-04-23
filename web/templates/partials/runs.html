@@ -74,6 +74,19 @@
       // its `hx-trigger="toggle from:closest details once"` listener — so the
       // event is lost and the placeholder stays forever. Fetch the detail URL
       // directly here to sidestep the race.
+      //
+      // CRITICAL: assigning .innerHTML does NOT execute <script> tags in the new
+      // content. The run_detail partial's inline script attaches an EventSource
+      // for the live log stream — without the re-instate-scripts step below,
+      // the log never updates in-place and the user has to reload to see it.
+      const reinstateScripts = (container) => {
+        container.querySelectorAll('script').forEach(oldScript => {
+          const newScript = document.createElement('script');
+          for (const attr of oldScript.attributes) newScript.setAttribute(attr.name, attr.value);
+          newScript.textContent = oldScript.textContent;
+          oldScript.parentNode.replaceChild(newScript, oldScript);
+        });
+      };
       document.querySelectorAll('details[open] [hx-get]').forEach(target => {
         if (target.dataset.ceLoaded) return;
         const url = target.getAttribute('hx-get');
@@ -81,7 +94,10 @@
         target.dataset.ceLoaded = '1';
         fetch(url)
           .then(r => r.ok ? r.text() : Promise.reject(new Error('HTTP ' + r.status)))
-          .then(html => { target.innerHTML = html; })
+          .then(html => {
+            target.innerHTML = html;
+            reinstateScripts(target);
+          })
           .catch(err => { target.innerHTML = `<div class="p-4 text-xs text-rose-400">Failed to load: ${err.message}</div>`; });
       });
     })();
