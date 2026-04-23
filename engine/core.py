@@ -19,6 +19,7 @@ from engine.cross_reference import CrossReferenceMixin
 from engine.display import DisplayMixin
 from engine.introspect import IntrospectionMixin
 from engine.investigation import InvestigationMixin
+from engine.negative_space import NegativeSpaceMixin
 from engine.tools import discover_tools, registry as tool_registry
 from engine.verification import VerificationMixin
 
@@ -28,6 +29,7 @@ class CuriosityEngine(
     InvestigationMixin,
     CrossReferenceMixin,
     VerificationMixin,
+    NegativeSpaceMixin,
     DisplayMixin,
 ):
     """Curiosity loop orchestrator.
@@ -283,31 +285,57 @@ class CuriosityEngine(
         if remaining > 0:
             investigation_pool.extend(questions[:remaining])
 
+        # Each investigation runs inside its own try/except so a single provider
+        # failure (rate limit, timeout, network blip) doesn't propagate up and
+        # kill the whole cycle/run. Failed questions are counted and logged.
         entries = []
+        investigation_failures = 0
         for q in investigation_pool[:budget]:
-            entry = self.investigate(q)
-            entries.append(entry)
+            try:
+                entry = self.investigate(q)
+                entries.append(entry)
+            except Exception as e:  # noqa: BLE001
+                investigation_failures += 1
+                print(f"  [cycle continues] investigation of {q.id} failed: {type(e).__name__}: {str(e)[:160]}")
 
         xrefs = []
         insights = []
         registered = []
         if self.cycle_count % self.config.cross_ref_frequency == 0:
-            xrefs = self.cross_reference()
+            try:
+                xrefs = self.cross_reference()
+            except Exception as e:  # noqa: BLE001
+                print(f"  [cycle continues] cross-reference phase failed: {type(e).__name__}: {str(e)[:160]}")
+                xrefs = []
             for xref in xrefs:
-                if xref.novelty_score >= self.config.novelty_threshold:
+                if xref.novelty_score < self.config.novelty_threshold:
+                    continue
+                # Synthesize + verify each xref independently. A failure on one
+                # doesn't block the others.
+                try:
                     insight = self.synthesize(xref)
-                    if insight:
-                        insights.append(insight)
-                        if self.config.verify_insights:
-                            register_entry = self.verify_insight(insight, xref)
-                            if register_entry:
-                                registered.append(register_entry)
+                except Exception as e:  # noqa: BLE001
+                    print(f"  [cycle continues] synthesize({xref.id}) failed: {type(e).__name__}: {str(e)[:160]}")
+                    continue
+                if not insight:
+                    continue
+                insights.append(insight)
+                if not self.config.verify_insights:
+                    continue
+                try:
+                    register_entry = self.verify_insight(insight, xref)
+                except Exception as e:  # noqa: BLE001
+                    print(f"  [cycle continues] verify({insight.id}) failed: {type(e).__name__}: {str(e)[:160]}")
+                    continue
+                if register_entry:
+                    registered.append(register_entry)
 
         return {
             "cycle": self.cycle_count,
             "uncertainties_found": len(uncertainties),
             "questions_generated": len(questions),
             "entries_created": len(entries),
+            "investigation_failures": investigation_failures,
             "cross_references_found": len(xrefs),
             "insights_generated": len(insights),
             "registered": len(registered),

@@ -96,29 +96,40 @@
 
     <!-- RETRY -->
     <section class="card rounded-2xl p-5">
-      <div class="flex items-center gap-3 mb-4">
+      <div class="flex items-center gap-3 mb-1">
         <div class="w-2 h-2 rounded-full bg-amber-400"></div>
         <h2 class="text-lg font-semibold">Retry policy</h2>
         <span class="mono text-xs text-slate-500">[retry]</span>
       </div>
+      <p class="text-xs text-slate-500 mb-4">
+        Applies to all LLM calls. <span class="mono">429</span> / <span class="mono">503</span> / <span class="mono">529</span>
+        trips the backpressure path which uses <span class="mono">max_delay_seconds</span> as its ceiling. Defaults are sized
+        for provider-overload events (Moonshot during peak, Claude extended thinking) — raise <span class="mono">max_delay_seconds</span>
+        further if you see repeated crashes on <span class="mono">RateLimitError</span> with
+        <em>"engine is currently overloaded"</em>.
+      </p>
       <div class="grid gap-4 md:grid-cols-4">
         <label class="block">
           <span class="text-xs uppercase tracking-wider text-slate-400">max_attempts</span>
-          <input name="retry_max_attempts" type="number" min="1" max="20" value="{{ connection.retry.max_attempts }}"
+          <span class="block text-[11px] text-slate-500">total tries per call before giving up</span>
+          <input name="retry_max_attempts" type="number" min="1" max="30" value="{{ connection.retry.max_attempts }}"
                  class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-700 bg-slate-900/60 text-sm mono" />
         </label>
         <label class="block">
           <span class="text-xs uppercase tracking-wider text-slate-400">base_delay_seconds</span>
+          <span class="block text-[11px] text-slate-500">initial backoff; doubles each retry</span>
           <input name="retry_base_delay_seconds" type="number" step="0.1" min="0" value="{{ connection.retry.base_delay_seconds }}"
                  class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-700 bg-slate-900/60 text-sm mono" />
         </label>
         <label class="block">
           <span class="text-xs uppercase tracking-wider text-slate-400">max_delay_seconds</span>
-          <input name="retry_max_delay_seconds" type="number" step="0.1" min="0" value="{{ connection.retry.max_delay_seconds }}"
+          <span class="block text-[11px] text-slate-500">cap on backoff; raise for provider overload events</span>
+          <input name="retry_max_delay_seconds" type="number" step="1" min="0" max="600" value="{{ connection.retry.max_delay_seconds }}"
                  class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-700 bg-slate-900/60 text-sm mono" />
         </label>
         <label class="block">
           <span class="text-xs uppercase tracking-wider text-slate-400">jitter_seconds</span>
+          <span class="block text-[11px] text-slate-500">random fuzz added to each backoff; prevents thundering-herd</span>
           <input name="retry_jitter_seconds" type="number" step="0.05" min="0" value="{{ connection.retry.jitter_seconds }}"
                  class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-700 bg-slate-900/60 text-sm mono" />
         </label>
@@ -232,6 +243,25 @@
           </span>
           <input name="engine_analog_probe_surprise_threshold" type="number" step="0.05" min="0" max="1"
                  value="{{ connection.engine.analog_probe_surprise_threshold }}"
+                 class="mt-1 w-32 px-3 py-2 rounded-lg border border-slate-700 bg-slate-900/60 text-sm mono" />
+        </label>
+
+        <label class="flex items-center gap-2 md:col-span-3">
+          <input type="checkbox" name="engine_assumption_probe_enabled"
+                 {% if connection.engine.assumption_probe_enabled %}checked{% endif %}
+                 class="accent-violet-500" />
+          <span class="text-sm">
+            <span class="text-slate-200">assumption_probe_enabled</span>
+            <span class="text-xs text-slate-500">— within-domain foundational attack: fires on LOW-surprise confirmed findings (where field consensus hides load-bearing assumptions), produces investigable questions that would test each premise</span>
+          </span>
+        </label>
+        <label class="block md:col-span-3">
+          <span class="text-xs uppercase tracking-wider text-slate-400">assumption_probe_surprise_threshold</span>
+          <span class="block text-[11px] text-slate-500">
+            Max surprise_delta for the probe to fire (0-1; default 0.3). Probe triggers when entry has <span class="mono">verdict=confirmed</span> AND <span class="mono">surprise_delta ≤ threshold</span> — high consensus is where premises go unexamined.
+          </span>
+          <input name="engine_assumption_probe_surprise_threshold" type="number" step="0.05" min="0" max="1"
+                 value="{{ connection.engine.assumption_probe_surprise_threshold }}"
                  class="mt-1 w-32 px-3 py-2 rounded-lg border border-slate-700 bg-slate-900/60 text-sm mono" />
         </label>
 

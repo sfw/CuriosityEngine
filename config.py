@@ -51,6 +51,14 @@ class EngineSettings:
     # jumps come from.
     analog_probe_enabled: bool = True
     analog_probe_surprise_threshold: float = 0.5
+    # Assumption probe: complementary to the analog probe — fires on LOW-surprise
+    # CONFIRMED findings (the accepted-wisdom regime where load-bearing
+    # assumptions hide). Asks the primary to name implicit premises the field
+    # takes for granted, then produces investigable questions that would test
+    # each assumption's validity. Opposite trigger condition from analog probe,
+    # which fires on HIGH-surprise entries to reach outward.
+    assumption_probe_enabled: bool = True
+    assumption_probe_surprise_threshold: float = 0.3
     # When the verifier returns `inconclusive` (could not reach the claim, not
     # refuted it), the insight becomes a held register entry pending settlement
     # rather than being silently rejected. Held entries have a separate (usually
@@ -65,6 +73,13 @@ class EngineSettings:
     # faster non-reasoning model while keeping reasoning on investigation.
     # Empty / "primary" = use the primary profile (backward-compatible default).
     cross_ref_role: str = ""
+    # Negative-space gap scan — structural analysis that builds a (method × problem)
+    # matrix from the journal's entries and identifies empty cells (combinations
+    # nobody in the field has studied). Gated to require a minimum journal size:
+    # below the threshold, most empty cells are empty simply because the journal
+    # is young, not because the field ignored them. Triggered on-demand via the
+    # Admin tab or `--scan-gaps` — not part of the cycle loop.
+    negative_space_min_entries: int = 15
 
 CONFIG_DIR = Path.home() / ".CuriosityEngine"
 CONFIG_PATH = CONFIG_DIR / "engine.toml"
@@ -174,6 +189,11 @@ class CuriosityEngineConfig:
             analog_probe_surprise_threshold=float(
                 eng_section.get("analog_probe_surprise_threshold", 0.5)
             ),
+            assumption_probe_enabled=bool(eng_section.get("assumption_probe_enabled", True)),
+            assumption_probe_surprise_threshold=float(
+                eng_section.get("assumption_probe_surprise_threshold", 0.3)
+            ),
+            negative_space_min_entries=int(eng_section.get("negative_space_min_entries", 15)),
             held_entries_enabled=bool(eng_section.get("held_entries_enabled", True)),
             held_confidence_floor=float(eng_section.get("held_confidence_floor", 0.7)),
             cross_ref_role=str(eng_section.get("cross_ref_role", "")).strip(),
@@ -219,9 +239,9 @@ def _migrate_legacy_schema(data: dict, path: Path) -> dict:
     )
     retry_section = data.get("retry", {})
     retry = RetryPolicy(
-        max_attempts=int(retry_section.get("max_attempts", 5)),
+        max_attempts=int(retry_section.get("max_attempts", 10)),
         base_delay_seconds=float(retry_section.get("base_delay_seconds", 0.5)),
-        max_delay_seconds=float(retry_section.get("max_delay_seconds", 8.0)),
+        max_delay_seconds=float(retry_section.get("max_delay_seconds", 90.0)),
         jitter_seconds=float(retry_section.get("jitter_seconds", 0.25)),
     )
     # Write the migrated file and re-read so downstream parsing is uniform.
@@ -438,6 +458,16 @@ verify_insights = {str(eng.verify_insights).lower()}
 # from one domain to another).
 analog_probe_enabled = {str(eng.analog_probe_enabled).lower()}
 analog_probe_surprise_threshold = {eng.analog_probe_surprise_threshold}
+# Assumption probe — complement to the analog probe. Fires on LOW-surprise
+# confirmed findings (where field consensus most likely hides load-bearing
+# assumptions); asks the primary model to name implicit premises and enqueue
+# investigable questions that would test each. Opposite trigger from analog.
+assumption_probe_enabled = {str(eng.assumption_probe_enabled).lower()}
+assumption_probe_surprise_threshold = {eng.assumption_probe_surprise_threshold}
+# Negative-space gap scan — minimum entry count before Scan-for-gaps is allowed.
+# Below this threshold most empty matrix cells are artifacts of journal youth,
+# not real field-level gaps, so the scan would surface noise.
+negative_space_min_entries = {eng.negative_space_min_entries}
 # Held-state pipeline — when the verifier returns `inconclusive` (couldn't reach
 # the claim, not refuted it), insights become held register entries pending
 # settlement rather than being silently rejected. Held entries usually require

@@ -9,6 +9,7 @@ from uuid import uuid4
 from models import JournalEntry, ResearchQuestion
 from prompts import (
     ANALOG_PROBE_PROMPT,
+    ASSUMPTION_PROBE_PROMPT,
     HYPOTHESIS_PROMPT,
     INVESTIGATE_PROMPT,
     SURPRISE_PROMPT,
@@ -136,6 +137,10 @@ class InvestigationMixin:
         # DISTANT fields have structural analogs and enqueue those reframed questions.
         if getattr(self.config, "analog_probe_enabled", True):
             self._run_analog_probe(entry)
+        # Assumption probe: complementary move. Fires on LOW-surprise CONFIRMED
+        # findings — the accepted-wisdom regime where load-bearing assumptions hide.
+        if getattr(self.config, "assumption_probe_enabled", True):
+            self._run_assumption_probe(entry)
         # Best-effort embed the new entry so semantic features stay current. If the
         # embedding client is unavailable or fails, we just skip — not a cycle-breaking
         # concern.
@@ -196,4 +201,57 @@ class InvestigationMixin:
             print(f"  [analog probe] enqueued {len(questions)} cross-domain question(s) @ pri 0.85:")
             for a in analogs[:3]:
                 print(f"    · {a.get('domain','?')} → {a.get('mechanism','?')[:60]}")
+        return len(questions)
+
+    def _run_assumption_probe(self, entry: JournalEntry) -> int:
+        """Ask the primary model to name implicit assumptions that a CONFIRMED,
+        low-surprise finding depends on, and produce investigable questions that
+        would test whether each assumption actually holds.
+
+        The complement to the analog probe: analog reaches outward (distant
+        fields with structurally similar mechanisms); assumption reaches inward
+        (within-domain premise layer). Firing condition is deliberately inverse
+        of analog probe — high field consensus (low surprise + confirmed) is
+        precisely where load-bearing assumptions hide unexamined.
+        """
+        threshold = float(getattr(self.config, "assumption_probe_surprise_threshold", 0.3))
+        if entry.surprise_delta > threshold:
+            return 0
+        if (entry.hypothesis_verdict or "").strip().lower() != "confirmed":
+            return 0
+
+        prompt = ASSUMPTION_PROBE_PROMPT.format(
+            entry_question=entry.question,
+            entry_verdict=entry.hypothesis_verdict or "confirmed",
+            entry_surprise=entry.surprise_delta,
+            entry_takeaways=json.dumps(entry.key_takeaways, indent=2),
+        )
+        try:
+            result = self._call_primary(prompt)
+        except Exception as e:  # noqa: BLE001
+            print(f"  [assumption probe] skipped: {type(e).__name__}: {e}")
+            return 0
+
+        assumptions = result.get("assumptions", []) or []
+        if not assumptions:
+            print("  [assumption probe] no substantive field-consensus assumptions proposed.")
+            return 0
+
+        questions: list[str] = []
+        for a in assumptions[:3]:
+            q = (a.get("question") or "").strip()
+            premise = (a.get("assumption") or "").strip()
+            if q:
+                prefix = f"[assumption: {premise[:60]}] " if premise else ""
+                questions.append(prefix + q)
+
+        if questions:
+            self.journal.enqueue_questions(
+                questions,
+                source=f"assumption:{entry.id}",
+                priority=0.80,
+            )
+            print(f"  [assumption probe] enqueued {len(questions)} assumption-negation question(s) @ pri 0.80:")
+            for a in assumptions[:3]:
+                print(f"    · {a.get('assumption','?')[:75]}")
         return len(questions)

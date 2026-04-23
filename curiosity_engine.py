@@ -83,6 +83,10 @@ def main():
                         help="Toggle cross-domain analog probe for this run")
     parser.add_argument("--analog-probe-threshold", type=float, default=None,
                         help="Override [engine].analog_probe_surprise_threshold for this run (0.0–1.0)")
+    parser.add_argument("--assumption-probe-enabled", action=argparse.BooleanOptionalAction, default=None,
+                        help="Toggle within-domain assumption probe (fires on LOW-surprise confirmed findings to surface implicit premises)")
+    parser.add_argument("--assumption-probe-threshold", type=float, default=None,
+                        help="Override [engine].assumption_probe_surprise_threshold — probe fires when surprise_delta ≤ this AND verdict == confirmed (default 0.3)")
     parser.add_argument("--held-entries-enabled", action=argparse.BooleanOptionalAction, default=None,
                         help="Allow `inconclusive` verdicts to create held register entries (--held-entries-enabled / --no-held-entries-enabled)")
     parser.add_argument("--held-confidence-floor", type=float, default=None,
@@ -93,6 +97,8 @@ def main():
                         help="Re-verify a single insight by id (e.g. i-abc12345). Overrides --reverify-insights scope.")
     parser.add_argument("--synth-orphaned-xrefs", action="store_true",
                         help="Synthesize + verify every cross-reference that doesn't yet have a matching insight (e.g. after a mid-run failure between cross-ref and synthesis).")
+    parser.add_argument("--scan-gaps", action="store_true",
+                        help="Run a negative-space scan: build (method × problem) matrix from journal entries, classify empty cells, verify underexplored gaps via academic_search, enqueue questions for verified gaps. Gated by [engine].negative_space_min_entries.")
     args = parser.parse_args()
 
     if args.list_tools:
@@ -131,6 +137,7 @@ def main():
         or args.reverify_insights
         or args.reverify_insight is not None
         or args.synth_orphaned_xrefs
+        or args.scan_gaps
     )
     if args.domain is None:
         if read_only:
@@ -195,6 +202,8 @@ def main():
         verify_insights=_override(args.verify_insights, connection.engine.verify_insights),
         analog_probe_enabled=_override(args.analog_probe_enabled, connection.engine.analog_probe_enabled),
         analog_probe_surprise_threshold=_override(args.analog_probe_threshold, connection.engine.analog_probe_surprise_threshold),
+        assumption_probe_enabled=_override(args.assumption_probe_enabled, connection.engine.assumption_probe_enabled),
+        assumption_probe_surprise_threshold=_override(args.assumption_probe_threshold, connection.engine.assumption_probe_surprise_threshold),
         held_entries_enabled=_override(args.held_entries_enabled, connection.engine.held_entries_enabled),
         held_confidence_floor=_override(args.held_confidence_floor, connection.engine.held_confidence_floor),
     )
@@ -288,6 +297,8 @@ def main():
         engine.reverify_unregistered_insights()
     elif args.synth_orphaned_xrefs:
         engine.synthesize_orphaned_xrefs()
+    elif args.scan_gaps:
+        engine.scan_gaps()
     elif args.show_journal:
         engine.show_journal_summary()
     elif args.cross_ref_only:

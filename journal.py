@@ -28,6 +28,7 @@ class Journal:
         self.focus: str = ""                       # user-set investigation focus
         self.last_domain: str = ""                 # last domain used on a run against this journal
         self.embeddings: dict[str, list[float]] = {}  # entry_id -> dense vector
+        self.coverage_scans: list[dict] = []       # negative-space gap scans over time
         self._load()
 
     def _load(self):
@@ -43,6 +44,7 @@ class Journal:
                 self.focus = str(data.get("focus", ""))
                 self.last_domain = str(data.get("last_domain", ""))
                 self.embeddings = dict(data.get("embeddings", {}))
+                self.coverage_scans = list(data.get("coverage_scans", []))
 
     def save(self):
         with open(self.path, "w") as f:
@@ -56,6 +58,7 @@ class Journal:
                 "focus": self.focus,
                 "last_domain": self.last_domain,
                 "embeddings": self.embeddings,
+                "coverage_scans": self.coverage_scans,
                 "metadata": {
                     "last_updated": datetime.now(timezone.utc).isoformat(),
                     "total_entries": len(self.entries),
@@ -135,6 +138,16 @@ class Journal:
     def registered_insight_ids(self) -> set[str]:
         """Insight ids that already have a corresponding register entry (any status)."""
         return {e.get("insight_id") for e in self.register if e.get("insight_id")}
+
+    def add_coverage_scan(self, scan: dict):
+        """Append a negative-space gap scan. Scan shape:
+        {id, timestamp, journal_size_at_scan, methods, problems, cells, gaps, summary}
+        """
+        self.coverage_scans.append(dict(scan))
+        self.save()
+
+    def latest_coverage_scan(self) -> Optional[dict]:
+        return self.coverage_scans[-1] if self.coverage_scans else None
 
     def update_register_entry_review(
         self,

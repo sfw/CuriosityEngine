@@ -455,6 +455,34 @@ async def maintenance_reverify(name: str):
     return JSONResponse(result)
 
 
+@app.post("/journals/{name}/maintenance/scan-gaps")
+async def maintenance_scan_gaps(name: str):
+    """Run a negative-space scan on this journal. Spawns `curiosity_engine.py
+    --scan-gaps`. Gated server-side by [engine].negative_space_min_entries —
+    the engine aborts with a message if the journal is too young."""
+    result = await _spawn_maintenance_subprocess(
+        _journal_path(name), ["--scan-gaps"], kind="scan-gaps",
+    )
+    return JSONResponse(result)
+
+
+@app.get("/journals/{name}/coverage", response_class=HTMLResponse)
+def journal_coverage(request: Request, name: str):
+    """Coverage tab — shows the latest negative-space scan as a method × problem
+    matrix with empty cells color-coded by classification. Lists past scans so
+    the user can diff coverage over time."""
+    journal = _load_journal(name)
+    scans = journal.coverage_scans
+    latest = scans[-1] if scans else None
+    return templates.TemplateResponse(request, "partials/coverage.html", {
+        "name": name,
+        "scans": list(reversed(scans)),  # newest first in list view
+        "latest": latest,
+        "min_entries": int(_connection().engine.negative_space_min_entries),
+        "current_entries": len(journal.entries),
+    })
+
+
 @app.post("/journals/{name}/maintenance/check-predictions")
 async def maintenance_check_predictions(name: str, all_pending: str = Form("")):
     """Check due predictions against current reality (verifier + tools).
@@ -531,6 +559,9 @@ def journal_admin(request: Request, name: str):
         "cross_ref_window": int(conn.engine.cross_ref_window),
         "model_profiles": model_profiles,
         "effective_cross_ref_role": effective_cr_role,
+        "entries_count": len(journal.entries),
+        "gap_min_entries": int(conn.engine.negative_space_min_entries),
+        "coverage_scans_count": len(journal.coverage_scans),
     })
 
 
@@ -1168,9 +1199,9 @@ def settings_save(
     verifier_api_key: str = Form(""),
     verifier_temperature: float = Form(1.0),
     verifier_timeout_seconds: float = Form(300.0),
-    retry_max_attempts: int = Form(5),
+    retry_max_attempts: int = Form(10),
     retry_base_delay_seconds: float = Form(0.5),
-    retry_max_delay_seconds: float = Form(8.0),
+    retry_max_delay_seconds: float = Form(90.0),
     retry_jitter_seconds: float = Form(0.25),
     engine_cross_ref_window: int = Form(20),
     engine_questions_per_cycle: int = Form(3),
@@ -1181,6 +1212,8 @@ def settings_save(
     engine_verify_insights: str = Form(""),
     engine_analog_probe_enabled: str = Form(""),
     engine_analog_probe_surprise_threshold: float = Form(0.5),
+    engine_assumption_probe_enabled: str = Form(""),
+    engine_assumption_probe_surprise_threshold: float = Form(0.3),
     engine_held_entries_enabled: str = Form(""),
     engine_held_confidence_floor: float = Form(0.7),
     engine_cross_ref_role: str = Form(""),
@@ -1213,9 +1246,10 @@ def settings_save(
     def _checkbox(v: str) -> bool:
         return v.strip().lower() in ("on", "true", "1", "yes")
 
-    verify_insights_on = _checkbox(engine_verify_insights)
-    analog_probe_on    = _checkbox(engine_analog_probe_enabled)
-    held_entries_on    = _checkbox(engine_held_entries_enabled)
+    verify_insights_on     = _checkbox(engine_verify_insights)
+    analog_probe_on        = _checkbox(engine_analog_probe_enabled)
+    assumption_probe_on    = _checkbox(engine_assumption_probe_enabled)
+    held_entries_on        = _checkbox(engine_held_entries_enabled)
 
     # Validate cross_ref_role against the configured roles we know about,
     # so a typo doesn't silently save a broken config.
@@ -1270,6 +1304,8 @@ def settings_save(
             f"verify_insights = {str(verify_insights_on).lower()}\n"
             f"analog_probe_enabled = {str(analog_probe_on).lower()}\n"
             f"analog_probe_surprise_threshold = {max(0.0, min(1.0, engine_analog_probe_surprise_threshold))}\n"
+            f"assumption_probe_enabled = {str(assumption_probe_on).lower()}\n"
+            f"assumption_probe_surprise_threshold = {max(0.0, min(1.0, engine_assumption_probe_surprise_threshold))}\n"
             f"held_entries_enabled = {str(held_entries_on).lower()}\n"
             f"held_confidence_floor = {max(0.0, min(1.0, engine_held_confidence_floor))}\n"
             f'cross_ref_role = "{cross_ref_role}"\n'

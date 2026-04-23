@@ -180,6 +180,9 @@ class EngineConfig:
     max_cycles: int = 10
     analog_probe_enabled: bool = True
     analog_probe_surprise_threshold: float = 0.5
+    assumption_probe_enabled: bool = True
+    assumption_probe_surprise_threshold: float = 0.3
+    negative_space_min_entries: int = 15
     held_entries_enabled: bool = True
     held_confidence_floor: float = 0.7
     connection: "CuriosityEngineConfig | None" = None

@@ -44,9 +44,15 @@ _BACKPRESSURE_BASE_DELAY = 2.0
 
 @dataclass(frozen=True)
 class RetryPolicy:
-    max_attempts: int = 5
+    # Defaults sized for provider-overload events (Moonshot/Kimi, OpenAI during
+    # peak load, Claude during extended thinking). 429 / 503 / 529 trip the
+    # backpressure path which uses max_delay_seconds as its ceiling — 90s
+    # gives providers time to recover from sustained overload without failing
+    # the run. max_attempts=10 × up-to-90s backoff = ~10-15 min patience on
+    # the worst stretches; good enough for overnight endurance runs.
+    max_attempts: int = 10
     base_delay_seconds: float = 0.5
-    max_delay_seconds: float = 8.0
+    max_delay_seconds: float = 90.0
     jitter_seconds: float = 0.25
 
 

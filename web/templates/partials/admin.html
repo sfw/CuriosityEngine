@@ -165,7 +165,47 @@
       </button>
     </div>
 
-    {# 4. Check due predictions #}
+    {# 4. Scan for unexplored gaps (negative-space mapping) #}
+    {% set gap_ready = entries_count >= gap_min_entries %}
+    <div class="rounded-xl border border-slate-700/60 bg-slate-900/40 p-4 flex items-start gap-4 flex-wrap">
+      <div class="flex-1 min-w-[240px]">
+        <div class="flex items-center gap-2 mb-1 flex-wrap">
+          <svg class="w-4 h-4 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/>
+          </svg>
+          <h4 class="text-sm font-semibold text-slate-200">Scan for unexplored gaps</h4>
+          {% if gap_ready %}
+            <span class="mono text-[10px] px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-300">{{ entries_count }} entries — ready</span>
+          {% else %}
+            <span class="mono text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-500">{{ entries_count }}/{{ gap_min_entries }} entries — locked</span>
+          {% endif %}
+          {% if coverage_scans_count %}
+            <span class="mono text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">{{ coverage_scans_count }} prior scan{{ '' if coverage_scans_count == 1 else 's' }}</span>
+          {% endif %}
+        </div>
+        <p class="text-xs text-slate-500 leading-relaxed">
+          Builds a (method × problem) matrix from the journal's entries and identifies empty cells.
+          Classifies each gap as <span class="mono">underexplored</span> / <span class="mono">tried_failed</span> /
+          <span class="mono">trivially_uninteresting</span> / <span class="mono">regulated_boundary</span> /
+          <span class="mono">adjacent_but_covered</span>. For underexplored cells, runs
+          <span class="mono">academic_search</span> to confirm the gap is real; for verified gaps, enqueues
+          investigable questions at priority 0.85. Results persist as a coverage scan — visible in the
+          <a class="text-indigo-400 hover:underline" href="/journals/{{ name }}?tab=coverage">Coverage tab</a>.
+          {% if not gap_ready %}
+          Locked until the journal has at least <span class="mono">{{ gap_min_entries }}</span> entries — below that,
+          most empty cells are just unexplored journal, not field-level gaps.
+          {% endif %}
+        </p>
+      </div>
+      <button type="button" data-action="scan-gaps"
+              data-confirm="Run a negative-space scan on {{ entries_count }} entries? This makes 3 LLM calls plus up to ~2 academic_search calls per underexplored gap; expect a few minutes."
+              {% if not gap_ready %}disabled{% endif %}
+              class="admin-btn px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-xs font-medium shadow-lg shadow-purple-900/30 disabled:opacity-40 disabled:cursor-not-allowed">
+        Scan for gaps →
+      </button>
+    </div>
+
+    {# 5. Check due predictions #}
     <div class="rounded-xl border border-slate-700/60 bg-slate-900/40 p-4 flex items-start gap-4 flex-wrap">
       <div class="flex-1 min-w-[240px]">
         <div class="flex items-center gap-2 mb-1">
@@ -219,6 +259,7 @@
       "reverify":             "/journals/{{ name }}/maintenance/reverify",
       "check-predictions":    "/journals/{{ name }}/maintenance/check-predictions",
       "check-predictions-all":"/journals/{{ name }}/maintenance/check-predictions",
+      "scan-gaps":            "/journals/{{ name }}/maintenance/scan-gaps",
     };
 
     document.querySelectorAll(".admin-btn").forEach(btn => {

@@ -338,6 +338,151 @@ Respond with EXACTLY this JSON structure (no other text):
 }}"""
 
 
+NEGATIVE_SPACE_EXTRACT_PROMPT = """You are a research engine performing STRUCTURAL ANALYSIS of a journal's coverage. Before we can identify gaps, we need to build a (method × problem) matrix describing what the journal has already studied.
+
+{focus_block}
+
+JOURNAL ENTRIES (slimmed — question, key_takeaways, domain_tags):
+{entries_json}
+
+EXISTING TAG ANCHORS (domain_tags observed across entries; use these as the skeleton):
+{tag_anchors}
+
+Your task: extract the canonical (method, problem) pairs from these entries.
+
+- "Method" = the technique, approach, mechanism, architecture, or analytical lens the entry relies on.
+  Examples: "ensemble disagreement", "sparse autoencoders", "neurosymbolic verification", "RAG novelty-checking", "prover-verifier games".
+- "Problem" = the specific question, goal, failure mode, or phenomenon being addressed.
+  Examples: "escaping self-grading", "detecting OOD concepts", "verifying pre-formal ideas", "measuring conceptual novelty".
+
+Rules:
+- Use tag_anchors where they're clearly method-like or problem-like, but also extract richer phrases from key_takeaways when they're not captured by tags.
+- Keep each method and each problem to 2-6 words. Concrete and specific.
+- Prefer 5-12 distinct methods and 5-12 distinct problems; aggressive consolidation beats a sprawling matrix.
+- Multiple entries may share the same (method, problem) pair — that's fine, list them all in entry_ids.
+
+Respond with EXACTLY this JSON structure (no other text):
+{{
+  "methods": ["method 1", "method 2", ...],
+  "problems": ["problem 1", "problem 2", ...],
+  "cells": [
+    {{
+      "method": "...",
+      "problem": "...",
+      "entry_ids": ["j-xxx", "j-yyy"]
+    }}
+  ]
+}}"""
+
+
+NEGATIVE_SPACE_CLASSIFY_PROMPT = """You are a research engine analyzing EMPTY CELLS in a journal's (method × problem) coverage matrix. Each empty cell is a method × problem combination that the journal HAS NOT investigated. Your job is to classify each gap so the engine knows which are worth pursuing.
+
+{focus_block}
+
+MATRIX CONTEXT (what the journal HAS covered):
+Methods: {methods_json}
+Problems: {problems_json}
+Covered cells (method × problem pairs already studied in this journal):
+{covered_cells_json}
+
+EMPTY CELLS (combinations with no entries in this journal):
+{empty_cells_json}
+
+For each empty cell, classify it into ONE category:
+
+1. **underexplored** — the combination is genuinely interesting and under-studied. Applying this method to this problem is plausible, potentially valuable, and the field hasn't given it serious attention. This is the HIGH-VALUE category — these become new research questions.
+
+2. **tried_failed** — there's known evidence that this combination has been tried and didn't work (or was explicitly ruled out). Has prior art showing why the combination fails.
+
+3. **trivially_uninteresting** — the combination is technically possible but doesn't make sense in the field. E.g. "using ODE solvers to do image classification" — not underexplored, just absurd or mis-scoped.
+
+4. **regulated_boundary** — the combination is bounded by ethics, regulation, capability constraints, or infrastructure limits. E.g. "using live-patient clinical trials to test LLM prompt robustness".
+
+5. **adjacent_but_covered** — the combination LOOKS empty in this journal's matrix but is actually well-studied in the wider literature under a different terminology. The journal just hasn't absorbed that literature yet.
+
+Rules:
+- Be honest about what you DON'T know. If you're uncertain between underexplored and adjacent_but_covered, classify as underexplored and let the verification search settle it.
+- For underexplored cells, produce a specific reason ("X problem has these 3 known properties Y that make method Z plausibly effective but no paper connects them").
+- Bias toward marking cells as underexplored if unsure — the verification step will filter out false positives via academic_search.
+
+Respond with EXACTLY this JSON structure (no other text):
+{{
+  "classified_cells": [
+    {{
+      "method": "...",
+      "problem": "...",
+      "classification": "underexplored|tried_failed|trivially_uninteresting|regulated_boundary|adjacent_but_covered",
+      "reasoning": "one-sentence explanation of why this classification fits",
+      "verification_search_queries": ["academic-search query 1", "academic-search query 2"]
+    }}
+  ]
+}}"""
+
+
+NEGATIVE_SPACE_QUESTIONS_PROMPT = """You are a research engine generating INVESTIGABLE QUESTIONS for verified-empty cells in a method × problem coverage matrix.
+
+{focus_block}
+
+VERIFIED GAPS (method × problem combinations that classified as `underexplored` AND whose `academic_search` verification returned few or no relevant results):
+{verified_gaps_json}
+
+For each verified gap, produce 1-2 investigable research questions that would actually attempt the combination or probe why it's empty. Each question should:
+
+- Be concrete and specific — name the method and problem, not just gesture at them.
+- Be investigable with web_search / academic_search / code_execution — not pure philosophy.
+- Target the GAP, not the surrounding territory. If the gap is "applying X to Y", the question should be something like "Does X address Y's specific failure modes A and B?" — not "What does X do in general?"
+
+Respond with EXACTLY this JSON structure (no other text):
+{{
+  "gap_questions": [
+    {{
+      "method": "...",
+      "problem": "...",
+      "questions": ["question 1 probing this gap", "question 2 probing this gap"]
+    }}
+  ]
+}}"""
+
+
+ASSUMPTION_PROBE_PROMPT = """You are a research engine surfacing IMPLICIT ASSUMPTIONS in an established finding. Every accepted claim rests on unstated premises — things the field takes for granted without re-examining. The most generative novelty move within a domain is to name those assumptions and ask: what if each one were false?
+
+This probe fires on LOW-surprise CONFIRMED findings — those are where field consensus most likely hides load-bearing assumptions. A finding that confirmed a widely-held hypothesis with little surprise is a signal that the premise layer is unexamined.
+
+THE FINDING (confirmed; low surprise — field consensus regime):
+Question investigated: {entry_question}
+Hypothesis verdict: {entry_verdict}
+Surprise delta: {entry_surprise:.2f}
+Key takeaways:
+{entry_takeaways}
+
+Your task: list 3-5 IMPLICIT ASSUMPTIONS this finding depends on — the things every practitioner in the field treats as obviously true. For each, produce an INVESTIGABLE question that would test whether the assumption actually holds.
+
+**What counts as a STRONG assumption probe:**
+- STRONG: *"The finding assumes monotonic scaling — the community-wide practice of extrapolating from small to large models. Question: in the compute regime where phase transitions are documented (Ganguli et al. 2022), does monotonic extrapolation still hold?"*
+- STRONG: *"The finding assumes the evaluation set is i.i.d. with the training distribution. In practice benchmarks are often contaminated with training data. Question: how does the result change on strictly held-out benchmarks released AFTER the model was trained?"*
+- WEAK: *"This assumes the training data is representative."* (Trivial; every practitioner says this.)
+- WEAK: *"This assumes the hardware is deterministic."* (Known caveat; not a novelty move.)
+
+**Rules:**
+- Each assumption must be SPECIFIC — a concrete premise, not a generic epistemological caveat.
+- The assumption should be one practitioners TAKE FOR GRANTED — not a known open question the field is already arguing about.
+- The investigable question must be answerable with web_search / academic_search / code_execution — not pure philosophy.
+- Prefer assumptions whose negation would be SURPRISING if true. "What if the activation function is actually not important for generalization" beats "what if the model is overparameterized" (well-studied).
+- If no strong, generative assumption-negation is available, return an empty list. Weak probes pollute the queue; quality over quantity.
+
+Respond with EXACTLY this JSON structure (no other text):
+{{
+  "assumptions": [
+    {{
+      "assumption": "specific unstated premise the field takes for granted",
+      "why_taken_for_granted": "one-sentence on why nobody in the field re-examines this",
+      "implication_if_false": "what would materially change in the field if the assumption turned out to be false",
+      "question": "investigable research question that would test whether the assumption holds"
+    }}
+  ]
+}}"""
+
+
 PREDICTION_CHECK_PROMPT = """You are auditing a previously-registered prediction to see whether reality has caught up with it.
 
 REGISTERED INSIGHT:
