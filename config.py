@@ -80,6 +80,13 @@ class EngineSettings:
     # is young, not because the field ignored them. Triggered on-demand via the
     # Admin tab or `--scan-gaps` — not part of the cycle loop.
     negative_space_min_entries: int = 15
+    # Parallel fan-out — how many investigations / xref-synth+verify pipelines
+    # run concurrently per cycle. Default 1 = fully serial (zero behavior change).
+    # Rate limiters are shared across threads so raising these does not burst
+    # public APIs. Sensible ceilings are 3–4 investigations and 2–3 xref
+    # pipelines; beyond that most time is spent waiting on rate limiters anyway.
+    parallel_investigations: int = 1
+    parallel_xref_pipeline: int = 1
 
 CONFIG_DIR = Path.home() / ".CuriosityEngine"
 CONFIG_PATH = CONFIG_DIR / "engine.toml"
@@ -197,6 +204,8 @@ class CuriosityEngineConfig:
             held_entries_enabled=bool(eng_section.get("held_entries_enabled", True)),
             held_confidence_floor=float(eng_section.get("held_confidence_floor", 0.7)),
             cross_ref_role=str(eng_section.get("cross_ref_role", "")).strip(),
+            parallel_investigations=int(eng_section.get("parallel_investigations", 1)),
+            parallel_xref_pipeline=int(eng_section.get("parallel_xref_pipeline", 1)),
         )
 
         # Resolve cross_ref profile:
@@ -480,6 +489,14 @@ held_confidence_floor = {eng.held_confidence_floor}
 # [models.<name>] section) to offload cross-ref to a faster model while
 # keeping reasoning for investigation. Empty / "primary" = use primary.
 cross_ref_role = "{eng.cross_ref_role}"
+# Parallel fan-out. 1 = fully serial (default, preserves prior behavior).
+# Higher values run multiple investigations / xref-synth+verify pipelines
+# concurrently within a single cycle. Rate limiters are shared process-wide
+# so raising these will NOT burst public APIs — waits are redistributed,
+# wall-clock per cycle drops. Sensible ceilings: 3–4 investigations and
+# 2–3 xref pipelines before rate-limit waits dominate anyway.
+parallel_investigations = {eng.parallel_investigations}
+parallel_xref_pipeline = {eng.parallel_xref_pipeline}
 """
     )
     return header + "\n".join(sections)

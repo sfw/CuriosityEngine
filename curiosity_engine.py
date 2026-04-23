@@ -206,6 +206,8 @@ def main():
         assumption_probe_surprise_threshold=_override(args.assumption_probe_threshold, connection.engine.assumption_probe_surprise_threshold),
         held_entries_enabled=_override(args.held_entries_enabled, connection.engine.held_entries_enabled),
         held_confidence_floor=_override(args.held_confidence_floor, connection.engine.held_confidence_floor),
+        parallel_investigations=connection.engine.parallel_investigations,
+        parallel_xref_pipeline=connection.engine.parallel_xref_pipeline,
     )
 
     engine = CuriosityEngine(config)

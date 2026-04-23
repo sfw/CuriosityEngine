@@ -185,4 +185,10 @@ class EngineConfig:
     negative_space_min_entries: int = 15
     held_entries_enabled: bool = True
     held_confidence_floor: float = 0.7
+    # Parallel fan-out knobs. Default 1 = serial (preserves prior behavior
+    # exactly). Rate limiters in engine/tools/_rate_limits.py are shared
+    # process-wide, so raising these does NOT burst public APIs — the
+    # limiter is the hard guarantee against upstream blocks.
+    parallel_investigations: int = 1
+    parallel_xref_pipeline: int = 1
     connection: "CuriosityEngineConfig | None" = None

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
 
 from journal import Journal
@@ -234,6 +236,43 @@ class CuriosityEngine(
             on_retry=self._on_retry,
         )
 
+    # ── Parallel fan-out helpers ──
+
+    def _investigate_with_tag(self, q):
+        """Wrapper for parallel investigation: prints a short thread-tagged banner
+        so interleaved output from concurrent investigations is legible. In serial
+        mode (parallel_investigations=1) run_cycle calls self.investigate directly
+        and this helper is unused.
+        """
+        tag = threading.current_thread().name
+        print(f"  [{tag}] start: {q.question[:90]}")
+        return self.investigate(q)
+
+    def _xref_pipeline(self, xref):
+        """Run synthesize → verify → register for a single cross-reference.
+
+        Returns (insight_or_none, register_entry_or_none). Each phase is wrapped
+        in its own try/except so a failure in one xref never kills the rest of
+        the cycle. Safe to call from multiple threads: the journal's add_* paths
+        are atomic under _save_lock.
+        """
+        tag = threading.current_thread().name
+        try:
+            insight = self.synthesize(xref)
+        except Exception as e:  # noqa: BLE001
+            print(f"  [{tag}] [cycle continues] synthesize({xref.id}) failed: {type(e).__name__}: {str(e)[:160]}")
+            return None, None
+        if not insight:
+            return None, None
+        if not self.config.verify_insights:
+            return insight, None
+        try:
+            register_entry = self.verify_insight(insight, xref)
+        except Exception as e:  # noqa: BLE001
+            print(f"  [{tag}] [cycle continues] verify({insight.id}) failed: {type(e).__name__}: {str(e)[:160]}")
+            return insight, None
+        return insight, register_entry
+
     # ── Main loop ──
 
     def run_cycle(self) -> dict:
@@ -288,47 +327,76 @@ class CuriosityEngine(
         # Each investigation runs inside its own try/except so a single provider
         # failure (rate limit, timeout, network blip) doesn't propagate up and
         # kill the whole cycle/run. Failed questions are counted and logged.
-        entries = []
+        #
+        # When parallel_investigations > 1, fan out across a ThreadPoolExecutor.
+        # Rate limiters in engine.tools._rate_limits are shared process-wide so
+        # we don't burst upstream APIs — fan-out redistributes wait time rather
+        # than multiplying request volume. Journal writes are thread-safe (see
+        # journal.py: atomic replace under _save_lock).
+        entries: list = []
         investigation_failures = 0
-        for q in investigation_pool[:budget]:
-            try:
-                entry = self.investigate(q)
-                entries.append(entry)
-            except Exception as e:  # noqa: BLE001
-                investigation_failures += 1
-                print(f"  [cycle continues] investigation of {q.id} failed: {type(e).__name__}: {str(e)[:160]}")
+        pool_slice = investigation_pool[:budget]
+        parallel = max(1, int(self.config.parallel_investigations))
+
+        if parallel == 1 or len(pool_slice) <= 1:
+            for q in pool_slice:
+                try:
+                    entries.append(self.investigate(q))
+                except Exception as e:  # noqa: BLE001
+                    investigation_failures += 1
+                    print(f"  [cycle continues] investigation of {q.id} failed: {type(e).__name__}: {str(e)[:160]}")
+        else:
+            workers = min(parallel, len(pool_slice))
+            print(f"  [parallel investigations: {workers} workers across {len(pool_slice)} questions]")
+            with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="inv") as ex:
+                future_to_q = {ex.submit(self._investigate_with_tag, q): q for q in pool_slice}
+                for fut in as_completed(future_to_q):
+                    q = future_to_q[fut]
+                    try:
+                        entries.append(fut.result())
+                    except Exception as e:  # noqa: BLE001
+                        investigation_failures += 1
+                        print(f"  [cycle continues] investigation of {q.id} failed: {type(e).__name__}: {str(e)[:160]}")
 
         xrefs = []
-        insights = []
-        registered = []
+        insights: list = []
+        registered: list = []
         if self.cycle_count % self.config.cross_ref_frequency == 0:
             try:
                 xrefs = self.cross_reference()
             except Exception as e:  # noqa: BLE001
                 print(f"  [cycle continues] cross-reference phase failed: {type(e).__name__}: {str(e)[:160]}")
                 xrefs = []
-            for xref in xrefs:
-                if xref.novelty_score < self.config.novelty_threshold:
-                    continue
-                # Synthesize + verify each xref independently. A failure on one
-                # doesn't block the others.
-                try:
-                    insight = self.synthesize(xref)
-                except Exception as e:  # noqa: BLE001
-                    print(f"  [cycle continues] synthesize({xref.id}) failed: {type(e).__name__}: {str(e)[:160]}")
-                    continue
-                if not insight:
-                    continue
-                insights.append(insight)
-                if not self.config.verify_insights:
-                    continue
-                try:
-                    register_entry = self.verify_insight(insight, xref)
-                except Exception as e:  # noqa: BLE001
-                    print(f"  [cycle continues] verify({insight.id}) failed: {type(e).__name__}: {str(e)[:160]}")
-                    continue
-                if register_entry:
-                    registered.append(register_entry)
+
+            # Filter to novelty-threshold-passing xrefs; each survivor runs the
+            # full synth→verify→register pipeline independently.
+            worthy = [x for x in xrefs if x.novelty_score >= self.config.novelty_threshold]
+            xref_parallel = max(1, int(self.config.parallel_xref_pipeline))
+
+            if xref_parallel == 1 or len(worthy) <= 1:
+                for xref in worthy:
+                    insight, register_entry = self._xref_pipeline(xref)
+                    if insight is not None:
+                        insights.append(insight)
+                    if register_entry is not None:
+                        registered.append(register_entry)
+            else:
+                workers = min(xref_parallel, len(worthy))
+                print(f"  [parallel xref pipeline: {workers} workers across {len(worthy)} candidates]")
+                with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="xref") as ex:
+                    futures = [ex.submit(self._xref_pipeline, x) for x in worthy]
+                    for fut in as_completed(futures):
+                        try:
+                            insight, register_entry = fut.result()
+                        except Exception as e:  # noqa: BLE001
+                            # _xref_pipeline already catches; this is a belt-and-suspenders
+                            # guard so an executor-level failure can't kill the cycle.
+                            print(f"  [cycle continues] xref pipeline crashed: {type(e).__name__}: {str(e)[:160]}")
+                            continue
+                        if insight is not None:
+                            insights.append(insight)
+                        if register_entry is not None:
+                            registered.append(register_entry)
 
         return {
             "cycle": self.cycle_count,
