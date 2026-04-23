@@ -313,24 +313,25 @@ def promote_register_entry(
     return RedirectResponse(f"/journals/{name}?tab=register", status_code=303)
 
 
-@app.post("/journals/{name}/insights/reverify")
-async def insights_reverify(
-    name: str,
-    insight_id: str = Form(""),
-):
-    """Spawn a curiosity_engine.py subprocess to reverify unregistered insights.
+async def _spawn_maintenance_subprocess(
+    journal_path: Path,
+    extra_args: list[str],
+    *,
+    kind: str,
+) -> dict:
+    """Spawn a curiosity_engine.py subprocess for a maintenance operation and
+    register it with the standard run-tracking infrastructure (shared meta/log,
+    top-bar indicator, Runs tab stream).
 
-    Reuses the same run-tracking infrastructure as /run/start so the top-bar
-    indicator lights up and the Runs tab streams the log.
+    `extra_args` is appended after `--journal <path>`. `kind` is stored on the
+    meta file so the UI can distinguish reverify/synth-orphan/cross-ref-only/
+    check-predictions from actual cycle runs.
     """
-    journal_path = _journal_path(name)
     if not journal_path.exists():
         raise HTTPException(404, f"journal not found: {journal_path.name}")
+
     cmd = ["python", "/app/curiosity_engine.py", "--journal", str(journal_path)]
-    if insight_id.strip():
-        cmd += ["--reverify-insight", insight_id.strip()]
-    else:
-        cmd += ["--reverify-insights"]
+    cmd.extend(extra_args)
 
     run_id = uuid.uuid4().hex
     journal_stem = journal_path.stem
@@ -344,7 +345,7 @@ async def insights_reverify(
         "completed_at": None,
         "returncode": None,
         "status": "running",
-        "kind": "reverify",
+        "kind": kind,
     }
     _run_meta_path(journal_stem, run_id).write_text(json.dumps(meta, indent=2))
     log_path = _run_log_path(journal_stem, run_id)
@@ -366,7 +367,103 @@ async def insights_reverify(
         "log_path": log_path,
     }
     asyncio.create_task(_collect_run_output(run_id, proc))
-    return JSONResponse({"run_id": run_id, "cmd": " ".join(cmd), "journal": journal_stem})
+    return {"run_id": run_id, "cmd": " ".join(cmd), "journal": journal_stem}
+
+
+@app.post("/journals/{name}/insights/reverify")
+async def insights_reverify(name: str, insight_id: str = Form("")):
+    """Reverify unregistered insights (or a specific one) under current rules."""
+    extra = ["--reverify-insight", insight_id.strip()] if insight_id.strip() else ["--reverify-insights"]
+    result = await _spawn_maintenance_subprocess(_journal_path(name), extra, kind="reverify")
+    return JSONResponse(result)
+
+
+@app.post("/journals/{name}/maintenance/cross-ref")
+async def maintenance_cross_ref(name: str):
+    """Re-run the cross-reference phase: generates NEW xrefs from the current
+    journal state, synthesizes high-novelty ones into insights, and verifies
+    them. Dedup is handled by the cross-ref phase's existing participant-set
+    check + anti-attractor gate, so it's safe to re-run repeatedly."""
+    result = await _spawn_maintenance_subprocess(
+        _journal_path(name), ["--cross-ref-only"], kind="cross-ref-only",
+    )
+    return JSONResponse(result)
+
+
+@app.post("/journals/{name}/maintenance/synth-orphaned")
+async def maintenance_synth_orphaned(name: str):
+    """Synthesize + verify every cross-reference that doesn't yet have a
+    matching insight (e.g. after a mid-run failure between cross-ref and
+    synthesis). Inherently dedup'd: skips any xref already in an insight's
+    supporting_evidence."""
+    result = await _spawn_maintenance_subprocess(
+        _journal_path(name), ["--synth-orphaned-xrefs"], kind="synth-orphaned",
+    )
+    return JSONResponse(result)
+
+
+@app.post("/journals/{name}/maintenance/reverify")
+async def maintenance_reverify(name: str):
+    """Batch re-verify every unregistered insight. Equivalent to the
+    `Re-verify unregistered` button on the Insights tab."""
+    result = await _spawn_maintenance_subprocess(
+        _journal_path(name), ["--reverify-insights"], kind="reverify",
+    )
+    return JSONResponse(result)
+
+
+@app.post("/journals/{name}/maintenance/check-predictions")
+async def maintenance_check_predictions(name: str, all_pending: str = Form("")):
+    """Check due predictions against current reality (verifier + tools).
+    When `all_pending` is truthy, checks every pending prediction regardless
+    of target_date."""
+    flag = "--check-predictions-all" if all_pending.strip() else "--check-predictions"
+    result = await _spawn_maintenance_subprocess(
+        _journal_path(name), [flag], kind="check-predictions",
+    )
+    return JSONResponse(result)
+
+
+@app.get("/journals/{name}/admin", response_class=HTMLResponse)
+def journal_admin(request: Request, name: str):
+    """Admin tab — consolidated maintenance operations with counters showing
+    how much work each one has to do (so no-ops are visible up front)."""
+    journal = _load_journal(name)
+
+    # Orphaned xrefs: xref.id not in any insight.supporting_evidence.
+    insight_supports: set[str] = set()
+    for i in journal.insights:
+        for sid in (i.get("supporting_evidence") or []):
+            insight_supports.add(sid)
+    threshold = float(_connection().engine.novelty_threshold)
+    orphan_xrefs = [
+        x for x in journal.cross_references
+        if x.get("id") and x.get("id") not in insight_supports
+        and float(x.get("novelty_score", 0.0) or 0.0) >= threshold
+    ]
+
+    # Unregistered insights: insight.id not in any register.insight_id
+    registered_iids = {r.get("insight_id") for r in journal.register}
+    unregistered_insights = [
+        i for i in journal.insights if i.get("id") not in registered_iids
+    ]
+
+    # Predictions due
+    due_predictions = journal.due_predictions(include_overdue=True)
+    pending_predictions = [p for p in journal.predictions if p.get("status") == "pending"]
+
+    # Held entries awaiting settlement
+    held_entries = [r for r in journal.register if r.get("status") == "held"]
+
+    return templates.TemplateResponse(request, "partials/admin.html", {
+        "name": name,
+        "orphan_xref_count": len(orphan_xrefs),
+        "unregistered_insight_count": len(unregistered_insights),
+        "due_prediction_count": len(due_predictions),
+        "pending_prediction_count": len(pending_predictions),
+        "held_count": len(held_entries),
+        "novelty_threshold": threshold,
+    })
 
 
 @app.get("/journals/{name}/predictions", response_class=HTMLResponse)

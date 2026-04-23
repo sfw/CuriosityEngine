@@ -83,6 +83,8 @@ def main():
                         help="Re-run verification on every insight that does NOT already have a register entry — elevates previously-rejected insights under current rules.")
     parser.add_argument("--reverify-insight", type=str, default=None, metavar="INSIGHT_ID",
                         help="Re-verify a single insight by id (e.g. i-abc12345). Overrides --reverify-insights scope.")
+    parser.add_argument("--synth-orphaned-xrefs", action="store_true",
+                        help="Synthesize + verify every cross-reference that doesn't yet have a matching insight (e.g. after a mid-run failure between cross-ref and synthesis).")
     args = parser.parse_args()
 
     if args.list_tools:
@@ -120,6 +122,7 @@ def main():
         or args.embed_backfill
         or args.reverify_insights
         or args.reverify_insight is not None
+        or args.synth_orphaned_xrefs
     )
     if args.domain is None:
         if read_only:
@@ -243,6 +246,8 @@ def main():
         engine.reverify_unregistered_insights(only_ids=[args.reverify_insight])
     elif args.reverify_insights:
         engine.reverify_unregistered_insights()
+    elif args.synth_orphaned_xrefs:
+        engine.synthesize_orphaned_xrefs()
     elif args.show_journal:
         engine.show_journal_summary()
     elif args.cross_ref_only:

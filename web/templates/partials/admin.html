@@ -1,0 +1,207 @@
+{#
+  Admin tab — consolidated maintenance operations. Every action spawns a
+  curiosity_engine.py subprocess via the shared run-tracking infrastructure,
+  so the top-bar dot lights up and the Runs tab streams the log. All ops are
+  inherently dedup'd (skip work that's already done) so repeat clicks are safe.
+#}
+
+<div class="space-y-4">
+  <div>
+    <h3 class="text-sm font-semibold uppercase tracking-wider text-slate-300 mb-1">Admin — maintenance operations</h3>
+    <p class="text-xs text-slate-500 leading-relaxed">
+      Targeted re-runs over existing journal state. Each action is safe to run repeatedly —
+      all operations skip items already handled (insights with register entries, xrefs with
+      insights, predictions already resolved). Each action spawns a subprocess; watch the
+      <a class="text-indigo-400 hover:underline" href="/journals/{{ name }}?tab=runs">Runs tab</a>
+      for the live log.
+    </p>
+  </div>
+
+  {# State overview — counters show what work each action would do right now. #}
+  <div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+    <div class="card rounded-lg px-3 py-2">
+      <div class="text-slate-500 uppercase tracking-wider text-[10px]">Unregistered insights</div>
+      <div class="mt-0.5 text-xl font-semibold {% if unregistered_insight_count %}text-emerald-300{% else %}text-slate-600{% endif %}">{{ unregistered_insight_count }}</div>
+    </div>
+    <div class="card rounded-lg px-3 py-2">
+      <div class="text-slate-500 uppercase tracking-wider text-[10px]">Orphaned xrefs</div>
+      <div class="mt-0.5 text-xl font-semibold {% if orphan_xref_count %}text-amber-300{% else %}text-slate-600{% endif %}">{{ orphan_xref_count }}</div>
+    </div>
+    <div class="card rounded-lg px-3 py-2">
+      <div class="text-slate-500 uppercase tracking-wider text-[10px]">Due predictions</div>
+      <div class="mt-0.5 text-xl font-semibold {% if due_prediction_count %}text-pink-300{% else %}text-slate-600{% endif %}">{{ due_prediction_count }}</div>
+    </div>
+    <div class="card rounded-lg px-3 py-2">
+      <div class="text-slate-500 uppercase tracking-wider text-[10px]">Held entries</div>
+      <div class="mt-0.5 text-xl font-semibold {% if held_count %}text-amber-300{% else %}text-slate-600{% endif %}">{{ held_count }}</div>
+    </div>
+  </div>
+
+  {# Action cards #}
+  <div class="space-y-2">
+
+    {# 1. Re-run cross-reference #}
+    <div class="rounded-xl border border-slate-700/60 bg-slate-900/40 p-4 flex items-start gap-4 flex-wrap">
+      <div class="flex-1 min-w-[240px]">
+        <div class="flex items-center gap-2 mb-1">
+          <svg class="w-4 h-4 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/>
+          </svg>
+          <h4 class="text-sm font-semibold text-slate-200">Re-run cross-reference</h4>
+        </div>
+        <p class="text-xs text-slate-500 leading-relaxed">
+          Runs cross-reference + synthesize + verify on the current journal state. Generates
+          <em>new</em> xrefs only — the LLM sees existing xrefs as priors, the participant-set
+          dedup + anti-attractor gate skip near-duplicates. Useful after a failed run, or when
+          new entries have accumulated since the last cross-ref cycle.
+        </p>
+      </div>
+      <button type="button" data-action="cross-ref" data-confirm="Run cross-reference + synthesis + verification on the current journal state?"
+              class="admin-btn px-3 py-1.5 rounded-lg bg-amber-500/80 hover:bg-amber-500 text-slate-950 text-xs font-medium shadow-lg shadow-amber-900/30 flex items-center gap-1.5 flex-shrink-0">
+        Run cross-reference →
+      </button>
+    </div>
+
+    {# 2. Synthesize orphaned xrefs #}
+    <div class="rounded-xl border border-slate-700/60 bg-slate-900/40 p-4 flex items-start gap-4 flex-wrap">
+      <div class="flex-1 min-w-[240px]">
+        <div class="flex items-center gap-2 mb-1">
+          <svg class="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+          </svg>
+          <h4 class="text-sm font-semibold text-slate-200">Synthesize orphaned xrefs</h4>
+          {% if orphan_xref_count %}
+            <span class="mono text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300">{{ orphan_xref_count }} to do</span>
+          {% else %}
+            <span class="mono text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-500">no-op</span>
+          {% endif %}
+        </div>
+        <p class="text-xs text-slate-500 leading-relaxed">
+          Finds cross-references with novelty_score ≥ {{ '%.2f'|format(novelty_threshold) }} that don't yet have a synthesized
+          insight, and runs synthesis + verification on each. Happens when a run dies between
+          cross-ref and synthesis. Skips xrefs that already have an insight.
+        </p>
+      </div>
+      <button type="button" data-action="synth-orphaned"
+              data-confirm="Synthesize + verify {{ orphan_xref_count }} orphaned cross-reference(s)?"
+              {% if not orphan_xref_count %}disabled{% endif %}
+              class="admin-btn px-3 py-1.5 rounded-lg bg-emerald-500/80 hover:bg-emerald-500 text-slate-950 text-xs font-medium shadow-lg shadow-emerald-900/30 flex items-center gap-1.5 flex-shrink-0 disabled:opacity-40 disabled:cursor-not-allowed">
+        Synthesize orphans →
+      </button>
+    </div>
+
+    {# 3. Re-verify unregistered insights #}
+    <div class="rounded-xl border border-slate-700/60 bg-slate-900/40 p-4 flex items-start gap-4 flex-wrap">
+      <div class="flex-1 min-w-[240px]">
+        <div class="flex items-center gap-2 mb-1">
+          <svg class="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/>
+          </svg>
+          <h4 class="text-sm font-semibold text-slate-200">Re-verify unregistered insights</h4>
+          {% if unregistered_insight_count %}
+            <span class="mono text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300">{{ unregistered_insight_count }} to do</span>
+          {% else %}
+            <span class="mono text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-500">no-op</span>
+          {% endif %}
+        </div>
+        <p class="text-xs text-slate-500 leading-relaxed">
+          Walks every insight that doesn't yet have a register entry and reruns verification
+          under current rules. Useful after the verifier prompt changes (e.g. the
+          premises-vs-synthesis split, or the <span class="mono">inconclusive</span>/held pipeline). Skips insights that
+          are already registered in any lifecycle state.
+        </p>
+      </div>
+      <button type="button" data-action="reverify"
+              data-confirm="Re-verify {{ unregistered_insight_count }} unregistered insight(s)?"
+              {% if not unregistered_insight_count %}disabled{% endif %}
+              class="admin-btn px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium shadow-lg shadow-indigo-900/30 flex items-center gap-1.5 flex-shrink-0 disabled:opacity-40 disabled:cursor-not-allowed">
+        Re-verify insights →
+      </button>
+    </div>
+
+    {# 4. Check due predictions #}
+    <div class="rounded-xl border border-slate-700/60 bg-slate-900/40 p-4 flex items-start gap-4 flex-wrap">
+      <div class="flex-1 min-w-[240px]">
+        <div class="flex items-center gap-2 mb-1">
+          <svg class="w-4 h-4 text-pink-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+          </svg>
+          <h4 class="text-sm font-semibold text-slate-200">Check due predictions</h4>
+          {% if due_prediction_count %}
+            <span class="mono text-[10px] px-1.5 py-0.5 rounded bg-pink-500/20 text-pink-300">{{ due_prediction_count }} due</span>
+          {% else %}
+            <span class="mono text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-500">{{ pending_prediction_count }} pending</span>
+          {% endif %}
+        </div>
+        <p class="text-xs text-slate-500 leading-relaxed">
+          Runs the verifier + tools against every prediction whose target_date has arrived.
+          Updates each to <span class="mono">confirmed</span> / <span class="mono">refuted</span> / <span class="mono">inconclusive</span> / <span class="mono">expired</span>. Held
+          register entries whose attached predictions all resolve <span class="mono">confirmed</span> get auto-promoted
+          to active.
+        </p>
+      </div>
+      <div class="flex gap-2 flex-shrink-0">
+        <button type="button" data-action="check-predictions"
+                data-confirm="Check {{ due_prediction_count }} due prediction(s)?"
+                {% if not due_prediction_count %}disabled{% endif %}
+                class="admin-btn px-3 py-1.5 rounded-lg bg-pink-600 hover:bg-pink-500 text-white text-xs font-medium shadow-lg shadow-pink-900/30 disabled:opacity-40 disabled:cursor-not-allowed">
+          Check due →
+        </button>
+        <button type="button" data-action="check-predictions-all"
+                data-confirm="Check ALL {{ pending_prediction_count }} pending prediction(s), regardless of target_date?"
+                {% if not pending_prediction_count %}disabled{% endif %}
+                class="admin-btn px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 text-xs disabled:opacity-40 disabled:cursor-not-allowed">
+          Check all pending
+        </button>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="text-[11px] text-slate-600 mono pt-2 border-t border-slate-800">
+    All operations spawn subprocesses through <span class="text-slate-500">/journals/{name}/maintenance/*</span> — they share the
+    live-log infrastructure with normal runs, so you'll see the top-bar indicator light up and
+    can watch the stream in the Runs tab.
+  </div>
+</div>
+
+<script>
+  (() => {
+    const endpoints = {
+      "cross-ref":            "/journals/{{ name }}/maintenance/cross-ref",
+      "synth-orphaned":       "/journals/{{ name }}/maintenance/synth-orphaned",
+      "reverify":             "/journals/{{ name }}/maintenance/reverify",
+      "check-predictions":    "/journals/{{ name }}/maintenance/check-predictions",
+      "check-predictions-all":"/journals/{{ name }}/maintenance/check-predictions",
+    };
+
+    document.querySelectorAll(".admin-btn").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        if (btn.disabled) return;
+        const action = btn.dataset.action;
+        const url = endpoints[action];
+        if (!url) return;
+        const confirmMsg = btn.dataset.confirm;
+        if (confirmMsg && !confirm(confirmMsg)) return;
+
+        const origText = btn.innerHTML;
+        btn.disabled = true;
+        btn.innerHTML = "Starting…";
+
+        const body = new FormData();
+        if (action === "check-predictions-all") body.set("all_pending", "1");
+
+        try {
+          const res = await fetch(url, { method: "POST", body });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          // Navigate to Runs tab so the user can watch the stream.
+          window.location.href = "/journals/{{ name }}?tab=runs";
+        } catch (err) {
+          btn.innerHTML = origText;
+          btn.disabled = false;
+          alert("Failed to start: " + err.message);
+        }
+      });
+    });
+  })();
+</script>

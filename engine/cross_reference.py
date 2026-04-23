@@ -150,6 +150,69 @@ class CrossReferenceMixin:
 
         return xrefs
 
+    def synthesize_orphaned_xrefs(self) -> dict:
+        """Synthesize + verify any cross-reference that doesn't yet have a matching
+        Insight — e.g. because a prior run died between cross-ref and synthesis.
+
+        Dedup: an xref is "orphaned" iff its id does not appear in any
+        Insight.supporting_evidence. Already-synthesized xrefs are skipped.
+        Insights created here flow through the normal verify_insight() gate, so
+        the register / held / reject paths apply exactly as in a fresh run.
+        """
+        from models import CrossReference as _CR
+
+        existing_supports: set[str] = set()
+        for i in self.journal.insights:
+            for sid in (i.get("supporting_evidence") or []):
+                existing_supports.add(sid)
+
+        orphans: list[dict] = []
+        for x in self.journal.cross_references:
+            xid = x.get("id")
+            if not xid or xid in existing_supports:
+                continue
+            if float(x.get("novelty_score", 0.0) or 0.0) < self.config.novelty_threshold:
+                continue  # wasn't going to be synthesized originally; skip
+            orphans.append(x)
+
+        print(f"\n--- SYNTHESIZING {len(orphans)} ORPHANED CROSS-REFERENCE(S) ---")
+        stats = {"synthesized": 0, "registered": 0, "held": 0, "rejected": 0, "errors": 0}
+
+        for x_dict in orphans:
+            xref_fields = set(_CR.__dataclass_fields__)
+            xref = _CR(**{k: v for k, v in x_dict.items() if k in xref_fields})
+            try:
+                insight = self.synthesize(xref)
+            except Exception as e:  # noqa: BLE001
+                print(f"  [error] {xref.id}: {type(e).__name__}: {e}")
+                stats["errors"] += 1
+                continue
+            if insight is None:
+                continue
+            stats["synthesized"] += 1
+
+            if not self.config.verify_insights:
+                continue
+            try:
+                register_entry = self.verify_insight(insight, xref)
+            except Exception as e:  # noqa: BLE001
+                print(f"  [error verify] {insight.id}: {type(e).__name__}: {e}")
+                stats["errors"] += 1
+                continue
+            if register_entry is None:
+                stats["rejected"] += 1
+            elif register_entry.status == "held":
+                stats["held"] += 1
+            else:
+                stats["registered"] += 1
+
+        print(
+            f"\nOrphan-synth complete: synthesized={stats['synthesized']}  "
+            f"registered={stats['registered']}  held={stats['held']}  "
+            f"rejected={stats['rejected']}  errors={stats['errors']}"
+        )
+        return stats
+
     def synthesize(self, xref: CrossReference) -> Optional[Insight]:
         print("\n--- SYNTHESIZING INSIGHT ---")
 
