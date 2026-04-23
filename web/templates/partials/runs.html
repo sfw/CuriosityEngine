@@ -11,51 +11,88 @@
 {% endmacro %}
 
 {% if runs %}
-  <div class="mb-3 text-xs text-slate-500">
-    {{ runs|length }} run{{ '' if runs|length == 1 else 's' }} on this journal · most recent first
+  {# Split runs: successful + in-flight surface directly; failed runs collapse behind a disclosure. #}
+  {% set active_and_ok = runs | rejectattr('status', 'equalto', 'failed') | list %}
+  {% set failed = runs | selectattr('status', 'equalto', 'failed') | list %}
+
+  <div class="mb-3 text-xs text-slate-500 flex items-center gap-3 flex-wrap">
+    <span>{{ runs|length }} run{{ '' if runs|length == 1 else 's' }} on this journal · most recent first</span>
+    {% if failed %}
+      <span class="text-slate-600">·</span>
+      <span>
+        <span class="text-slate-400">{{ active_and_ok|length }}</span> active/complete,
+        <span class="text-rose-400">{{ failed|length }}</span> failed (collapsed below)
+      </span>
+    {% endif %}
   </div>
 
-  <div class="space-y-2">
-    {% for r in runs %}
-      {% set is_active = r.run_id in active_ids %}
-      <details class="rounded-xl border {% if is_active %}border-amber-500/40 bg-amber-500/5 animate-pulse-border
-                      {% elif r.status == 'failed' %}border-rose-500/40 bg-rose-500/5
-                      {% else %}border-slate-700/60 bg-slate-900/30{% endif %}"
-               {% if is_active and loop.first %}open{% endif %}>
-        <summary class="p-3 cursor-pointer hover:bg-slate-800/30 rounded-xl">
-          <div class="flex items-center justify-between gap-3 flex-wrap">
-            <div class="flex items-center gap-2 flex-wrap">
-              {{ status_chip(r.status) }}
-              <span class="mono text-xs text-slate-400 ce-localtime" data-utc="{{ r.started_at }}"
-                    title="{{ r.started_at }}">
-                {{ r.started_at[:10] }} {{ r.started_at[11:19] }}
+  {% macro run_card(r, is_first=False) %}
+    {% set is_active = r.run_id in active_ids %}
+    <details class="rounded-xl border {% if is_active %}border-amber-500/40 bg-amber-500/5 animate-pulse-border
+                    {% elif r.status == 'failed' %}border-rose-500/40 bg-rose-500/5
+                    {% else %}border-slate-700/60 bg-slate-900/30{% endif %}"
+             {% if is_active and is_first %}open{% endif %}>
+      <summary class="p-3 cursor-pointer hover:bg-slate-800/30 rounded-xl">
+        <div class="flex items-center justify-between gap-3 flex-wrap">
+          <div class="flex items-center gap-2 flex-wrap">
+            {{ status_chip(r.status) }}
+            <span class="mono text-xs text-slate-400 ce-localtime" data-utc="{{ r.started_at }}"
+                  title="{{ r.started_at }}">
+              {{ r.started_at[:10] }} {{ r.started_at[11:19] }}
+            </span>
+            <span class="text-sm text-slate-300">
+              {{ r.cycles or '?' }} cycle{{ '' if (r.cycles or 0) == 1 else 's' }}
+            </span>
+            {% if r.returncode is not none %}
+              <span class="mono text-xs {% if r.returncode == 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">
+                exit {{ r.returncode }}
               </span>
-              <span class="text-sm text-slate-300">
-                {{ r.cycles or '?' }} cycle{{ '' if (r.cycles or 0) == 1 else 's' }}
-              </span>
-              {% if r.returncode is not none %}
-                <span class="mono text-xs {% if r.returncode == 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">
-                  exit {{ r.returncode }}
-                </span>
-              {% endif %}
-            </div>
-            <span class="mono text-[10px] text-slate-600">{{ r.run_id[:12] }}</span>
+            {% endif %}
           </div>
-          {% if r.domain %}
-            <div class="mt-1 text-xs text-slate-500">
-              <span class="text-slate-600">domain:</span> {{ r.domain }}
-            </div>
-          {% endif %}
-        </summary>
-        <div class="border-t border-slate-700/40"
-             hx-get="/journals/{{ name }}/runs/{{ r.run_id }}"
-             hx-trigger="toggle from:closest details once"
-             hx-swap="innerHTML">
-          <div class="p-4 text-xs text-slate-500">Loading run log…</div>
+          <span class="mono text-[10px] text-slate-600">{{ r.run_id[:12] }}</span>
         </div>
-      </details>
+        {% if r.domain %}
+          <div class="mt-1 text-xs text-slate-500">
+            <span class="text-slate-600">domain:</span> {{ r.domain }}
+          </div>
+        {% endif %}
+      </summary>
+      <div class="border-t border-slate-700/40"
+           hx-get="/journals/{{ name }}/runs/{{ r.run_id }}"
+           hx-trigger="toggle from:closest details once"
+           hx-swap="innerHTML">
+        <div class="p-4 text-xs text-slate-500">Loading run log…</div>
+      </div>
+    </details>
+  {% endmacro %}
+
+  <div class="space-y-2">
+    {% for r in active_and_ok %}
+      {{ run_card(r, loop.first) }}
     {% endfor %}
   </div>
+
+  {% if failed %}
+    <details class="mt-4 rounded-xl border border-rose-500/20 bg-rose-500/5 overflow-hidden">
+      <summary class="px-3 py-2 cursor-pointer hover:bg-rose-500/10 flex items-center justify-between text-xs">
+        <span class="flex items-center gap-2">
+          <svg class="w-4 h-4 text-rose-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01M5 19h14a2 2 0 001.84-2.75L13.74 4a2 2 0 00-3.48 0L3.16 16.25A2 2 0 005 19z"/>
+          </svg>
+          <span class="uppercase tracking-wider font-semibold text-rose-300">
+            {{ failed|length }} failed run{{ '' if failed|length == 1 else 's' }}
+          </span>
+          <span class="text-slate-500 normal-case tracking-normal">— click to expand</span>
+        </span>
+        <span class="text-slate-600 normal-case tracking-normal">kept for debugging / log inspection</span>
+      </summary>
+      <div class="p-3 space-y-2 border-t border-rose-500/20">
+        {% for r in failed %}
+          {{ run_card(r) }}
+        {% endfor %}
+      </div>
+    </details>
+  {% endif %}
 
   <script>
     (() => {
