@@ -4,7 +4,7 @@ A proof-of-concept research loop that generates its own questions from self-asse
 
 The engine is designed to be **driven iteratively**: you set a focus, run cycles, inspect the knowledge graph it builds, inject your own questions or reject shallow claims, and continue. It won't produce novel ideas on its own; with steering it will surface candidates that survive real adversarial scrutiny.
 
-> **Status**: proof of concept. Phases 1–4 and 6 of the roadmap are implemented; Phase 5 (multi-agent disagreement) is planned. Knowledge graph + semantic retrieval + human review loop + containerized runtime + cross-domain analog probe + premises/synthesis verification split are in. See [Honest limitations](#honest-limitations) for what this system genuinely *can't* do.
+> **Status**: proof of concept. Phases 1–4 and 6 of the roadmap are implemented; Phase 5 (multi-agent disagreement) is planned. Knowledge graph + semantic retrieval + human review loop + containerized runtime + cross-domain analog probe + premises/synthesis verification split + inconclusive/held pipeline + per-phase model routing + challenged-hedge guardrail + admin maintenance operations are all in. See [Honest limitations](#honest-limitations) for what this system genuinely *can't* do.
 
 ---
 
@@ -177,12 +177,20 @@ Held entries can be promoted to active three ways:
 1. The prompt explicitly rules this out and requires that `verification_summary` name the specific epistemic gap when verdict is `inconclusive`.
 2. `engine/verification.py` pattern-matches the summary for gap-naming phrases (`cannot access`, `paywalled`, `pre-publication`, `requires an experiment`, etc.). If none match, the engine downgrades `inconclusive` → `challenged` and logs the downgrade.
 
+**9c. The challenged-hedge guardrail.** LLMs (especially RLHF-trained ones) have a strong hedge reflex — they instinctively reach for `challenged` rather than `validated` even when their own decomposition unambiguously signals new synthesis (`novelty_type=new_synthesis`, `premises_supported=TRUE`, `synthesis_findable=FALSE`, confidence ≥ floor). The prompt explicitly tells the verifier not to hedge in that configuration, but the hedge reflex survives prompt instructions.
+
+The engine adds a code-level guardrail: when the decomposition is unambiguous but verdict is `challenged`, it inspects `reasoning_flaws` for markers of a **substantive** synthesis-level critique (`leap`, `does not show`, `overextend`, `not established`, `too strong`, `conflat`, `viable alternative`, `assumes transfer`, `transfers to`, `treated as if`, `cross-model interpretation`, `contradicts`, and ~40 more). If none of the flaws match a substantive marker, the engine **upgrades the verdict to `validated`** and logs `[guardrail] verdict=challenged but decomposition is unambiguous ... — upgrading to validated.` If any flaw matches a substantive marker, the challenged verdict is respected.
+
+The logic inverts the default: assume the verifier is hedging unless it can name a specific substantive critique. This is defensible because (a) the prompt explicitly instructs the verifier to name specific flaws in that field, (b) empty or ingredient-only reasoning_flaws signal a mere hedge, and (c) the decomposition fields (`premises_supported`, `synthesis_findable`, `novelty_type`) are answering narrower questions that the LLM fills out more reliably than the overall verdict. The guardrail's visibility logs let a human inspect when it fires and tune the marker list.
+
 **Re-reviewing previously-unregistered insights.** Because verifier prompts and rules evolve, you can replay verification over every insight that doesn't yet have a register entry:
 
 - CLI: `curiosity_engine.py --reverify-insights` (all unregistered) or `--reverify-insight <id>` (targeted).
-- Web: a **Re-verify unregistered** button on the Insights tab spawns the same subprocess; the run appears in the Runs tab with streaming logs.
+- Web: the **Admin** tab has a Re-verify unregistered insights action that spawns the same subprocess; the run appears in the Runs tab with streaming logs.
 
 Each candidate's verification flows through the current gate — so an insight that was rejected under an older verifier schema may now land as `active` (if it's a `new_synthesis`) or `held` (if the verifier genuinely can't reach it). Insights that already have a register entry (any status) are skipped.
+
+The Admin tab also surfaces three other maintenance operations — re-run cross-reference (generates new xrefs from the current journal state), synthesize orphaned xrefs (recovers from runs that died between cross-ref and synthesis), and check due predictions (resolves pending predictions whose target_date has arrived). Every action is idempotent: it skips items that are already processed, so re-running is always safe.
 
 **10. Prior-human-rejection feedback.** Every human rejection (`--review-register` with a required reason) gets fed into future verifier prompts as *"patterns to avoid repeating — reasons a domain expert rejected previous register entries."* The verifier uses this to apply the same skepticism to candidates with similar weaknesses. A user's taste becomes a learned bar over time.
 
@@ -325,8 +333,10 @@ Pages:
   - *Focus & Queue*: set focus, add/clear user-directed questions, semantic search. Queue items display their `priority` chip and are sorted priority-descending — highest-priority questions are investigated first on the next run.
   - *Graph*: interactive force-directed graph (sigma.js) with node-kind coloring and click-to-detail. Clicking any node fetches a full-text HTML fragment with no text cropping — covers all 7 node kinds (entry / xref / insight / register / prediction / source / tag).
   - *Runs*: per-journal run history with status chips (running / complete / failed); click to expand the full log; live SSE reconnect for any still-streaming run.
-- **Run** (`/run`) — form to start a cycle, live SSE stream of output. Domain is pre-filled from the journal's `last_domain` after the first run.
-- **Settings** (`/settings`) — read-only view of `engine.toml`, env keys, retry policy, engine settings.
+  - *Admin*: consolidated maintenance operations with work-to-do counters (unregistered insights / orphaned xrefs / due predictions / held entries). Buttons for: re-run cross-reference (with optional `cross_ref_window` + model-role overrides), synthesize orphaned xrefs (recover from mid-run crashes between cross-ref and synthesis), re-verify unregistered insights under current rules, and check due predictions. Each action spawns a subprocess through the standard run-tracking infrastructure — the top-bar indicator lights up, the log streams in the Runs tab.
+- **Run** (`/run`) — form to start a cycle, live SSE stream of output. Domain is pre-filled from the journal's `last_domain` after the first run. Cycles input is stepped in multiples of `cross_ref_frequency` so a run never wastes an investigation on a cycle that doesn't reach cross-ref. Collapsed "Run overrides" panel exposes every engine knob for per-invocation override (dirty-detected server-side so unchanged values don't bloat the command line).
+- **Settings** (`/settings`) — edit `engine.toml` in-place: model profiles (provider / name / api_key / base_url / max_tokens / temperature / **timeout_seconds**), retry policy, and every engine knob including `cross_ref_role`, analog probe enable + threshold, held pipeline enable + confidence floor. Save is non-destructive — any additional `[models.<name>]` profiles you've added manually are preserved through round-trips. Config is re-read on every request + every subprocess spawn, so saves apply immediately with no restart.
+- **Top bar** — activity indicator: dim emerald dot when idle, amber pulsing dot with a soft glow when one or more runs are streaming. Clicking the amber dot drops you onto the active journal's Runs tab.
 
 The web service shares the same `./data/` journal mount and `~/.CuriosityEngine/engine.toml` as the CLI, so both can be used in parallel. Bound to `127.0.0.1` only — no auth, single-user.
 
@@ -412,11 +422,33 @@ python curiosity_engine.py --find-similar "query" --top-k 10
 python curiosity_engine.py --check-predictions         # check due predictions (uses verifier + tools)
 python curiosity_engine.py --check-predictions-all     # force-review every pending prediction
 
-# Model overrides for a single run (keeps TOML provider/endpoint intact)
-python curiosity_engine.py --cycles 3 --primary-model claude-sonnet-4-6 --verifier-model gpt-5.1
+# Maintenance — safe to re-run (all operations skip already-handled items)
+python curiosity_engine.py --reverify-insights         # re-verify every unregistered insight under current verifier rules
+python curiosity_engine.py --reverify-insight i-abc    # re-verify a single insight by id
+python curiosity_engine.py --synth-orphaned-xrefs      # synth + verify xrefs that lack a matching insight (recovery)
+
+# Model overrides for a single run
+# Name-only override (keeps profile's provider/endpoint/key — use when the endpoint supports multiple models):
+python curiosity_engine.py --cycles 3 --primary-model gpt-5.1 --verifier-model gpt-5.4
+
+# Role-based swap (copies the WHOLE profile — provider + base_url + key + name — into the slot):
+python curiosity_engine.py --cycles 3 --primary-role verifier       # use verifier profile as primary for this run
+python curiosity_engine.py --cross-ref-only --cross-ref-role verifier  # offload cross-ref to verifier profile
+
+# Per-run engine-knob overrides (all optional; default=None means "inherit from engine.toml")
+python curiosity_engine.py --cycles 6 \
+    --cross-ref-window 10 \
+    --investigations-per-cycle 2 \
+    --novelty-threshold 0.65 \
+    --register-confidence-floor 0.6 \
+    --verify-insights \
+    --analog-probe-enabled \
+    --analog-probe-threshold 0.4 \
+    --held-entries-enabled \
+    --held-confidence-floor 0.7
 ```
 
-Cross-reference runs every `cross_ref_frequency` cycles (default 3). On those cycles, high-novelty xrefs (`>= novelty_threshold`, default 0.7) get synthesized into insights, which then face the adversarial verifier. Only those with verdict `validated` AND `verified_confidence >= register_confidence_floor` (default 0.6) enter the register.
+Cross-reference runs every `cross_ref_frequency` cycles (default 3). On those cycles, high-novelty xrefs (`>= novelty_threshold`, default 0.7) get synthesized into insights, which then face the adversarial verifier. Only those with verdict `validated` AND `premises_supported` AND NOT `synthesis_findable` AND `verified_confidence >= register_confidence_floor` (default 0.6) enter the register as `active`. Verdict `inconclusive` with `premises_supported` and `verified_confidence >= held_confidence_floor` enters as `held`.
 
 ---
 
@@ -432,12 +464,22 @@ name = "claude-sonnet-4-6"
 # base_url = "..."                    # only for non-default endpoints
 max_tokens = 4096
 investigation_max_tokens = 8192
+temperature = 1.0                     # 1.0 for reasoning models (Kimi K2.x, GPT-5 thinking, o-series)
+timeout_seconds = 300.0               # per-request HTTP timeout; raise for reasoning models on big prompts
 
 [models.verifier]                     # optional; defaults to primary if omitted
 provider = "openai_compat"
 name = "gpt-5.1"
 base_url = "https://api.openai.com/v1"
 # api_key = "..."
+timeout_seconds = 300.0
+
+# Optional: any number of additional [models.<name>] sections define extra profiles
+# that can be referenced by role-based CLI flags and the [engine].cross_ref_role setting.
+# [models.cross_ref]
+# provider = "openai_compat"
+# name = "gpt-5.1"
+# ... (same schema as primary/verifier)
 
 [retry]
 max_attempts = 5
@@ -455,6 +497,13 @@ cross_ref_frequency = 3
 novelty_threshold = 0.7
 register_confidence_floor = 0.6
 verify_insights = true
+# Per-phase model routing: which configured profile handles the cross-reference pass.
+# Defaults to primary. Set to "verifier" (or any custom role name matching a
+# [models.<name>] section) to offload cross-ref to a faster non-reasoning model
+# while keeping reasoning on investigation/synthesis. Recommended when primary is
+# a reasoning model (Kimi K2.x, o-series) — cross-ref is one-shot pattern matching
+# over a large context that doesn't benefit from extended thinking.
+cross_ref_role = ""
 # Cross-domain analog probe — on high-surprise entries, ask the primary model which
 # DISTANT fields have structurally analogous mechanisms; enqueue the translated
 # questions at high priority. Set enabled=false or raise the threshold to disable.
@@ -494,6 +543,13 @@ Defaults live on `EngineSettings` (in `config.py`, persisted under `[engine]` in
 - `verify_insights = True` — toggle cross-model verification.
 - `analog_probe_enabled = True` — run the cross-domain analog probe on high-surprise entries.
 - `analog_probe_surprise_threshold = 0.5` — minimum surprise_delta required to trigger the analog probe (higher = more selective).
+- `cross_ref_role = ""` — per-phase model routing for cross-reference. Empty = use `primary`. Set to `"verifier"` or any custom role matching a `[models.<name>]` section to offload cross-ref to a faster non-reasoning model.
+- `held_entries_enabled = True` — toggle the inconclusive → held pipeline.
+- `held_confidence_floor = 0.7` — minimum verifier confidence for a held register entry (usually tighter than active's floor).
+
+Per-profile setting:
+
+- `timeout_seconds = 300.0` — per-request HTTP timeout in seconds. Raise for reasoning-mode models (Kimi K2.x, o-series, GPT-5 thinking, Claude extended thinking) that spend 60–180s "thinking" before streaming the first token on large prompts. Set per profile: `[models.primary].timeout_seconds`, `[models.verifier].timeout_seconds`, etc.
 
 ---
 
@@ -671,6 +727,13 @@ What this **is** good for:
 | J | Source normalization (arXiv/DOI/title → canonical id) | **done** |
 | K | `inconclusive` verdict + held register pipeline + settlement plans | **done** |
 | L | Re-verification of previously-unregistered insights under current rules (CLI + web button) | **done** |
+| M | Admin tab — consolidated maintenance operations (cross-ref / synth-orphans / reverify / check-predictions) with work-to-do counters | **done** |
+| N | Orphaned-xref recovery (`--synth-orphaned-xrefs`) — salvages state when a run dies between cross-ref and synthesis | **done** |
+| O | Per-phase model routing (`[engine].cross_ref_role` + `[models.<name>]` extras) — offload cross-ref to a faster model | **done** |
+| P | Role-based profile swap (`--primary-role` / `--verifier-role` / `--cross-ref-role`) — copies whole profile, not just model name | **done** |
+| Q | Challenged-hedge guardrail — code-level upgrade from `challenged` to `validated` when decomposition is unambiguous and reasoning_flaws contain no substantive markers | **done** |
+| R | Configurable per-request HTTP timeout (`timeout_seconds` on each profile, default 300s) — handles reasoning-mode first-token latency | **done** |
+| — | Controlled parallelism — parallel investigation fan-out + synth fan-out + verify fan-out with shared per-tool rate limiters | backlog |
 | — | Foreign-lens phase (scheduled cross-domain creativity burst) | backlog |
 | — | Insight de-duplication via embeddings (drop near-duplicate syntheses) | backlog |
 | — | GPU-backed experimental executor | backlog |
