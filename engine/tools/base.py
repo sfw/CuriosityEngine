@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import importlib
 import pkgutil
+import random
 import threading
 import time
 from abc import ABC, abstractmethod
@@ -39,21 +40,30 @@ class RateLimiter:
     - rate: tokens refilled per second (e.g. 1/3 = "1 request every 3 seconds")
     - burst: max tokens the bucket can hold (1 = strict pacing; 5 = allow small
       clusters, recover later)
+    - jitter: max extra seconds of uniform-random delay added AFTER token
+      acquisition. Breaks fixed-interval request patterns so we don't look
+      like a bot to rate-limited endpoints. 0.0 disables. e.g. jitter=1.0
+      with rate=1/3s gives effective pacing of 3.0–4.0s between calls.
     - name: for debug logging when a wait occurs
     """
 
-    def __init__(self, rate: float, burst: int = 1, name: str = ""):
+    def __init__(self, rate: float, burst: int = 1, jitter: float = 0.0, name: str = ""):
         if rate <= 0:
             raise ValueError("rate must be positive")
+        if jitter < 0:
+            raise ValueError("jitter must be non-negative")
         self._rate = float(rate)
         self._capacity = max(1, int(burst))
+        self._jitter = float(jitter)
         self._tokens = float(self._capacity)
         self._last = time.monotonic()
         self._cond = threading.Condition()
         self.name = name or f"limiter-{id(self):x}"
 
     def acquire(self, tokens: int = 1) -> float:
-        """Block until `tokens` are available. Returns seconds waited."""
+        """Block until `tokens` are available, then sleep a random jitter.
+        Returns total seconds waited (token-wait + jitter).
+        """
         waited = 0.0
         with self._cond:
             while True:
@@ -64,7 +74,7 @@ class RateLimiter:
                     self._last = now
                 if self._tokens >= tokens:
                     self._tokens -= tokens
-                    return waited
+                    break
                 needed = tokens - self._tokens
                 wait = needed / self._rate
                 # Cap any single wait to avoid pathological long blocks; the
@@ -72,9 +82,19 @@ class RateLimiter:
                 wait = min(wait, 5.0) + 0.01
                 waited += wait
                 self._cond.wait(timeout=wait)
+        # Jitter sleep OUTSIDE the condition lock — don't block other threads
+        # from evaluating their own token state while we're fuzzing.
+        if self._jitter > 0:
+            fuzz = random.uniform(0, self._jitter)
+            time.sleep(fuzz)
+            waited += fuzz
+        return waited
 
     def __repr__(self):
-        return f"RateLimiter(name={self.name!r}, rate={self._rate}, burst={self._capacity})"
+        return (
+            f"RateLimiter(name={self.name!r}, rate={self._rate}, "
+            f"burst={self._capacity}, jitter={self._jitter})"
+        )
 
 
 class HostRateLimiter:
@@ -82,9 +102,10 @@ class HostRateLimiter:
     Use for endpoints where throttling is per-host (web_fetch, for example).
     """
 
-    def __init__(self, rate: float, burst: int = 1, name: str = ""):
+    def __init__(self, rate: float, burst: int = 1, jitter: float = 0.0, name: str = ""):
         self._rate = rate
         self._burst = burst
+        self._jitter = jitter
         self._name = name
         self._limiters: dict[str, RateLimiter] = {}
         self._lock = threading.Lock()
@@ -94,7 +115,7 @@ class HostRateLimiter:
             limiter = self._limiters.get(host)
             if limiter is None:
                 limiter = RateLimiter(
-                    rate=self._rate, burst=self._burst,
+                    rate=self._rate, burst=self._burst, jitter=self._jitter,
                     name=f"{self._name or 'host'}:{host}",
                 )
                 self._limiters[host] = limiter

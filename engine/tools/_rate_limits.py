@@ -24,6 +24,14 @@ Rates are sized for politeness, not for peak legal throughput:
 If you're seeing frequent "rate limited" tool errors in the log, raise the
 burst (more tolerance for clusters) before raising the rate. Raising the rate
 risks actual blocks; raising burst just lets short spikes through.
+
+Every limiter also carries a `jitter` — max seconds of uniform-random delay
+added AFTER token acquisition. Without jitter, every request from this engine
+lands on the same fixed interval (exactly 3.00s between arXiv calls, etc.),
+which is a trivial bot fingerprint. With jitter, pacing becomes 3.0–4.0s
+(or whatever window), breaking the regularity. Jitter is generous on
+throttle-prone endpoints (arxiv, semantic_scholar) and minimal on generous
+ones (crossref).
 """
 
 from __future__ import annotations
@@ -32,31 +40,37 @@ from engine.tools.base import HostRateLimiter, RateLimiter
 
 # --- Academic endpoints --------------------------------------------------------
 # arXiv: 1 req / 3s. Hard-documented in their user manual.
-ARXIV = RateLimiter(rate=1 / 3.0, burst=1, name="arxiv")
+# Jitter widens effective pacing to 3.0–4.0s.
+ARXIV = RateLimiter(rate=1 / 3.0, burst=1, jitter=1.0, name="arxiv")
 
 # Semantic Scholar unauthenticated: 100 req / 5min ≈ 0.33 req/s. 1/3s pacing
 # with burst=2 gives us clean handling of a typical multi-query academic_search.
-SEMANTIC_SCHOLAR = RateLimiter(rate=1 / 3.0, burst=2, name="semantic_scholar")
+# Jitter 1.0s — effective 3.0–4.0s between depletion refills.
+SEMANTIC_SCHOLAR = RateLimiter(rate=1 / 3.0, burst=2, jitter=1.0, name="semantic_scholar")
 
 # Crossref polite pool is 50+ req/s; we cap at 5 for safety + burst=10 so a
-# whole academic_search call can fire in one shot.
-CROSSREF = RateLimiter(rate=5.0, burst=10, name="crossref")
+# whole academic_search call can fire in one shot. Small jitter — this endpoint
+# is generous, we just want to break perfect uniformity.
+CROSSREF = RateLimiter(rate=5.0, burst=10, jitter=0.2, name="crossref")
 
 # --- Web-search scrapers -------------------------------------------------------
 # Note: engine/tools/web_search.py has its own per-host `_PaceGate` that
 # handles DuckDuckGo and Bing. _PaceGate enforces the same ~2s interval AND
 # implements cooldown-on-429 (a feature the generic RateLimiter doesn't have).
 # Leaving that tool-local; the limiters below are unused until we unify.
-DUCKDUCKGO = RateLimiter(rate=0.5, burst=1, name="duckduckgo")  # (unused — see web_search._PaceGate)
-BING = RateLimiter(rate=0.5, burst=1, name="bing")              # (unused — see web_search._PaceGate)
+DUCKDUCKGO = RateLimiter(rate=0.5, burst=1, jitter=1.0, name="duckduckgo")  # (unused — see web_search._PaceGate)
+BING = RateLimiter(rate=0.5, burst=1, jitter=1.0, name="bing")              # (unused — see web_search._PaceGate)
 
 # --- Generic HTTP fetching -----------------------------------------------------
 # web_fetch is per-host so busy hosts (e.g. arxiv.org for bulk paper fetches)
 # don't get hammered, while other hosts remain snappy.
-WEB_FETCH = HostRateLimiter(rate=3.0, burst=5, name="web_fetch")
+# Jitter 0.3s — web_fetch already fans out across hosts, but within a host
+# we still want a little fuzz.
+WEB_FETCH = HostRateLimiter(rate=3.0, burst=5, jitter=0.3, name="web_fetch")
 
 # --- Archive / reference endpoints --------------------------------------------
 # Internet Archive + Wikimedia Commons + Openverse — polite defaults.
-ARCHIVE_ORG = RateLimiter(rate=2.0, burst=4, name="archive.org")
-WIKIMEDIA = RateLimiter(rate=3.0, burst=5, name="wikimedia")
-OPENVERSE = RateLimiter(rate=2.0, burst=4, name="openverse")
+# Jitter is a modest fraction of the nominal interval.
+ARCHIVE_ORG = RateLimiter(rate=2.0, burst=4, jitter=0.5, name="archive.org")
+WIKIMEDIA = RateLimiter(rate=3.0, burst=5, jitter=0.3, name="wikimedia")
+OPENVERSE = RateLimiter(rate=2.0, burst=4, jitter=0.5, name="openverse")

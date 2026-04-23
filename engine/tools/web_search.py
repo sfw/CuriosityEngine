@@ -12,6 +12,7 @@ not as robust as an API.
 
 from __future__ import annotations
 
+import random
 import threading
 import time
 from dataclasses import dataclass
@@ -28,6 +29,10 @@ _USER_AGENT = (
     "Chrome/124.0.0.0 Safari/537.36"
 )
 _MIN_INTERVAL = 2.0
+# Uniform-random extra wait added on every gate — breaks the fixed 2.00s
+# drumbeat that would otherwise fingerprint us to DDG/Bing. Effective pacing:
+# 2.0–3.0s between requests per host.
+_JITTER_MAX = 1.0
 _COOLDOWN_AFTER_FAIL = 60.0
 _TIMEOUT = 20.0
 
@@ -56,6 +61,11 @@ class _PaceGate:
             time.sleep(cooldown - now)
         elif now - last < _MIN_INTERVAL:
             time.sleep(_MIN_INTERVAL - (now - last))
+        # Jitter on every gate — extra 0–1.0s uniform random. Breaks the
+        # fixed 2.00s cadence that would fingerprint us under any non-trivial
+        # request volume.
+        if _JITTER_MAX > 0:
+            time.sleep(random.uniform(0, _JITTER_MAX))
         with self._lock:
             self._last[host] = time.time()
 
