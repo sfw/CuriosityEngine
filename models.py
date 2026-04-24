@@ -228,6 +228,11 @@ class EngineConfig:
     # verdict, so the stored confidence reflects the revised assessment.
     # Set to 0 to disable the penalty.
     confidence_drop_on_downgrade: float = 0.10
+    # Minimum priority for questions to enter the queue. Non-human sources with
+    # priority below this floor are dropped at enqueue time (with a log line).
+    # Human-sourced questions always bypass — explicit intent overrides the
+    # autoscreen. Default 0.70. Set to 0 to disable.
+    question_priority_floor: float = 0.70
     held_entries_enabled: bool = True
     held_confidence_floor: float = 0.7
     # Parallel fan-out knobs. Default 1 = serial (preserves prior behavior

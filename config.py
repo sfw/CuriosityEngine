@@ -99,6 +99,12 @@ class EngineSettings:
     # confidence on a verdict change is a hedge pattern. This floor keeps
     # stored confidence honest. Set to 0.0 to disable.
     confidence_drop_on_downgrade: float = 0.10
+    # Questions below this priority are rejected at enqueue time (except
+    # human-sourced questions, which always bypass). Default 0.70 — the
+    # observed priority ceiling for most emergent sources is 0.85-0.95;
+    # a 0.70 floor drops noise without pruning useful work. Set to 0 to
+    # disable the floor entirely.
+    question_priority_floor: float = 0.70
     # Parallel fan-out — how many investigations / xref-synth+verify pipelines
     # run concurrently per cycle. Default 1 = fully serial (zero behavior change).
     # Rate limiters are shared across threads so raising these does not burst
@@ -229,6 +235,9 @@ class CuriosityEngineConfig:
             ),
             confidence_drop_on_downgrade=float(
                 eng_section.get("confidence_drop_on_downgrade", 0.10)
+            ),
+            question_priority_floor=float(
+                eng_section.get("question_priority_floor", 0.70)
             ),
             held_entries_enabled=bool(eng_section.get("held_entries_enabled", True)),
             held_confidence_floor=float(eng_section.get("held_confidence_floor", 0.7)),
@@ -519,6 +528,10 @@ gap_verification_hit_threshold = {eng.gap_verification_hit_threshold}
 # Addresses the hedge pattern where the LLM returns flat confidence despite
 # a verdict flip. Set to 0.0 to disable.
 confidence_drop_on_downgrade = {eng.confidence_drop_on_downgrade}
+# Minimum priority for a question to enter the investigation queue. Non-human
+# sources with priority below this floor are dropped at enqueue. Human-sourced
+# questions bypass — explicit intent overrides the autoscreen. 0 disables.
+question_priority_floor = {eng.question_priority_floor}
 # Held-state pipeline — when the verifier returns `inconclusive` (couldn't reach
 # the claim, not refuted it), insights become held register entries pending
 # settlement rather than being silently rejected. Held entries usually require

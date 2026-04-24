@@ -220,6 +220,7 @@ def main():
         assumption_probe_max_assumptions=connection.engine.assumption_probe_max_assumptions,
         gap_verification_hit_threshold=connection.engine.gap_verification_hit_threshold,
         confidence_drop_on_downgrade=connection.engine.confidence_drop_on_downgrade,
+        question_priority_floor=connection.engine.question_priority_floor,
     )
 
     engine = CuriosityEngine(config)

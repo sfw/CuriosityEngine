@@ -14,7 +14,13 @@ class IntrospectionMixin:
     """Phases 1 & 2: identify uncertainties, turn them into ranked research questions."""
 
     def _enqueue_questions(self, questions: list[str], source: str, priority: float = 0.5):
-        self.journal.enqueue_questions(questions, source=source, priority=priority)
+        # Pull the priority floor from config so every enqueue path gets the
+        # same autoscreen applied. Human-sourced questions bypass — the journal
+        # method handles that exemption.
+        floor = float(getattr(self.config, "question_priority_floor", 0.0)) or None
+        self.journal.enqueue_questions(
+            questions, source=source, priority=priority, floor=floor,
+        )
 
     def _build_journal_context(self) -> str:
         recent = self.journal.get_recent_entries(5)

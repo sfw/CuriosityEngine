@@ -336,7 +336,7 @@ class NegativeSpaceMixin:
                 prefix = f"[gap: {m[:30]} × {p[:30]}] "
                 prefixed = [prefix + q for q in qs]
                 scan_short_id = uuid4().hex[:6]
-                self.journal.enqueue_questions(
+                self._enqueue_questions(
                     prefixed,
                     source=f"gap:{scan_short_id}",
                     priority=0.85,

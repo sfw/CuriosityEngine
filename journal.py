@@ -268,38 +268,110 @@ class Journal:
     def get_high_surprise_entries(self, threshold: float = 0.6) -> list[dict]:
         return [e for e in self.entries if e.get("surprise_delta", 0) >= threshold]
 
-    def enqueue_questions(self, questions: list[str], source: str, priority: float = 0.5):
+    def enqueue_questions(
+        self,
+        questions: list[str],
+        source: str,
+        priority: float = 0.5,
+        *,
+        floor: Optional[float] = None,
+    ):
         """Push emergent questions onto the queue for future cycles.
 
         `priority` is the expected-reward signal from the source (e.g. the parent
         entry's surprise_delta, or the parent xref's novelty_score). Higher is
-        better. Questions are popped in priority-sorted order (human-sourced
-        questions still jump the queue via pop_questions_by_source).
+        better. Questions are popped via source-round-robin + in-source priority
+        (see `pop_queued_questions`); human-sourced questions still jump the
+        queue via `pop_questions_by_source`.
+
+        `floor`: if provided, questions with priority below this are dropped at
+        enqueue time. Human-sourced questions bypass the floor — human intent
+        overrides the autoscreen. Below-floor drops are logged so the user can
+        tell why a would-be queue entry disappeared.
         """
         existing = {q.get("question") for q in self.question_queue}
+        dropped = 0
+        source_is_human = source.startswith("human") if source else False
         for q in questions:
             q_text = (q or "").strip()
             if not q_text or q_text in existing:
+                continue
+            p = float(max(0.0, min(1.0, priority)))
+            if floor is not None and p < float(floor) and not source_is_human:
+                dropped += 1
                 continue
             self.question_queue.append({
                 "question": q_text,
                 "source": source,
                 "added_at": datetime.now(timezone.utc).isoformat(),
-                "priority": float(max(0.0, min(1.0, priority))),
+                "priority": p,
             })
             existing.add(q_text)
+        if dropped:
+            print(
+                f"  [queue floor] dropped {dropped} question(s) from source={source!r} "
+                f"with priority < {floor} (human sources bypass the floor)."
+            )
         self.save()
 
+    # Source-family mapping for round-robin scheduling. Each queued question's
+    # source string starts with one of these prefixes; we bucket by prefix and
+    # rotate across non-empty buckets when popping. Keeps high-frequency sources
+    # (xref) from starving low-frequency ones (gap, analog, assumption).
+    _SOURCE_BUCKETS = ("human", "xref", "gap", "analog", "assumption", "entry", "fresh", "other")
+
+    @classmethod
+    def _bucket_for_source(cls, source: str) -> str:
+        """Map a source string to its round-robin bucket."""
+        if not source:
+            return "fresh"
+        prefix = source.split(":", 1)[0] if ":" in source else source
+        if prefix in cls._SOURCE_BUCKETS:
+            return prefix
+        return "other"
+
     def pop_queued_questions(self, n: int) -> list[dict]:
-        """Take up to n queued questions off the queue, highest-priority first."""
+        """Take up to n queued questions via source-round-robin + in-source priority.
+
+        Rotation order: human → xref → gap → analog → assumption → entry → fresh → other.
+        Each round pulls ONE highest-priority item from each non-empty bucket, then
+        loops. This guarantees sources with lower priority ceilings (e.g. gap/analog
+        at 0.85) still get visited when a high-ceiling source (xref at 0.87+) would
+        otherwise starve them.
+
+        Equivalent to: partition the queue by bucket; sort each partition by
+        priority desc (FIFO tiebreak); pop round-robin until budget exhausted
+        or all partitions empty.
+        """
         if n <= 0 or not self.question_queue:
             return []
-        # Stable sort: priority desc, then FIFO by original position for ties.
-        indexed = list(enumerate(self.question_queue))
-        indexed.sort(key=lambda it: (-float(it[1].get("priority", 0.5)), it[0]))
-        popped_indices = {i for i, _ in indexed[:n]}
-        popped = [q for i, q in indexed[:n]]
-        self.question_queue = [q for i, q in enumerate(self.question_queue) if i not in popped_indices]
+        # Partition into buckets. Preserve insertion index for FIFO tiebreak.
+        buckets: dict[str, list[tuple[int, dict]]] = {b: [] for b in self._SOURCE_BUCKETS}
+        for idx, q in enumerate(self.question_queue):
+            buckets[self._bucket_for_source(q.get("source") or "")].append((idx, q))
+        # Sort each bucket: priority desc, FIFO by index for ties.
+        for key in buckets:
+            buckets[key].sort(key=lambda it: (-float(it[1].get("priority", 0.5)), it[0]))
+
+        popped: list[dict] = []
+        popped_indices: set[int] = set()
+        # Rotate across non-empty buckets in fixed order; each round pulls one
+        # top-priority item per bucket. Stop when budget exhausted or all empty.
+        while len(popped) < n:
+            any_taken_this_round = False
+            for bucket_name in self._SOURCE_BUCKETS:
+                if len(popped) >= n:
+                    break
+                if buckets[bucket_name]:
+                    idx, q = buckets[bucket_name].pop(0)
+                    popped.append(q)
+                    popped_indices.add(idx)
+                    any_taken_this_round = True
+            if not any_taken_this_round:
+                break
+        self.question_queue = [
+            q for i, q in enumerate(self.question_queue) if i not in popped_indices
+        ]
         self.save()
         return popped
 

@@ -196,7 +196,7 @@ class InvestigationMixin:
                 questions.append(prefix + q)
 
         if questions:
-            self.journal.enqueue_questions(
+            self._enqueue_questions(
                 questions,
                 source=f"analog:{entry.id}",
                 priority=0.85,
@@ -251,7 +251,7 @@ class InvestigationMixin:
                 questions.append(prefix + q)
 
         if questions:
-            self.journal.enqueue_questions(
+            self._enqueue_questions(
                 questions,
                 source=f"assumption:{entry.id}",
                 priority=0.80,
