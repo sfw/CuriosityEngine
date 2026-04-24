@@ -32,8 +32,15 @@
     {% for r in register %}
       {% set status = r.human_review_status or 'unreviewed' %}
       {% set is_held = r.status == 'held' %}
+      {# Audit-changed detection: any reverification_log entry whose verdict or
+         novelty_type differs from the originally-stored values. Purely inline
+         so we don't need a backend change mid-audit. #}
+      {% set rv_log = r.reverification_log or [] %}
+      {% set audit_changed = rv_log and (rv_log|selectattr('verdict_changed', 'equalto', True)|list)|length > 0 %}
+      {% set latest_rv = rv_log[-1] if rv_log else none %}
       <article id="{{ r.id }}" class="p-4 rounded-md border scroll-mt-24
-                      {% if is_held %}border-amber-500 bg-amber-500/10
+                      {% if audit_changed %}border-sky-500 bg-sky-50 dark:bg-sky-900/10 ring-1 ring-sky-500/30
+                      {% elif is_held %}border-amber-500 bg-amber-500/10
                       {% elif status == 'approved' %}border-emerald-400 bg-emerald-50 dark:bg-emerald-900/20
                       {% elif status == 'rejected' %}border-red-400 bg-red-50 dark:bg-red-900/20
                       {% elif status == 'deferred' %}border-amber-400 bg-amber-50 dark:bg-amber-900/20
@@ -43,6 +50,22 @@
             <span class="text-xs mono text-slate-500">{{ r.id }}</span>
             {% if is_held %}
               <span class="text-xs mono px-1.5 py-0.5 rounded bg-amber-500/30 text-amber-200 border border-amber-500/40" title="Verifier returned `inconclusive` — awaiting settlement">held</span>
+            {% endif %}
+            {% if audit_changed %}
+              <span class="text-xs mono px-1.5 py-0.5 rounded bg-sky-500/20 text-sky-700 dark:text-sky-300 border border-sky-500/40"
+                    title="Re-verify audit produced a different verdict or novelty_type than the original. The original is preserved; expand Verification detail below to see the delta.">
+                ⚠ audit changed
+                {% if latest_rv and latest_rv.new_novelty_type and latest_rv.new_novelty_type != r.novelty_type %}
+                  · {{ r.novelty_type }}→{{ latest_rv.new_novelty_type }}
+                {% elif latest_rv and latest_rv.new_verdict and latest_rv.new_verdict != r.verdict %}
+                  · {{ r.verdict }}→{{ latest_rv.new_verdict }}
+                {% endif %}
+              </span>
+            {% elif rv_log %}
+              <span class="text-xs mono px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30"
+                    title="Re-verify audit reproduced the original verdict and novelty_type — the entry holds up under current rules.">
+                ✓ audit held
+              </span>
             {% endif %}
             <span class="text-xs mono px-1.5 py-0.5 rounded bg-slate-200 dark:bg-slate-700">verdict {{ r.verdict }}</span>
             <span class="text-xs mono px-1.5 py-0.5 rounded bg-emerald-200 dark:bg-emerald-800">conf {{ '%.2f'|format(r.verified_confidence or 0) }}</span>
