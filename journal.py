@@ -415,6 +415,27 @@ class Journal:
             self.save()
         return matches
 
+    def update_queued_question_priority(
+        self, question_text: str, new_priority: float,
+    ) -> bool:
+        """Update a queued question's priority by matching its text verbatim.
+
+        Returns True if the question was found and updated, False otherwise.
+        Priority is clamped to [0.0, 1.0]. Used by the drag-and-drop UI — when
+        a user drops question X above question Y, the frontend sends X's new
+        priority = Y.priority + 0.001 (small epsilon) so X sorts above Y.
+        """
+        qt = (question_text or "").strip()
+        if not qt:
+            return False
+        clamped = float(max(0.0, min(1.0, new_priority)))
+        for q in self.question_queue:
+            if (q.get("question") or "").strip() == qt:
+                q["priority"] = clamped
+                self.save()
+                return True
+        return False
+
     def clear_question_queue(self, *, source_prefix: Optional[str] = None) -> int:
         before = len(self.question_queue)
         if source_prefix:

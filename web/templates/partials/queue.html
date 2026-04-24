@@ -104,10 +104,18 @@
                              {% elif _max_pri >= 0.7 %}bg-sky-500/20 text-sky-300
                              {% else %}bg-slate-700 text-slate-400{% endif %}">max pri {{ '%.2f'|format(_max_pri) }}</span>
               </summary>
-              <ul class="px-3 pb-3 space-y-2">
+              <ul class="px-3 pb-3 space-y-2 queue-sortable" data-bucket="{{ _bucket_key }}">
                 {% for q in _sorted %}
                   {% set pri = q.priority if q.priority is defined else 0.5 %}
-                  <li class="rounded-xl border border-slate-700/60 {% if q.source.startswith('human') %}bg-indigo-500/10 border-indigo-500/30{% else %}bg-slate-800/30{% endif %} p-3 flex items-start gap-3">
+                  <li class="rounded-xl border border-slate-700/60 {% if q.source.startswith('human') %}bg-indigo-500/10 border-indigo-500/30{% else %}bg-slate-800/30{% endif %} p-3 flex items-start gap-3 queue-item"
+                      data-question="{{ q.question }}"
+                      data-priority="{{ '%.4f'|format(pri) }}">
+                    <span class="queue-drag-handle flex-shrink-0 text-slate-600 hover:text-slate-300 cursor-grab active:cursor-grabbing pt-0.5"
+                          title="Drag to reorder within this source bucket — sets priority above the item you drop it on">
+                      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M4 8h16M4 16h16"/>
+                      </svg>
+                    </span>
                     <div class="flex-1 min-w-0">
                       <div class="flex items-baseline gap-2 mb-0.5 flex-wrap">
                         {% if q.source.startswith('entry:') %}
@@ -183,3 +191,70 @@
     </form>
   </section>
 </div>
+
+<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js" defer></script>
+<script>
+(() => {
+  // Drag-and-drop priority reordering on each source bucket. Lives inside
+  // queue.html so it initialises only when the queue tab renders. Each
+  // sortable list is scoped to one source bucket — cross-bucket reordering
+  // is meaningless with source-round-robin scheduling (a bucket's internal
+  // order determines which item it offers up each round).
+  function init() {
+    if (typeof Sortable === 'undefined') return setTimeout(init, 50);
+    document.querySelectorAll('.queue-sortable').forEach(list => {
+      if (list.dataset.sortableInit === '1') return;
+      list.dataset.sortableInit = '1';
+      Sortable.create(list, {
+        handle: '.queue-drag-handle',
+        animation: 150,
+        ghostClass: 'opacity-50',
+        onEnd: async (evt) => {
+          const moved = evt.item;
+          const questionText = moved.dataset.question;
+          if (!questionText) return;
+          // Determine new priority: item currently below the moved item in the
+          // DOM is its new neighbor. We want moved.priority > neighbor.priority,
+          // so set moved.priority = neighbor.priority + epsilon.
+          // If moved is at the bottom (no next sibling), use the previous
+          // sibling's priority - epsilon (sort below it).
+          const nextEl = moved.nextElementSibling;
+          const prevEl = moved.previousElementSibling;
+          let newPri;
+          const EPS = 0.001;
+          if (nextEl) {
+            const neighborPri = parseFloat(nextEl.dataset.priority);
+            newPri = neighborPri + EPS;
+          } else if (prevEl) {
+            const neighborPri = parseFloat(prevEl.dataset.priority);
+            newPri = neighborPri - EPS;
+          } else {
+            return; // only one item in list — nothing to reorder against
+          }
+          newPri = Math.max(0.0, Math.min(1.0, newPri));
+          const url = '/journals/{{ name }}/queue/reorder';
+          const fd = new FormData();
+          fd.set('question_text', questionText);
+          fd.set('new_priority', newPri.toFixed(4));
+          try {
+            const res = await fetch(url, {method: 'POST', body: fd});
+            const j = await res.json();
+            if (j.ok) {
+              // Update the item's stored priority + visible chip inline.
+              moved.dataset.priority = newPri.toFixed(4);
+              const chip = moved.querySelector('[title*="priority"]');
+              if (chip) chip.textContent = 'pri ' + newPri.toFixed(2);
+            } else {
+              console.warn('reorder rejected', j);
+            }
+          } catch (err) {
+            console.error('reorder POST failed', err);
+          }
+        },
+      });
+    });
+  }
+  if (document.readyState !== 'loading') init();
+  else document.addEventListener('DOMContentLoaded', init);
+})();
+</script>

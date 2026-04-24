@@ -7,7 +7,7 @@
             class="px-2 py-0.5 rounded hover:bg-indigo-100 dark:hover:bg-indigo-900
                    {% if lifecycle == val %}ring-1 ring-indigo-500 bg-slate-200 dark:bg-slate-700{% else %}bg-slate-100 dark:bg-slate-800{% endif %}
                    {% if val == 'held' and held_count %}text-amber-700 dark:text-amber-300{% endif %}"
-            hx-get="/journals/{{ name }}/register?lifecycle={{ val }}{% if filter_status %}&filter_status={{ filter_status }}{% endif %}"
+            hx-get="/journals/{{ name }}/register?lifecycle={{ val }}{% if filter_status %}&filter_status={{ filter_status }}{% endif %}{% if novelty_type %}&novelty_type={{ novelty_type }}{% endif %}"
             hx-target="#tab-body">
       {{ label }} {% if count %}<span class="mono text-[10px] opacity-75">{{ count }}</span>{% endif %}
     </button>
@@ -20,24 +20,18 @@
   {% for val, label in statuses %}
     <button type="button"
             class="px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-700 hover:bg-indigo-100 dark:hover:bg-indigo-900 {% if filter_status == val %}ring-1 ring-indigo-600{% endif %}"
-            hx-get="/journals/{{ name }}/register?{% if val %}filter_status={{ val }}&{% endif %}{% if lifecycle %}lifecycle={{ lifecycle }}{% endif %}"
+            hx-get="/journals/{{ name }}/register?{% if val %}filter_status={{ val }}&{% endif %}{% if lifecycle %}lifecycle={{ lifecycle }}&{% endif %}{% if novelty_type %}novelty_type={{ novelty_type }}{% endif %}"
             hx-target="#tab-body">
       {{ label }}
     </button>
   {% endfor %}
 </div>
 
-{# Client-side novelty filter — effective novelty per entry is the latest
-   re-verification's new_novelty_type when audited, else the original
-   novelty_type stored on the register entry. Per-button counts computed
-   inline. When backend filter ships, this whole block moves server-side. #}
-{% set _nov_counts = {} %}
-{% for _r in register %}
-  {% set _rv = _r.reverification_log or [] %}
-  {% set _eff = (_rv[-1].new_novelty_type if _rv else _r.novelty_type) or 'unknown' %}
-  {% set _ = _nov_counts.__setitem__(_eff, _nov_counts.get(_eff, 0) + 1) %}
-{% endfor %}
-<div class="mb-3 flex flex-wrap gap-1 items-center text-xs" data-novelty-filter-bar>
+{# Server-side novelty filter, audit-aware. Effective novelty per entry is the
+   latest re-verification's new_novelty_type when audited, else the original
+   stored novelty_type. Computed in main.journal_register and passed in as
+   r._effective_novelty + novelty_counts. Filter survives refresh + share. #}
+<div class="mb-3 flex flex-wrap gap-1 items-center text-xs">
   <span class="text-slate-500 mr-1">Novelty (effective):</span>
   {% for val, label in [
     ('', 'all'),
@@ -47,13 +41,14 @@
     ('restatement', 'restatement'),
     ('unsupported', 'unsupported'),
   ] %}
-    {% set _c = _nov_counts.get(val, 0) if val else register|length %}
+    {% set _c = novelty_counts.get(val, 0) if val else (novelty_total or 0) %}
     <button type="button"
-            data-novelty-filter="{{ val }}"
             class="px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 hover:bg-indigo-100 dark:hover:bg-indigo-900
-                   {% if val == '' %}ring-1 ring-indigo-500 bg-slate-200 dark:bg-slate-700{% endif %}
+                   {% if novelty_type == val %}ring-1 ring-indigo-500 bg-slate-200 dark:bg-slate-700{% endif %}
                    {% if not _c %}opacity-40 cursor-not-allowed{% endif %}"
-            {% if not _c %}disabled{% endif %}>
+            {% if not _c %}disabled{% endif %}
+            hx-get="/journals/{{ name }}/register?{% if val %}novelty_type={{ val }}&{% endif %}{% if lifecycle %}lifecycle={{ lifecycle }}&{% endif %}{% if filter_status %}filter_status={{ filter_status }}{% endif %}"
+            hx-target="#tab-body">
       {{ label }}{% if _c %} <span class="mono text-[10px] opacity-75">{{ _c }}</span>{% endif %}
     </button>
   {% endfor %}
@@ -71,9 +66,9 @@
       {% set rv_log = r.reverification_log or [] %}
       {% set audit_changed = rv_log and (rv_log|selectattr('verdict_changed', 'equalto', True)|list)|length > 0 %}
       {% set latest_rv = rv_log[-1] if rv_log else none %}
-      {# Effective novelty: if re-verified, use the latest audit's new_novelty_type
-         as the source of truth. Else fall back to the original stored value. #}
-      {% set effective_novelty = (latest_rv.new_novelty_type if latest_rv else r.novelty_type) or 'unknown' %}
+      {# Effective novelty — server-computed via _effective_novelty_for_entry.
+         Preserved as a data attribute for debugging / future client-side uses. #}
+      {% set effective_novelty = r._effective_novelty or 'unknown' %}
       <article id="{{ r.id }}"
                data-effective-novelty="{{ effective_novelty }}"
                class="p-4 rounded-md border scroll-mt-24
@@ -465,54 +460,12 @@
     {% endfor %}
   </div>
 {% else %}
-  <p class="text-sm text-slate-500">No register entries with that status.</p>
+  <p class="text-sm text-slate-500">
+    {% if novelty_type %}
+      No register entries with effective novelty <span class="mono">{{ novelty_type }}</span>
+      under the current lifecycle/review filter.
+    {% else %}
+      No register entries with that status.
+    {% endif %}
+  </p>
 {% endif %}
-
-<script>
-(() => {
-  // Client-side novelty filter. Backend port is queued behind the current
-  // re-verify run (task #73). Works on data-effective-novelty attributes
-  // that are set per-entry with the audit-aware rule.
-  const bar = document.querySelector('[data-novelty-filter-bar]');
-  if (!bar) return;
-  const buttons = bar.querySelectorAll('[data-novelty-filter]');
-  if (!buttons.length) return;
-
-  function apply(target) {
-    const articles = document.querySelectorAll('article[data-effective-novelty]');
-    let visible = 0;
-    articles.forEach(a => {
-      const eff = a.dataset.effectiveNovelty || '';
-      const show = !target || eff === target;
-      a.style.display = show ? '' : 'none';
-      if (show) visible++;
-    });
-    buttons.forEach(b => {
-      const on = (b.dataset.noveltyFilter || '') === target;
-      if (on) {
-        b.classList.add('ring-1','ring-indigo-500','bg-slate-200','dark:bg-slate-700');
-      } else {
-        b.classList.remove('ring-1','ring-indigo-500','bg-slate-200','dark:bg-slate-700');
-      }
-    });
-    // Empty-state notice — lightweight, appended inside the list container.
-    const existing = document.getElementById('novelty-filter-empty');
-    if (existing) existing.remove();
-    if (!visible && articles.length) {
-      const note = document.createElement('p');
-      note.id = 'novelty-filter-empty';
-      note.className = 'text-sm text-slate-500 mt-2';
-      note.textContent = 'No register entries with effective novelty ' + (target || 'any') + '.';
-      const container = articles[0].parentElement;
-      if (container) container.appendChild(note);
-    }
-  }
-
-  buttons.forEach(btn => {
-    btn.addEventListener('click', () => {
-      if (btn.disabled) return;
-      apply(btn.dataset.noveltyFilter || '');
-    });
-  });
-})();
-</script>

@@ -237,15 +237,34 @@ def journal_insights(request: Request, name: str):
     })
 
 
+def _effective_novelty_for_entry(entry: dict) -> str:
+    """Latest reverification's new_novelty_type if the entry's been audited,
+    otherwise the originally-stored novelty_type. See the audit-aware rule
+    the user called out when we shipped client-side filtering — this is the
+    authoritative server-side implementation."""
+    rv_log = entry.get("reverification_log") or []
+    if rv_log:
+        last = rv_log[-1]
+        nov = (last.get("new_novelty_type") or "").strip()
+        if nov:
+            return nov
+    return (entry.get("novelty_type") or "").strip() or "unknown"
+
+
 @app.get("/journals/{name}/register", response_class=HTMLResponse)
 def journal_register(
     request: Request,
     name: str,
     filter_status: Optional[str] = None,
     lifecycle: Optional[str] = None,
+    novelty_type: Optional[str] = None,
 ):
     journal = _load_journal(name)
     register = list(reversed(journal.register))
+    # Compute per-entry effective novelty (audit-aware). Stored on the dict
+    # so the template can filter + render without redoing the computation.
+    for r in register:
+        r["_effective_novelty"] = _effective_novelty_for_entry(r)
     if filter_status:
         register = [r for r in register if r.get("human_review_status", "unreviewed") == filter_status]
     if lifecycle and lifecycle in ("active", "held"):
@@ -253,6 +272,19 @@ def journal_register(
             register = [r for r in register if r.get("status") != "held"]
         else:  # "held"
             register = [r for r in register if r.get("status") == "held"]
+    # Compute novelty counts over the lifecycle/review-filtered set BEFORE
+    # applying the novelty filter, so the filter-bar counts reflect the full
+    # pool the user could switch to (not just the current slice).
+    novelty_counts: dict[str, int] = {}
+    for r in register:
+        eff = r.get("_effective_novelty") or "unknown"
+        novelty_counts[eff] = novelty_counts.get(eff, 0) + 1
+    total_for_all_button = len(register)
+    # Novelty filter — uses effective_novelty (post-audit source of truth).
+    if novelty_type:
+        nt = novelty_type.strip()
+        if nt:
+            register = [r for r in register if r.get("_effective_novelty") == nt]
     held_count = sum(1 for r in journal.register if r.get("status") == "held")
     active_count = len(journal.register) - held_count
     return templates.TemplateResponse(request, "partials/register.html", {
@@ -261,6 +293,9 @@ def journal_register(
         "predictions": journal.predictions,
         "filter_status": filter_status or "",
         "lifecycle": lifecycle or "",
+        "novelty_type": novelty_type or "",
+        "novelty_counts": novelty_counts,
+        "novelty_total": total_for_all_button,
         "held_count": held_count,
         "active_count": active_count,
     })
@@ -873,6 +908,22 @@ def delete_question(name: str, question_text: str = Form(...)):
     if len(journal.question_queue) != before:
         journal.save()
     return RedirectResponse(f"/journals/{name}?tab=queue", status_code=303)
+
+
+@app.post("/journals/{name}/queue/reorder")
+def reorder_queued_question(
+    name: str,
+    question_text: str = Form(...),
+    new_priority: float = Form(...),
+):
+    """Update a queued question's priority. Used by the drag-and-drop UI in
+    the queue panel — SortableJS sends (question_text, new_priority) after
+    a drop. The frontend computes new_priority = target_neighbor.priority
+    + 0.001 so the dropped item sorts above its new neighbor within the
+    same source bucket. Responds with a tiny JSON blob for the JS caller."""
+    journal = _load_journal(name)
+    ok = journal.update_queued_question_priority(question_text, new_priority)
+    return JSONResponse({"ok": ok, "priority": max(0.0, min(1.0, new_priority))})
 
 
 @app.post("/journals/rename")
