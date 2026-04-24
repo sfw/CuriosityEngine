@@ -490,6 +490,32 @@ async def maintenance_reverify(name: str):
     return JSONResponse(result)
 
 
+@app.post("/journals/{name}/known-prior-art/add")
+def add_known_prior_art(
+    name: str,
+    domain: str = Form(...),
+    system_name: str = Form(...),
+    url: str = Form(""),
+    notes: str = Form(""),
+):
+    """Append a known-prior-art anchor. The verifier will evaluate it on
+    every future register-candidate whose domain matches. See
+    journal.add_known_prior_art for the matching rule."""
+    journal = _load_journal(name)
+    journal.add_known_prior_art(
+        domain=domain, system_name=system_name, url=url, notes=notes,
+    )
+    return RedirectResponse(f"/journals/{name}?tab=admin", status_code=303)
+
+
+@app.post("/journals/{name}/known-prior-art/{entry_id}/delete")
+def delete_known_prior_art(name: str, entry_id: str):
+    """Remove a known-prior-art anchor by id."""
+    journal = _load_journal(name)
+    journal.remove_known_prior_art(entry_id)
+    return RedirectResponse(f"/journals/{name}?tab=admin", status_code=303)
+
+
 @app.post("/journals/{name}/maintenance/reverify-register")
 async def maintenance_reverify_register(
     name: str,
@@ -631,6 +657,8 @@ def journal_admin(request: Request, name: str):
         "gap_min_entries": int(conn.engine.negative_space_min_entries),
         "coverage_scans_count": len(journal.coverage_scans),
         "register_count": len(journal.register),
+        "known_prior_art": list(journal.known_prior_art),
+        "engine_domain": journal.last_domain or "",
     })
 
 

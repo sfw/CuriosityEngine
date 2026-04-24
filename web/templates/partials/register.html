@@ -277,6 +277,40 @@
                 </div>
               {% endif %}
 
+              {% if r.known_prior_art_evaluations %}
+                <div>
+                  <div class="text-[10px] uppercase tracking-wider text-slate-500 mb-1">
+                    Known prior art evaluations
+                    <span class="normal-case tracking-normal text-slate-600">(verifier checked these human-curated peers)</span>
+                  </div>
+                  <ul class="space-y-1">
+                    {% for ev in r.known_prior_art_evaluations %}
+                      <li class="text-[11px] p-2 rounded border {% if ev.overlaps_claim %}border-amber-500/40 bg-amber-50/30 dark:bg-amber-900/10{% else %}border-slate-300 dark:border-slate-700{% endif %}">
+                        <div class="flex items-baseline gap-2 flex-wrap">
+                          <span class="mono text-[10px] text-slate-500">{{ ev.anchor_id }}</span>
+                          <span class="mono text-[10px] px-1.5 py-0.5 rounded {% if ev.is_peer %}bg-teal-100 dark:bg-teal-900/40 text-teal-700 dark:text-teal-300{% else %}bg-slate-100 dark:bg-slate-800 text-slate-500{% endif %}">
+                            {% if ev.is_peer %}peer ✓{% else %}not a peer{% endif %}
+                          </span>
+                          {% if ev.is_peer %}
+                            <span class="mono text-[10px] px-1.5 py-0.5 rounded {% if ev.overlaps_claim %}bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300{% else %}bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300{% endif %}">
+                              {% if ev.overlaps_claim %}overlaps ⚠{% else %}distinct ✓{% endif %}
+                            </span>
+                          {% endif %}
+                        </div>
+                        {% if ev.reasoning %}
+                          <div class="text-slate-600 dark:text-slate-400 mt-0.5">{{ ev.reasoning }}</div>
+                        {% endif %}
+                        {% if ev.differentiators %}
+                          <ul class="list-disc pl-5 text-[10px] text-slate-600 dark:text-slate-400 mt-0.5 space-y-0.5">
+                            {% for d in ev.differentiators %}<li>{{ d }}</li>{% endfor %}
+                          </ul>
+                        {% endif %}
+                      </li>
+                    {% endfor %}
+                  </ul>
+                </div>
+              {% endif %}
+
               {% if r.skeptic_probe and r.skeptic_probe.get('query') %}
                 <div>
                   <div class="text-[10px] uppercase tracking-wider text-slate-500 mb-1">

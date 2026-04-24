@@ -161,6 +161,12 @@ class RegisterEntry:
     # rather than deriving the domain from the claim text.
     target_application_domain: str = ""
 
+    # Per-anchor evaluations produced by the verifier against the journal's
+    # known_prior_art list (human-curated peers). One entry per injected
+    # anchor: {anchor_id, is_peer, overlaps_claim, differentiators, reasoning}.
+    # Empty if the journal has no known_prior_art entries for this domain.
+    known_prior_art_evaluations: list[dict] = field(default_factory=list)
+
     # Append-only log of re-verification passes triggered from the admin UI.
     # Each entry: {timestamp, verdict, verified_confidence, novelty_type,
     # synthesis_findable, verification_summary, tool_calls, reason_for_reverify}.

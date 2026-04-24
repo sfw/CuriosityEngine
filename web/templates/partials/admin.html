@@ -295,6 +295,96 @@
 
   </div>
 
+  {# Known prior art anchors — human-curated peers the verifier MUST consider #}
+  <div class="mt-6 rounded-xl border border-slate-700/60 bg-slate-900/40 p-4">
+    <div class="flex items-start gap-4 flex-wrap mb-3">
+      <div class="flex-1 min-w-[240px]">
+        <div class="flex items-center gap-2 mb-1 flex-wrap">
+          <svg class="w-4 h-4 text-teal-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+          </svg>
+          <h4 class="text-sm font-semibold text-slate-200">Known prior art anchors</h4>
+          <span class="mono text-[10px] px-1.5 py-0.5 rounded bg-teal-500/20 text-teal-300">{{ known_prior_art|length }} entries</span>
+        </div>
+        <p class="text-xs text-slate-500 leading-relaxed">
+          Human-curated peer systems the verifier MUST evaluate explicitly on every register candidate
+          whose domain matches. Closes specific blind spots (e.g. Google's AI co-scientist for an
+          "LLM research agent" journal) without hand-editing the journal. Each anchor injects into
+          <span class="mono">VERIFY_PROMPT</span> as a mandatory evaluation item; the verifier records its
+          judgement in <span class="mono">known_prior_art_evaluations</span> on every register entry.
+          Matching is case-insensitive substring on the <span class="mono">domain</span> field.
+        </p>
+      </div>
+    </div>
+
+    {% if known_prior_art %}
+      <ul class="space-y-2 mb-3">
+        {% for e in known_prior_art %}
+          <li class="flex items-start gap-3 rounded-lg border border-slate-700/40 bg-slate-800/30 p-2 text-xs">
+            <div class="flex-1 min-w-0">
+              <div class="flex items-baseline gap-2 flex-wrap">
+                <span class="font-semibold text-slate-200">{{ e.system_name }}</span>
+                <span class="mono text-[10px] text-slate-500">{{ e.id }}</span>
+                <span class="mono text-[10px] px-1.5 py-0.5 rounded bg-slate-700 text-slate-300" title="Matched when a claim's domain (case-insensitive) contains — or is contained by — this phrase">domain: {{ e.domain }}</span>
+              </div>
+              {% if e.url %}
+                <a class="text-[11px] text-indigo-400 hover:underline mono" href="{{ e.url }}" target="_blank" rel="noopener">{{ e.url }}</a>
+              {% endif %}
+              {% if e.notes %}
+                <div class="text-[11px] text-slate-400 mt-0.5">{{ e.notes }}</div>
+              {% endif %}
+            </div>
+            <form method="post" action="/journals/{{ name }}/known-prior-art/{{ e.id }}/delete"
+                  onsubmit="return confirm('Remove anchor {{ e.system_name }}?')"
+                  class="flex-shrink-0">
+              <button type="submit" title="Remove anchor"
+                      class="p-1 rounded text-slate-500 hover:text-rose-400 hover:bg-slate-800">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+                </svg>
+              </button>
+            </form>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="text-xs text-slate-500 italic mb-3">No anchors yet. Add one below.</p>
+    {% endif %}
+
+    <form method="post" action="/journals/{{ name }}/known-prior-art/add"
+          class="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
+      <label class="block">
+        <span class="text-[10px] uppercase tracking-wider text-slate-500">domain</span>
+        <input name="domain" required
+               placeholder="{{ engine_domain or 'e.g. LLM research agents' }}"
+               class="mt-0.5 w-full px-2 py-1 rounded border border-slate-700 bg-slate-900/60 mono" />
+      </label>
+      <label class="block">
+        <span class="text-[10px] uppercase tracking-wider text-slate-500">system name</span>
+        <input name="system_name" required
+               placeholder="e.g. Google AI co-scientist"
+               class="mt-0.5 w-full px-2 py-1 rounded border border-slate-700 bg-slate-900/60 mono" />
+      </label>
+      <label class="block md:col-span-2">
+        <span class="text-[10px] uppercase tracking-wider text-slate-500">url / citation</span>
+        <input name="url" type="url"
+               placeholder="https://arxiv.org/abs/2502.18864"
+               class="mt-0.5 w-full px-2 py-1 rounded border border-slate-700 bg-slate-900/60 mono" />
+      </label>
+      <label class="block md:col-span-2">
+        <span class="text-[10px] uppercase tracking-wider text-slate-500">notes (optional)</span>
+        <textarea name="notes" rows="2"
+                  placeholder="Why this matters — what the verifier should consider when evaluating overlap"
+                  class="mt-0.5 w-full px-2 py-1 rounded border border-slate-700 bg-slate-900/60 text-xs"></textarea>
+      </label>
+      <div class="md:col-span-2">
+        <button type="submit" class="px-3 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-500 text-white text-xs font-medium shadow-lg shadow-teal-900/30">
+          Add anchor
+        </button>
+      </div>
+    </form>
+  </div>
+
   <div class="text-[11px] text-slate-600 mono pt-2 border-t border-slate-800">
     All operations spawn subprocesses through <span class="text-slate-500">/journals/{name}/maintenance/*</span> — they share the
     live-log infrastructure with normal runs, so you'll see the top-bar indicator light up and

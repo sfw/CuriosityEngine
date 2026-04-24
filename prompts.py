@@ -194,6 +194,16 @@ PRIOR HUMAN REJECTIONS (patterns to avoid repeating — the reasons a domain exp
 
 If the candidate insight has the same weakness as any of these prior rejections, apply the same skepticism and reflect it in your verdict.
 
+KNOWN PRIOR ART anchors for this journal's domain (human-curated — peers the verifier MUST evaluate explicitly, not hope to surface via search):
+{known_prior_art_json}
+
+For EACH known prior art anchor listed above:
+1. Determine whether it is a peer to THIS specific claim (the claim's target_application_domain may be narrower than the journal's domain).
+2. If it IS a peer, evaluate whether it substantively overlaps with the insight. If it does, the claim is at most an extension (or refuted, if the overlap is total).
+3. Record your evaluation in `known_prior_art_evaluations` — one entry per anchor covering `anchor_id`, `is_peer` (bool), `overlaps_claim` (bool), `differentiators` (list), `reasoning` (one sentence).
+
+A missing known_prior_art_evaluations entry for a listed anchor is a verification failure. Do not skip them.
+
 **Tool budget**: aim for roughly 12-20 tool calls, then render your verdict. Efficient refutation beats exhaustive search. Prior searches can silently miss well-known systems when the query shape is wrong — iterate, don't one-shot.
 
 **CRITICAL — novelty framing**
@@ -340,6 +350,15 @@ Respond with EXACTLY this JSON structure (no other text):
     "disqualifies": false
   }},
   "novelty_type": "new_synthesis|restatement|extension|correction|unsupported",
+  "known_prior_art_evaluations": [
+    {{
+      "anchor_id": "id of the known-prior-art anchor you evaluated",
+      "is_peer": false,
+      "overlaps_claim": false,
+      "differentiators": ["concrete ways the claim differs from this anchor — empty if is_peer=false or overlaps_claim=false"],
+      "reasoning": "one sentence explaining the evaluation"
+    }}
+  ],
   "contradicting_findings": ["specific findings or papers that contradict the composite claim"],
   "reasoning_flaws": ["specific flaws in the evidence-to-claim connection"],
   "motivation": "one-paragraph explanation of why this insight matters if validated",

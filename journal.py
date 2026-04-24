@@ -38,6 +38,12 @@ class Journal:
         self.last_domain: str = ""                 # last domain used on a run against this journal
         self.embeddings: dict[str, list[float]] = {}  # entry_id -> dense vector
         self.coverage_scans: list[dict] = []       # negative-space gap scans over time
+        # Human-curated prior-art anchors. Each entry: {id, domain, system_name,
+        # url, notes, added_at}. The verifier prompt injects matching entries
+        # as mandatory peer-system considerations — used to close specific
+        # blind spots a human has spotted (e.g. the Google co-scientist miss
+        # this feature addresses) without hand-editing the journal.
+        self.known_prior_art: list[dict] = []
         self._save_lock = threading.Lock()
         self._load()
 
@@ -55,6 +61,7 @@ class Journal:
                 self.last_domain = str(data.get("last_domain", ""))
                 self.embeddings = dict(data.get("embeddings", {}))
                 self.coverage_scans = list(data.get("coverage_scans", []))
+                self.known_prior_art = list(data.get("known_prior_art", []))
 
     def save(self):
         """Serialize the full journal state.
@@ -75,6 +82,7 @@ class Journal:
             "last_domain": self.last_domain,
             "embeddings": self.embeddings,
             "coverage_scans": self.coverage_scans,
+            "known_prior_art": self.known_prior_art,
             "metadata": {
                 "last_updated": datetime.now(timezone.utc).isoformat(),
                 "total_entries": len(self.entries),
@@ -153,6 +161,102 @@ class Journal:
                 self.save()
                 self._write_register_markdown()
                 return
+
+    def add_known_prior_art(
+        self, *, domain: str, system_name: str, url: str, notes: str = "",
+    ) -> dict:
+        """Append a human-curated prior-art anchor to the journal.
+
+        The verifier's VERIFY_PROMPT will inject any entry whose domain matches
+        the claim's target_application_domain as a MANDATORY peer-system
+        consideration, forcing explicit evaluation rather than hoping query
+        luck surfaces the peer. Captures the feedback loop: human spots a
+        missed peer → adds it here → verifier catches the pattern forever.
+        """
+        from uuid import uuid4
+        entry = {
+            "id": f"kpa-{uuid4().hex[:8]}",
+            "domain": (domain or "").strip(),
+            "system_name": (system_name or "").strip(),
+            "url": (url or "").strip(),
+            "notes": (notes or "").strip(),
+            "added_at": datetime.now(timezone.utc).isoformat(),
+        }
+        self.known_prior_art.append(entry)
+        self.save()
+        return entry
+
+    def remove_known_prior_art(self, entry_id: str) -> bool:
+        before = len(self.known_prior_art)
+        self.known_prior_art = [e for e in self.known_prior_art if e.get("id") != entry_id]
+        removed = len(self.known_prior_art) != before
+        if removed:
+            self.save()
+        return removed
+
+    _KPA_STOPWORDS = frozenset({
+        "a", "an", "the", "of", "for", "in", "on", "to", "and", "or", "by",
+        "with", "is", "are", "be", "its", "this", "that",
+    })
+
+    @classmethod
+    def _kpa_tokenize(cls, s: str) -> set[str]:
+        """Normalize domain phrases into a comparable token set.
+
+        - Lowercased, punctuation-stripped
+        - Trailing 's' removed from each token so singular/plural collide
+          ('agents' → 'agent')
+        - Stopwords dropped
+        - Short tokens (≤2 chars) dropped
+        """
+        if not s:
+            return set()
+        text = s.lower()
+        # Replace common separators with space.
+        for ch in ",.;:-/()[]\"'_":
+            text = text.replace(ch, " ")
+        out: set[str] = set()
+        for raw in text.split():
+            w = raw.strip()
+            if len(w) <= 2 or w in cls._KPA_STOPWORDS:
+                continue
+            if len(w) > 3 and w.endswith("s"):
+                w = w[:-1]
+            out.add(w)
+        return out
+
+    def match_known_prior_art(self, domain_phrases: list[str]) -> list[dict]:
+        """Return known_prior_art entries whose domain overlaps with ANY of
+        the provided phrases.
+
+        Matching rule: token sets (normalized — lowercased, stopwords dropped,
+        trailing 's' stripped for singular/plural collapse). An anchor matches
+        a needle when at least 2 content tokens overlap, OR when one side's
+        token set is a subset of the other (handles the 'LLM research agent'
+        anchor for an 'LLM research agent hypothesis ranking' claim case).
+        """
+        if not self.known_prior_art or not domain_phrases:
+            return []
+        needle_token_sets = [
+            self._kpa_tokenize(p) for p in domain_phrases if p and p.strip()
+        ]
+        needle_token_sets = [s for s in needle_token_sets if s]
+        if not needle_token_sets:
+            return []
+        matches: list[dict] = []
+        for e in self.known_prior_art:
+            hay_tokens = self._kpa_tokenize(e.get("domain") or "")
+            if not hay_tokens:
+                continue
+            for n_tokens in needle_token_sets:
+                if (
+                    len(hay_tokens & n_tokens) >= 2
+                    or hay_tokens <= n_tokens
+                    or n_tokens <= hay_tokens
+                ):
+                    matches.append(e)
+                    break
+        return matches
 
     def append_register_reverification(self, register_entry_id: str, log_entry: dict) -> bool:
         """Append a re-verification pass to a register entry's reverification_log.

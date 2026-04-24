@@ -131,6 +131,11 @@ class VerificationMixin:
         supporting = [e for e in self.journal.entries if e["id"] in xref.source_entries]
         slim_supporting = [self._slim_entry_for_register(e) for e in supporting]
 
+        engine_domain = getattr(self.config, "domain", "") or "(unspecified)"
+        # Known prior art matching this journal's domain — injected so the
+        # verifier MUST explicitly evaluate each anchor rather than hope
+        # search surfaces them. See journal.match_known_prior_art.
+        known_prior_art = self.journal.match_known_prior_art([engine_domain])
         prompt = VERIFY_PROMPT.format(
             insight_json=json.dumps(asdict(insight), indent=2),
             xref_json=json.dumps(asdict(xref), indent=2),
@@ -139,7 +144,8 @@ class VerificationMixin:
             prior_human_rejections_json=json.dumps(
                 self.journal.human_rejection_feedback(), indent=2,
             ),
-            engine_domain=getattr(self.config, "domain", "") or "(unspecified)",
+            engine_domain=engine_domain,
+            known_prior_art_json=json.dumps(known_prior_art, indent=2),
         )
         server_tools = [
             {"type": "web_search_20250305", "name": "web_search"},
@@ -175,6 +181,25 @@ class VerificationMixin:
         closest_peer_system = result.get("closest_peer_system") or {}
         skeptic_probe = result.get("skeptic_probe") or {}
         target_application_domain = (result.get("target_application_domain") or "").strip()
+        known_prior_art_evaluations = result.get("known_prior_art_evaluations", []) or []
+
+        # Known-prior-art guard: if any injected anchor was evaluated as a
+        # peer with substantive claim overlap AND no differentiators, the
+        # claim is at most an extension (or refuted). Human has already told
+        # the verifier these matter — respect that signal mechanically.
+        peer_with_overlap_no_diff = [
+            ev for ev in known_prior_art_evaluations
+            if ev.get("is_peer") and ev.get("overlaps_claim")
+            and not (ev.get("differentiators") or [])
+        ]
+        if peer_with_overlap_no_diff and novelty_type == "new_synthesis":
+            print(
+                f"  [known-prior-art guard] {len(peer_with_overlap_no_diff)} anchor(s) "
+                f"evaluated as peer with overlap + no differentiators — downgrading "
+                f"new_synthesis → extension (synthesis_findable flipped)."
+            )
+            novelty_type = "extension"
+            synthesis_findable = True
 
         # Phase-1 guard: if the central architectural move is already published
         # (central_move_prior_art non-empty with substantive entries), downgrade
@@ -445,6 +470,7 @@ class VerificationMixin:
             closest_peer_system=dict(closest_peer_system),
             skeptic_probe=dict(skeptic_probe),
             target_application_domain=target_application_domain,
+            known_prior_art_evaluations=list(known_prior_art_evaluations),
         )
 
         self.journal.add_register_entry(register_entry)
@@ -926,6 +952,8 @@ class VerificationMixin:
             supporting = [x for x in self.journal.entries if x["id"] in xref.source_entries]
             slim_supporting = [self._slim_entry_for_register(x) for x in supporting]
             from prompts import VERIFY_PROMPT
+            reverify_engine_domain = getattr(self.config, "domain", "") or "(unspecified)"
+            reverify_known_prior_art = self.journal.match_known_prior_art([reverify_engine_domain])
             prompt = VERIFY_PROMPT.format(
                 insight_json=json.dumps(asdict(insight), indent=2),
                 xref_json=json.dumps(asdict(xref), indent=2),
@@ -934,7 +962,8 @@ class VerificationMixin:
                 prior_human_rejections_json=json.dumps(
                     self.journal.human_rejection_feedback(), indent=2,
                 ),
-                engine_domain=getattr(self.config, "domain", "") or "(unspecified)",
+                engine_domain=reverify_engine_domain,
+                known_prior_art_json=json.dumps(reverify_known_prior_art, indent=2),
             )
             server_tools = [
                 {"type": "web_search_20250305", "name": "web_search"},
@@ -977,6 +1006,7 @@ class VerificationMixin:
                 "new_closest_peer_system": dict(result.get("closest_peer_system") or {}),
                 "new_skeptic_probe": dict(result.get("skeptic_probe") or {}),
                 "new_target_application_domain": (result.get("target_application_domain") or "").strip(),
+                "new_known_prior_art_evaluations": list(result.get("known_prior_art_evaluations", []) or []),
                 "new_functional_decomposition": list(result.get("functional_decomposition") or []),
                 "new_contradicting_findings": list(result.get("contradicting_findings") or []),
                 "new_reasoning_flaws": list(result.get("reasoning_flaws") or []),
