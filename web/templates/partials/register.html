@@ -122,19 +122,21 @@
           <h3 class="font-semibold flex-1">{{ r.title }}</h3>
           {# Research-directive export — per-record, on-demand. Only offered
              for active entries whose effective verdict is validated; a held or
-             refuted entry isn't ready to become a research plan. #}
+             refuted entry isn't ready to become a research plan.
+             Uses fetch-based POST (not form submit) so the user stays on the
+             register tab while the subprocess spins up — same pattern the
+             Admin tab buttons use. #}
           {% if r.status == 'active' %}
             {% set _rv = r.reverification_log or [] %}
             {% set _eff_verdict = (_rv[-1].new_verdict if _rv else r.verdict) or '' %}
             {% if _eff_verdict == 'validated' %}
-              <form method="post" action="/journals/{{ name }}/register/{{ r.id }}/directive"
-                    onsubmit="return confirm('Generate a research directive for {{ r.id }}?\nThis runs the primary + verifier pipeline (~1-2 min). Output will land in data/{{ name }}_directives/{{ r.id }}.md');"
-                    class="flex-shrink-0">
-                <button type="submit" title="Export research directive — runs primary + verifier pipeline"
-                        class="px-2 py-1 rounded-md bg-teal-600/80 hover:bg-teal-500 text-white text-[11px] font-medium shadow whitespace-nowrap">
-                  Export directive →
-                </button>
-              </form>
+              <button type="button"
+                      class="directive-export-btn px-2 py-1 rounded-md bg-teal-600/80 hover:bg-teal-500 text-white text-[11px] font-medium shadow whitespace-nowrap flex-shrink-0 disabled:opacity-50"
+                      data-directive-url="/journals/{{ name }}/register/{{ r.id }}/directive"
+                      data-directive-id="{{ r.id }}"
+                      title="Export research directive — runs primary + verifier pipeline (~1-2 min). Output lands in data/{{ name }}_directives/{{ r.id }}.md. Watch progress in the Runs tab.">
+                Export directive →
+              </button>
             {% endif %}
           {% endif %}
         </div>
@@ -522,3 +524,51 @@
     {% endif %}
   </p>
 {% endif %}
+
+<script>
+(() => {
+  // Directive-export button wiring. Matches the admin-btn pattern: POST via
+  // fetch so the user stays on the register tab while the subprocess spins
+  // up. On success, flip the button to a linked "view" state pointing at
+  // the output file (which the subprocess will write once it finishes).
+  document.querySelectorAll('.directive-export-btn').forEach(btn => {
+    if (btn.dataset.wired === '1') return;
+    btn.dataset.wired = '1';
+    btn.addEventListener('click', async () => {
+      if (btn.disabled) return;
+      const id = btn.dataset.directiveId;
+      if (!confirm(
+        'Generate a research directive for ' + id + '?\n\n' +
+        'This runs the primary + verifier pipeline (~1-2 min). ' +
+        'Progress streams to the Runs tab. Output will appear at ' +
+        'data/<journal>_directives/' + id + '.md once complete.'
+      )) return;
+      const orig = btn.innerHTML;
+      btn.disabled = true;
+      btn.innerHTML = 'Starting…';
+      try {
+        const res = await fetch(btn.dataset.directiveUrl, {method: 'POST'});
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const j = await res.json();
+        if (j.run_id) {
+          // Subprocess is up — swap to a "running" state linking to the Runs tab.
+          const name = window.location.pathname.split('/')[2] || '';
+          btn.innerHTML = 'Running… view log';
+          btn.classList.remove('bg-teal-600/80','hover:bg-teal-500');
+          btn.classList.add('bg-amber-600/80','hover:bg-amber-500');
+          btn.onclick = () => { window.location.href = '/journals/' + name + '?tab=runs'; };
+          btn.disabled = false;
+        } else {
+          btn.innerHTML = orig;
+          btn.disabled = false;
+          alert('Export kicked off but no run_id returned. Response: ' + JSON.stringify(j));
+        }
+      } catch (err) {
+        btn.innerHTML = orig;
+        btn.disabled = false;
+        alert('Failed to start export: ' + err.message);
+      }
+    });
+  });
+})();
+</script>
