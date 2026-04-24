@@ -478,8 +478,16 @@
         try {
           const res = await fetch(url, { method: "POST", body });
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          // Navigate to Runs tab so the user can watch the stream.
-          window.location.href = "/journals/{{ name }}?tab=runs";
+          // Navigate to the Runs tab — deep-linking to this specific run's
+          // card (via #run-<id>) if the endpoint returned a run_id. The
+          // runs partial auto-opens matching details and scrolls to them,
+          // so the user lands on the live log rather than the tab's top.
+          let runHash = "";
+          try {
+            const j = await res.json();
+            if (j && j.run_id) runHash = "#run-" + encodeURIComponent(j.run_id);
+          } catch (_) { /* non-JSON response — fall back to tab root */ }
+          window.location.href = "/journals/{{ name }}?tab=runs" + runHash;
         } catch (err) {
           btn.innerHTML = origText;
           btn.disabled = false;

@@ -551,13 +551,11 @@
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const j = await res.json();
         if (j.run_id) {
-          // Subprocess is up — swap to a "running" state linking to the Runs tab.
+          // Subprocess is up — take the user straight to that specific run
+          // on the Runs tab. The runs partial auto-opens details whose id
+          // matches the URL fragment, so they land on the live log directly.
           const name = window.location.pathname.split('/')[2] || '';
-          btn.innerHTML = 'Running… view log';
-          btn.classList.remove('bg-teal-600/80','hover:bg-teal-500');
-          btn.classList.add('bg-amber-600/80','hover:bg-amber-500');
-          btn.onclick = () => { window.location.href = '/journals/' + name + '?tab=runs'; };
-          btn.disabled = false;
+          window.location.href = '/journals/' + name + '?tab=runs#run-' + encodeURIComponent(j.run_id);
         } else {
           btn.innerHTML = orig;
           btn.disabled = false;

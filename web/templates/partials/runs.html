@@ -28,7 +28,8 @@
 
   {% macro run_card(r, is_first=False) %}
     {% set is_active = r.run_id in active_ids %}
-    <details class="rounded-xl border {% if is_active %}border-amber-500/40 bg-amber-500/5 animate-pulse-border
+    <details id="run-{{ r.run_id }}"
+             class="rounded-xl border scroll-mt-24 {% if is_active %}border-amber-500/40 bg-amber-500/5 animate-pulse-border
                     {% elif r.status == 'failed' %}border-rose-500/40 bg-rose-500/5
                     {% else %}border-slate-700/60 bg-slate-900/30{% endif %}"
              {% if is_active and is_first %}open{% endif %}>
@@ -137,6 +138,36 @@
           })
           .catch(err => { target.innerHTML = `<div class="p-4 text-xs text-rose-400">Failed to load: ${err.message}</div>`; });
       });
+
+      // Deep-link: if the URL hash points at a specific run (e.g.
+      // #run-<uuid>), auto-open that card + scroll to it. Used by the
+      // "Export directive →" / other admin buttons that redirect straight
+      // to a run after kicking it off, so the user lands on the exact
+      // subprocess's log instead of the Runs-tab top.
+      const openByHash = () => {
+        if (!window.location.hash) return;
+        const target = document.querySelector(window.location.hash);
+        if (!target) return;
+        if (target.tagName === 'DETAILS' && !target.open) {
+          target.open = true;
+          // Trigger log fetch for newly-opened run card (htmx toggle race
+          // already handled above — replicate for this path).
+          const hxTarget = target.querySelector('[hx-get]:not([data-ce-loaded])');
+          if (hxTarget) {
+            const url = hxTarget.getAttribute('hx-get');
+            if (url) {
+              hxTarget.dataset.ceLoaded = '1';
+              fetch(url)
+                .then(r => r.ok ? r.text() : Promise.reject(new Error('HTTP ' + r.status)))
+                .then(html => { hxTarget.innerHTML = html; reinstateScripts(hxTarget); })
+                .catch(err => { hxTarget.innerHTML = `<div class="p-4 text-xs text-rose-400">Failed to load: ${err.message}</div>`; });
+            }
+          }
+        }
+        target.scrollIntoView({behavior: 'smooth', block: 'start'});
+      };
+      openByHash();
+      window.addEventListener('hashchange', openByHash);
     })();
   </script>
 {% else %}
