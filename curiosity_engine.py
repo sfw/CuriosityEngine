@@ -219,6 +219,7 @@ def main():
         analog_probe_max_analogs=connection.engine.analog_probe_max_analogs,
         assumption_probe_max_assumptions=connection.engine.assumption_probe_max_assumptions,
         gap_verification_hit_threshold=connection.engine.gap_verification_hit_threshold,
+        confidence_drop_on_downgrade=connection.engine.confidence_drop_on_downgrade,
     )
 
     engine = CuriosityEngine(config)

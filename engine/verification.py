@@ -46,26 +46,49 @@ class VerificationMixin:
         confidence: float,
         premises_supported: bool,
         synthesis_findable: bool,
+        *,
+        novelty_type: str = "",
+        peer_has_differentiators: bool = False,
     ) -> tuple[str, str, list[str]]:
         """Apply the register gate.
 
-        Returns (outcome, entry_status, reasons):
-          - ('register', 'active', []) — validated + premises + !synthesis + conf>=floor
-          - ('hold',     'held',   []) — inconclusive + premises + conf>=held_floor (if enabled)
-          - ('reject',   '',       [reasons...]) — anything else
+        Three valid registration paths:
+          1. new_synthesis / correction: validated + premises + !synthesis_findable + conf>=floor
+          2. extension: validated + premises + peer_has_differentiators + conf>=floor
+             (synthesis_findable may be True — central move IS findable, that's the
+             definition of extension. What justifies registration is that the peer
+             system differs on substantive axes.)
+          3. inconclusive → held: held_enabled + premises + conf>=held_floor
+
+        Returns (outcome, entry_status, reasons).
         """
         floor = float(getattr(self.config, "register_confidence_floor", 0.6))
         held_enabled = bool(getattr(self.config, "held_entries_enabled", True))
         held_floor = float(getattr(self.config, "held_confidence_floor", 0.7))
 
+        # Path 1: new_synthesis / correction (composite not in literature).
         if (
             verdict == "validated"
             and premises_supported
             and not synthesis_findable
             and confidence >= floor
+            and novelty_type in ("", "new_synthesis", "correction")
         ):
             return ("register", "active", [])
 
+        # Path 2: extension with substantive differentiators. Central move
+        # may be in literature (synthesis_findable=True) — what validates the
+        # registration is the explicit peer-differentiator set.
+        if (
+            verdict == "validated"
+            and novelty_type == "extension"
+            and premises_supported
+            and peer_has_differentiators
+            and confidence >= floor
+        ):
+            return ("register", "active", [])
+
+        # Path 3: inconclusive → held.
         if (
             held_enabled
             and verdict == "inconclusive"
@@ -86,8 +109,14 @@ class VerificationMixin:
                 reasons.append(f"held_conf<{held_floor}")
         if not premises_supported:
             reasons.append("premises_unsupported")
-        if verdict == "validated" and synthesis_findable:
+        if verdict == "validated" and synthesis_findable and novelty_type != "extension":
             reasons.append("synthesis_already_in_literature")
+        if verdict == "validated" and novelty_type == "extension" and not peer_has_differentiators:
+            reasons.append("extension_without_differentiators")
+        if novelty_type == "restatement":
+            reasons.append("restatement")
+        if novelty_type == "unsupported":
+            reasons.append("unsupported_premises")
         return ("reject", "", reasons)
 
     def verify_insight(
@@ -127,6 +156,11 @@ class VerificationMixin:
         )
 
         verdict = (result.get("verdict") or "refuted").strip().lower()
+        # Preserve the LLM's original verdict for the confidence-drop audit:
+        # when a guard downgrades validated→challenged / inconclusive→challenged,
+        # we want to reflect that downgrade in the stored confidence rather than
+        # trusting the LLM's hedged-but-still-high number.
+        llm_returned_verdict = verdict
         verified_confidence = float(result.get("verified_confidence", 0.0))
         premises_supported = bool(result.get("premises_supported", True))
         synthesis_findable = bool(result.get("synthesis_findable", False))
@@ -218,11 +252,25 @@ class VerificationMixin:
         # substantive critique (not a restatement of ingredient-existence,
         # which the prompt explicitly tells the LLM not to count).
         floor = float(getattr(self.config, "register_confidence_floor", 0.6))
+        # Extensions count for the upgrade IF the peer system has substantive
+        # differentiators — that's the evidence the extension actually adds
+        # something beyond the known peer. Without differentiators an
+        # "extension" is effectively a restatement and must stay challenged.
+        peer_has_differentiators_for_upgrade = bool(
+            (closest_peer_system.get("differentiators") or [])
+        )
+        extension_eligible_for_upgrade = (
+            novelty_type == "extension"
+            and peer_has_differentiators_for_upgrade
+        )
+        new_synthesis_eligible_for_upgrade = (
+            novelty_type in ("new_synthesis", "correction")
+            and not synthesis_findable
+        )
         if (
             verdict == "challenged"
-            and novelty_type in ("new_synthesis", "correction")
+            and (new_synthesis_eligible_for_upgrade or extension_eligible_for_upgrade)
             and premises_supported
-            and not synthesis_findable
             and verified_confidence >= floor
         ):
             reasoning_flaws = result.get("reasoning_flaws", []) or []
@@ -291,14 +339,42 @@ class VerificationMixin:
                     f"respecting `challenged` verdict."
                 )
             else:
-                print(
-                    f"  [guardrail] verdict=challenged but decomposition is unambiguous "
-                    f"(novelty={novelty_type}, premises=✓, synthesis_findable=✗) and "
-                    f"reasoning_flaws "
-                    f"{'is empty' if not reasoning_flaws else 'contains no substantive critique markers'} — "
-                    f"upgrading to validated."
-                )
+                if extension_eligible_for_upgrade:
+                    print(
+                        f"  [guardrail] verdict=challenged but decomposition is a valid extension "
+                        f"(novelty=extension, premises=✓, peer has "
+                        f"{len(closest_peer_system.get('differentiators') or [])} differentiator(s)) and "
+                        f"reasoning_flaws "
+                        f"{'is empty' if not reasoning_flaws else 'contains no substantive critique markers'} — "
+                        f"upgrading to validated."
+                    )
+                else:
+                    print(
+                        f"  [guardrail] verdict=challenged but decomposition is unambiguous "
+                        f"(novelty={novelty_type}, premises=✓, synthesis_findable=✗) and "
+                        f"reasoning_flaws "
+                        f"{'is empty' if not reasoning_flaws else 'contains no substantive critique markers'} — "
+                        f"upgrading to validated."
+                    )
                 verdict = "validated"
+
+        # Confidence-drop on any guard-induced downgrade. When a guard flipped
+        # a "validated" verdict to "challenged" (skeptic-probe) or an
+        # "inconclusive" to "challenged" (inconclusive guardrail), the LLM's
+        # originally-returned confidence was computed before knowing the guard
+        # would fire. Flat confidence on a verdict change is the classic hedge
+        # signature — mechanically penalize it so the stored confidence
+        # reflects the revised assessment.
+        if llm_returned_verdict != verdict and verdict == "challenged":
+            _penalty = float(getattr(
+                self.config, "confidence_drop_on_downgrade", 0.10,
+            ))
+            _pre = verified_confidence
+            verified_confidence = max(0.0, verified_confidence - _penalty)
+            print(
+                f"  [confidence-drop] verdict {llm_returned_verdict}→{verdict} via guard — "
+                f"conf {_pre:.2f} → {verified_confidence:.2f} (penalty {_penalty:.2f})"
+            )
 
         print(f"  Verdict: {verdict} · novelty={novelty_type or '?'} "
               f"· premises={'✓' if premises_supported else '✗'} "
@@ -307,8 +383,13 @@ class VerificationMixin:
         if summary:
             print(f"  {summary[:200]}...")
 
+        peer_has_differentiators = bool(
+            closest_peer_system.get("differentiators") or []
+        )
         outcome, entry_status, gate_reasons = self._register_gate(
             verdict, verified_confidence, premises_supported, synthesis_findable,
+            novelty_type=novelty_type,
+            peer_has_differentiators=peer_has_differentiators,
         )
         if outcome == "reject":
             print(f"  Not registered ({', '.join(gate_reasons)}).")

@@ -347,6 +347,19 @@
                  value="{{ connection.engine.gap_verification_hit_threshold }}"
                  class="mt-1 w-32 px-3 py-2 rounded-lg border border-slate-700 bg-slate-900/60 text-sm mono" />
         </label>
+        <label class="block md:col-span-3">
+          <span class="text-xs uppercase tracking-wider text-slate-400">confidence_drop_on_downgrade</span>
+          <span class="block text-[11px] text-slate-500">
+            When an engine-side guard downgrades the verifier's verdict (skeptic-probe flips
+            <span class="mono">validated→challenged</span>, inconclusive guardrail fires, etc.), the LLM's
+            returned confidence was computed before the guard fired. Flat confidence on a verdict flip is a
+            hedge signature. This amount (0–0.5; default 0.10) is subtracted from
+            <span class="mono">verified_confidence</span> on any such downgrade. Set to 0 to disable.
+          </span>
+          <input name="engine_confidence_drop_on_downgrade" type="number" step="0.01" min="0" max="0.5"
+                 value="{{ connection.engine.confidence_drop_on_downgrade }}"
+                 class="mt-1 w-32 px-3 py-2 rounded-lg border border-slate-700 bg-slate-900/60 text-sm mono" />
+        </label>
       </div>
     </section>
 

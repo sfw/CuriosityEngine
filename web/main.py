@@ -1264,6 +1264,7 @@ def settings_save(
     engine_parallel_xref_pipeline: int = Form(1),
     engine_negative_space_min_entries: int = Form(15),
     engine_gap_verification_hit_threshold: int = Form(5),
+    engine_confidence_drop_on_downgrade: float = Form(0.10),
     engine_analog_probe_max_analogs: int = Form(3),
     engine_assumption_probe_max_assumptions: int = Form(3),
 ):
@@ -1362,6 +1363,7 @@ def settings_save(
             f"parallel_xref_pipeline = {max(1, min(5, engine_parallel_xref_pipeline))}\n"
             f"negative_space_min_entries = {max(1, min(500, engine_negative_space_min_entries))}\n"
             f"gap_verification_hit_threshold = {max(1, min(100, engine_gap_verification_hit_threshold))}\n"
+            f"confidence_drop_on_downgrade = {max(0.0, min(0.5, engine_confidence_drop_on_downgrade))}\n"
             f"analog_probe_max_analogs = {max(1, min(10, engine_analog_probe_max_analogs))}\n"
             f"assumption_probe_max_assumptions = {max(1, min(10, engine_assumption_probe_max_assumptions))}\n"
         )

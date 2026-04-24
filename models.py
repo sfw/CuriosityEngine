@@ -216,6 +216,14 @@ class EngineConfig:
     assumption_probe_max_assumptions: int = 3
     negative_space_min_entries: int = 15
     gap_verification_hit_threshold: int = 5
+    # When an engine-side guard downgrades the verifier's verdict (e.g. the
+    # skeptic-probe guard flips validated→challenged), the LLM's returned
+    # confidence was computed BEFORE knowing the guard would fire — flat
+    # confidence on a verdict change is the hedge signature. This value is
+    # subtracted from verified_confidence whenever a guard downgrades the
+    # verdict, so the stored confidence reflects the revised assessment.
+    # Set to 0 to disable the penalty.
+    confidence_drop_on_downgrade: float = 0.10
     held_entries_enabled: bool = True
     held_confidence_floor: float = 0.7
     # Parallel fan-out knobs. Default 1 = serial (preserves prior behavior

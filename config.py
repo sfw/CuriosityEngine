@@ -93,6 +93,12 @@ class EngineSettings:
     # raise if you're getting false positives on well-covered topics, lower if
     # nothing is ever confirmed empty.
     gap_verification_hit_threshold: int = 5
+    # Confidence penalty applied when an engine-side guard downgrades a
+    # verdict (e.g. skeptic-probe flips validated→challenged). The LLM's
+    # returned confidence was computed before the guard fired; flat
+    # confidence on a verdict change is a hedge pattern. This floor keeps
+    # stored confidence honest. Set to 0.0 to disable.
+    confidence_drop_on_downgrade: float = 0.10
     # Parallel fan-out — how many investigations / xref-synth+verify pipelines
     # run concurrently per cycle. Default 1 = fully serial (zero behavior change).
     # Rate limiters are shared across threads so raising these does not burst
@@ -220,6 +226,9 @@ class CuriosityEngineConfig:
             negative_space_min_entries=int(eng_section.get("negative_space_min_entries", 15)),
             gap_verification_hit_threshold=int(
                 eng_section.get("gap_verification_hit_threshold", 5)
+            ),
+            confidence_drop_on_downgrade=float(
+                eng_section.get("confidence_drop_on_downgrade", 0.10)
             ),
             held_entries_enabled=bool(eng_section.get("held_entries_enabled", True)),
             held_confidence_floor=float(eng_section.get("held_confidence_floor", 0.7)),
@@ -506,6 +515,10 @@ negative_space_min_entries = {eng.negative_space_min_entries}
 # verification queries is below this. Raise if well-covered topics are being
 # falsely confirmed as gaps; lower if nothing is ever confirmed empty.
 gap_verification_hit_threshold = {eng.gap_verification_hit_threshold}
+# Confidence penalty when an engine-side guard downgrades the verdict.
+# Addresses the hedge pattern where the LLM returns flat confidence despite
+# a verdict flip. Set to 0.0 to disable.
+confidence_drop_on_downgrade = {eng.confidence_drop_on_downgrade}
 # Held-state pipeline — when the verifier returns `inconclusive` (couldn't reach
 # the claim, not refuted it), insights become held register entries pending
 # settlement rather than being silently rejected. Held entries usually require
