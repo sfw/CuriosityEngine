@@ -18,6 +18,7 @@ from providers import (
 )
 
 from engine.cross_reference import CrossReferenceMixin
+from engine.directives import DirectivesMixin
 from engine.display import DisplayMixin
 from engine.introspect import IntrospectionMixin
 from engine.investigation import InvestigationMixin
@@ -32,6 +33,7 @@ class CuriosityEngine(
     CrossReferenceMixin,
     VerificationMixin,
     NegativeSpaceMixin,
+    DirectivesMixin,
     DisplayMixin,
 ):
     """Curiosity loop orchestrator.

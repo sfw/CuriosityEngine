@@ -20,6 +20,7 @@ from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import (
     HTMLResponse,
     JSONResponse,
+    PlainTextResponse,
     RedirectResponse,
     StreamingResponse,
 )
@@ -543,6 +544,50 @@ async def maintenance_reverify_register(
     return JSONResponse(result)
 
 
+@app.post("/journals/{name}/register/{entry_id}/directive")
+async def export_register_directive(name: str, entry_id: str):
+    """Generate a research directive (markdown) for one register entry.
+    Spawns `curiosity_engine.py --export-directive <id>`; streams log to
+    the live-log panel. Output written to data/{journal}_directives/."""
+    result = await _spawn_maintenance_subprocess(
+        _journal_path(name), ["--export-directive", entry_id], kind="export-directive",
+    )
+    return JSONResponse(result)
+
+
+@app.post("/journals/{name}/maintenance/export-directives-bundle")
+async def maintenance_export_directives_bundle(name: str):
+    """Generate a research-directives bundle covering all qualifying entries.
+    Slow — runs the primary+verifier pipeline once per qualifying entry.
+    Output: data/{journal}_directives/bundle-<timestamp>.md + sidecar."""
+    result = await _spawn_maintenance_subprocess(
+        _journal_path(name), ["--export-directives-bundle"], kind="export-directives-bundle",
+    )
+    return JSONResponse(result)
+
+
+@app.get("/journals/{name}/directives/{filename}")
+def serve_directive_file(name: str, filename: str):
+    """Serve a generated directive markdown (or sidecar JSON) for download/view.
+    Path sanitised against traversal. Only files in the journal's directives/
+    directory are reachable."""
+    journal_path = _journal_path(name)
+    directives_dir = journal_path.parent / f"{journal_path.stem}_directives"
+    # Sanitise: reject any path traversal attempts. Only a plain filename
+    # (no slashes, no parent refs) is allowed.
+    if "/" in filename or "\\" in filename or ".." in filename:
+        return PlainTextResponse("invalid filename", status_code=400)
+    target = directives_dir / filename
+    if not target.exists() or not target.is_file():
+        return PlainTextResponse("not found", status_code=404)
+    content = target.read_text()
+    # Use text/markdown for .md so browsers don't download-prompt uselessly;
+    # JSON for sidecars.
+    if filename.endswith(".json"):
+        return PlainTextResponse(content, media_type="application/json")
+    return PlainTextResponse(content, media_type="text/markdown")
+
+
 @app.post("/journals/{name}/maintenance/scan-gaps")
 async def maintenance_scan_gaps(name: str):
     """Run a negative-space scan on this journal. Spawns `curiosity_engine.py
@@ -659,7 +704,33 @@ def journal_admin(request: Request, name: str):
         "register_count": len(journal.register),
         "known_prior_art": list(journal.known_prior_art),
         "engine_domain": journal.last_domain or "",
+        "directive_bundle_count": _count_directive_bundles(name),
+        "latest_directives": _list_directive_files(name),
     })
+
+
+def _count_directive_bundles(name: str) -> int:
+    d = _journal_path(name).parent / f"{_journal_path(name).stem}_directives"
+    if not d.exists():
+        return 0
+    return sum(1 for f in d.glob("bundle-*.md"))
+
+
+def _list_directive_files(name: str) -> list[dict]:
+    """List directive .md files (both per-record and bundle), newest first."""
+    d = _journal_path(name).parent / f"{_journal_path(name).stem}_directives"
+    if not d.exists():
+        return []
+    files = sorted(d.glob("*.md"), key=lambda f: f.stat().st_mtime, reverse=True)
+    out = []
+    for f in files:
+        st = f.stat()
+        out.append({
+            "filename": f.name,
+            "size_kb": f"{st.st_size / 1024:.1f}",
+            "modified": datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).strftime("%Y-%m-%d %H:%M"),
+        })
+    return out
 
 
 @app.get("/journals/{name}/predictions", response_class=HTMLResponse)

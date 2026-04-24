@@ -118,7 +118,26 @@
                          {% else %}bg-slate-200 dark:bg-slate-700{% endif %}">{{ status }}</span>
           </div>
         </div>
-        <h3 class="mt-1 font-semibold">{{ r.title }}</h3>
+        <div class="mt-1 flex items-start justify-between gap-3">
+          <h3 class="font-semibold flex-1">{{ r.title }}</h3>
+          {# Research-directive export — per-record, on-demand. Only offered
+             for active entries whose effective verdict is validated; a held or
+             refuted entry isn't ready to become a research plan. #}
+          {% if r.status == 'active' %}
+            {% set _rv = r.reverification_log or [] %}
+            {% set _eff_verdict = (_rv[-1].new_verdict if _rv else r.verdict) or '' %}
+            {% if _eff_verdict == 'validated' %}
+              <form method="post" action="/journals/{{ name }}/register/{{ r.id }}/directive"
+                    onsubmit="return confirm('Generate a research directive for {{ r.id }}?\nThis runs the primary + verifier pipeline (~1-2 min). Output will land in data/{{ name }}_directives/{{ r.id }}.md');"
+                    class="flex-shrink-0">
+                <button type="submit" title="Export research directive — runs primary + verifier pipeline"
+                        class="px-2 py-1 rounded-md bg-teal-600/80 hover:bg-teal-500 text-white text-[11px] font-medium shadow whitespace-nowrap">
+                  Export directive →
+                </button>
+              </form>
+            {% endif %}
+          {% endif %}
+        </div>
         <p class="mt-2 text-sm whitespace-pre-wrap">{{ r.description }}</p>
 
         {% if 'premises_supported' in r or 'synthesis_findable' in r %}

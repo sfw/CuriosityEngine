@@ -256,6 +256,50 @@
       </button>
     </div>
 
+    {# 4b. Export research-directives bundle #}
+    <div class="rounded-xl border border-slate-700/60 bg-slate-900/40 p-4 flex items-start gap-4 flex-wrap">
+      <div class="flex-1 min-w-[240px]">
+        <div class="flex items-center gap-2 mb-1 flex-wrap">
+          <svg class="w-4 h-4 text-teal-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+          </svg>
+          <h4 class="text-sm font-semibold text-slate-200">Export research directives (bundle)</h4>
+          {% if directive_bundle_count %}
+            <span class="mono text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">{{ directive_bundle_count }} prior</span>
+          {% endif %}
+        </div>
+        <p class="text-xs text-slate-500 leading-relaxed">
+          Generate a <em>bundle</em> covering every qualifying register entry (validated verdict ×
+          at least one open prediction). Slower than per-record — runs the primary + verifier
+          pipeline once per entry. Output: a single markdown file + JSON sidecar in
+          <span class="mono">data/{{ name }}_directives/</span>. Per-record exports (button on each register card)
+          are the daily-use path; use this for a periodic snapshot.
+        </p>
+        {% if latest_directives %}
+          <details class="mt-2">
+            <summary class="text-[11px] text-slate-500 cursor-pointer hover:text-slate-300">
+              Prior directives ({{ latest_directives|length }})
+            </summary>
+            <ul class="mt-1 space-y-1 text-[11px] mono">
+              {% for d in latest_directives[:20] %}
+                <li>
+                  <a href="/journals/{{ name }}/directives/{{ d.filename }}"
+                     target="_blank"
+                     class="text-indigo-400 hover:text-indigo-300">{{ d.filename }}</a>
+                  <span class="text-slate-600">· {{ d.size_kb }} KB · {{ d.modified }}</span>
+                </li>
+              {% endfor %}
+            </ul>
+          </details>
+        {% endif %}
+      </div>
+      <button type="button" data-action="export-directives-bundle"
+              data-confirm="Generate a research-directives bundle? This runs the primary + verifier pipeline once per qualifying entry; expect several minutes."
+              class="admin-btn px-3 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-500 text-white text-xs font-medium shadow-lg shadow-teal-900/30 flex-shrink-0">
+        Export bundle →
+      </button>
+    </div>
+
     {# 5. Check due predictions #}
     <div class="rounded-xl border border-slate-700/60 bg-slate-900/40 p-4 flex items-start gap-4 flex-wrap">
       <div class="flex-1 min-w-[240px]">
@@ -402,6 +446,7 @@
       "check-predictions":    "/journals/{{ name }}/maintenance/check-predictions",
       "check-predictions-all":"/journals/{{ name }}/maintenance/check-predictions",
       "scan-gaps":            "/journals/{{ name }}/maintenance/scan-gaps",
+      "export-directives-bundle": "/journals/{{ name }}/maintenance/export-directives-bundle",
     };
 
     document.querySelectorAll(".admin-btn").forEach(btn => {

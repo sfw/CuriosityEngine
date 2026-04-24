@@ -625,3 +625,123 @@ Respond with EXACTLY this JSON structure (no other text):
   "open_questions": ["what would need to be investigated to validate this"],
   "counter_arguments": ["why this might be wrong"]
 }}"""
+
+
+DIRECTIVE_SYNTHESIS_PROMPT = """You are composing a RESEARCH DIRECTIVE — a structured plan a researcher could execute to test a verified theory from our research register. The output must be grounded: every citation, URL, dataset, and tool name you reference must trace to source material we provide below. Fabricating anything sends a human researcher chasing ghosts — worse than no output.
+
+ENGINE DOMAIN: {engine_domain}
+
+REGISTER ENTRY UNDER TRANSLATION:
+{register_entry_json}
+
+ATTACHED PREDICTIONS:
+{predictions_json}
+
+CITATIONS ALLOWLIST (every URL / DOI / arXiv ID you cite MUST appear verbatim in this list):
+{citations_json}
+
+AGENT TOOL ALLOWLIST (every tool name you reference in the agentic prompt MUST exact-match one of these):
+{tool_allowlist_json}
+
+GROUNDING RULES — non-negotiable:
+- Every URL, DOI, arXiv ID, or dataset identifier you reference must come from the CITATIONS ALLOWLIST. Do not guess URL patterns. Do not infer DOIs.
+- Every tool you name in the agentic prompt must be an exact string from the AGENT TOOL ALLOWLIST. Do not reference tools that "might exist". Do not use generic phrasings like "use a search engine" — write "call `web_search(query=...)`" with a named allowlist tool.
+- If a required tool or dataset isn't in either allowlist, SAY SO in the `unresolved_dependencies` field. Do not invent a plausible-looking replacement.
+- Success/failure criteria for the test plan must be OBJECTIVELY measurable — a specific output pattern, a numerical threshold, a citation count, etc. "See if the approach works" is not measurable.
+- No hand-wave steps. Every step in the test plan and agentic prompt must be concretely executable.
+
+Produce a markdown document with these sections (in this order):
+
+# {{title}}
+
+> **Source register entry**: `{{register_entry_id}}` · **Verdict**: {{verdict}} · **Novelty**: {{novelty_type}} · **Confidence**: {{confidence}}
+
+## Theory
+[2-4 sentences stating the claim plainly, followed by 1-2 sentences naming the load-bearing premises the claim rests on.]
+
+## Hypothesis
+[What would be observable in the world if the theory is correct. 2-3 sentences.]
+
+## Prior Art Positioning
+[Summarize the closest_peer_system. Name it, cite its URL from the allowlist, describe in 1-2 sentences what it does that overlaps, and enumerate the differentiators — the specific ways this theory differs. If functional_decomposition is provided, use it to structure the differentiators by dimension.]
+
+## Test Plan
+[A concrete experimental design. 3-6 numbered steps. Each step names inputs, actions, and observable outputs. Expand the predictions' `check_method` fields into something a researcher could execute. No hand-waves.]
+
+## Agentic Prompt
+
+```
+[A self-contained instruction block ready to paste into an LLM-driven agent. It must:
+- Use only tools from the AGENT TOOL ALLOWLIST, referenced by exact name (e.g. `web_search`, `academic_search`, `web_fetch`, `code_execution`).
+- Specify inputs (file paths, query strings, URLs) explicitly.
+- Include checkpoint gates where human review is appropriate (e.g. "HALT: present findings for approval before proceeding to step N").
+- Specify output format and where it should be saved.
+- Define stop conditions (success, failure, inconclusive).]
+```
+
+## Verification Criteria
+| Outcome | Observable signal |
+| --- | --- |
+| Confirmed | [concrete, objectively-measurable condition] |
+| Refuted | [concrete, objectively-measurable condition] |
+| Inconclusive | [condition under which the test didn't have purchase] |
+
+## References
+[Bulleted list of the citations actually used in this directive — each MUST be from the allowlist.]
+
+---
+
+Respond with EXACTLY this JSON structure (no other text) — the `markdown` field carries the full directive content described above, rendered as a single string. Line breaks inside the string are required (use `\\n` in the JSON string):
+
+{{
+  "title": "short descriptive title used in section 1",
+  "markdown": "the full markdown directive as described above — all sections from '# {{title}}' through '## References'",
+  "tool_names_used": ["exact names of tools referenced in the agentic prompt"],
+  "citations_used": ["URLs/DOIs/arXiv IDs referenced anywhere in the directive"],
+  "unresolved_dependencies": ["any required tool/dataset/url that was NOT in either allowlist — should be empty if the directive is fully grounded"]
+}}"""
+
+
+DIRECTIVE_VERIFIER_PROMPT = """You are the VERIFIER reviewing a research directive composed by the primary model. Your job is to catch fabrication before a human researcher acts on a ghost.
+
+ORIGINAL REGISTER ENTRY:
+{register_entry_json}
+
+CITATIONS ALLOWLIST (the primary was told it MUST cite only from this set):
+{citations_json}
+
+AGENT TOOL ALLOWLIST (the primary was told it MUST reference only from this set):
+{tool_allowlist_json}
+
+DIRECTIVE MARKDOWN UNDER REVIEW:
+{directive_markdown}
+
+DIRECTIVE FOOTER (primary's self-declaration of what it used):
+{directive_footer_json}
+
+Check each of these grounding rules. Flag violations; do NOT rationalise past them.
+
+1. **Citation grounding**: Every URL / DOI / arXiv ID in the directive markdown must appear verbatim in the CITATIONS ALLOWLIST. Partial matches don't count — "arxiv.org/abs/2502.18864" and "arxiv.org/abs/2502.18864v1" are DIFFERENT strings. Any citation not in the allowlist is a fabrication.
+
+2. **Tool grounding**: Every tool name in the agentic prompt's code block must exact-match the AGENT TOOL ALLOWLIST. Case-sensitive. Generic phrasings like "search engine" / "an agent tool" / "a web crawler" that don't name a specific allowlist tool are fabrications by omission.
+
+3. **Hand-wave detection**: Scan the Test Plan and Agentic Prompt for vague steps — phrases like "figure out the right approach", "try various prompts", "iterate until it works", "check various sources", "use an appropriate tool", "determine the best". These are hand-waves that render the directive non-executable.
+
+4. **Measurable criteria**: The Verification Criteria table must have concrete observable signals for each row — numerical thresholds, specific output patterns, citation counts, dataset matches. Vague language like "the approach demonstrates utility" is not measurable.
+
+5. **Self-declaration integrity**: The directive footer's `tool_names_used` and `citations_used` lists should match what's actually in the markdown. If the primary claimed in the footer that it used only allowlist-approved tools but the markdown body uses a non-allowlist tool, that's a self-declaration integrity failure.
+
+Respond with EXACTLY this JSON structure (no other text):
+
+{{
+  "ok": true,
+  "unlisted_citations": ["every URL/DOI/arXiv ID found in the directive markdown that is NOT in the citations allowlist — empty if clean"],
+  "unlisted_tools": ["every tool name found in the agentic prompt that is NOT in the tool allowlist — empty if clean"],
+  "handwave_steps": ["direct quotes of hand-wave language in the Test Plan or Agentic Prompt — empty if clean"],
+  "non_measurable_criteria": ["direct quotes of non-measurable entries in the Verification Criteria table — empty if clean"],
+  "self_declaration_mismatches": ["descriptions of discrepancies between the footer and markdown — empty if clean"],
+  "overall_assessment": "one paragraph stating whether the directive is executable as-is or what must be fixed",
+  "severity": "clean|needs_fixes|fatal"
+}}
+
+`ok` is true iff all five checks pass (all arrays empty AND severity=clean). The retry loop depends on this boolean."""
