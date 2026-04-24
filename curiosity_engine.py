@@ -95,6 +95,14 @@ def main():
                         help="Re-run verification on every insight that does NOT already have a register entry — elevates previously-rejected insights under current rules.")
     parser.add_argument("--reverify-insight", type=str, default=None, metavar="INSIGHT_ID",
                         help="Re-verify a single insight by id (e.g. i-abc12345). Overrides --reverify-insights scope.")
+    parser.add_argument("--reverify-register", action="store_true",
+                        help="Re-run the verifier over EXISTING register entries WITHOUT overwriting them — appends a reverification_log to each entry. Use after changing verification rules to audit whether old verdicts still hold.")
+    parser.add_argument("--reverify-register-id", type=str, default=None, metavar="REGISTER_ID",
+                        help="Re-verify a single register entry by id (e.g. r-abc12345). Overrides --reverify-register scope.")
+    parser.add_argument("--reverify-register-max-confidence", type=float, default=None, metavar="CONF",
+                        help="Only re-verify register entries with verified_confidence ≤ this (e.g. 0.8 to skip the most confident ones).")
+    parser.add_argument("--reverify-register-novelty-types", type=str, default=None, metavar="TYPES",
+                        help="Comma-separated novelty_types to re-verify (e.g. 'new_synthesis,correction'). Default: all.")
     parser.add_argument("--synth-orphaned-xrefs", action="store_true",
                         help="Synthesize + verify every cross-reference that doesn't yet have a matching insight (e.g. after a mid-run failure between cross-ref and synthesis).")
     parser.add_argument("--scan-gaps", action="store_true",
@@ -300,6 +308,18 @@ def main():
         engine.reverify_unregistered_insights(only_ids=[args.reverify_insight])
     elif args.reverify_insights:
         engine.reverify_unregistered_insights()
+    elif args.reverify_register_id is not None:
+        engine.reverify_register_entries(only_ids=[args.reverify_register_id])
+    elif args.reverify_register:
+        novelty_types = None
+        if args.reverify_register_novelty_types:
+            novelty_types = [
+                n.strip() for n in args.reverify_register_novelty_types.split(",") if n.strip()
+            ]
+        engine.reverify_register_entries(
+            max_confidence=args.reverify_register_max_confidence,
+            novelty_types=novelty_types,
+        )
     elif args.synth_orphaned_xrefs:
         engine.synthesize_orphaned_xrefs()
     elif args.scan_gaps:

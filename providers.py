@@ -106,8 +106,10 @@ class ModelClient(ABC):
         max_iterations: int = _DEFAULT_MAX_TOOL_ITERATIONS,
         policy: RetryPolicy,
         on_retry=None,
+        trace: Optional[list] = None,                  # if provided, per-tool-call dicts are appended
     ) -> dict:
         """Multi-turn tool-use loop. Default implementation is single-turn with server tools only."""
+        del trace  # base class has no tool-use loop to trace
         return self.complete_json(
             prompt,
             tools=server_tools,
@@ -168,9 +170,15 @@ class AnthropicClient(ModelClient):
         max_iterations=_DEFAULT_MAX_TOOL_ITERATIONS,
         policy,
         on_retry=None,
+        trace: Optional[list] = None,
     ) -> dict:
         """Anthropic tool-use loop. Handles tool_use blocks from client tools; passes
-        server tools (web_search, code_execution) to the API directly."""
+        server tools (web_search, code_execution) to the API directly.
+
+        If `trace` is provided, each tool invocation appends a dict of
+        {iteration, tool, kind, args, result_length, result_preview, is_error}
+        — used for the verification audit log.
+        """
         all_tools: list[dict] = []
         if server_tools:
             all_tools.extend(server_tools)
@@ -210,10 +218,31 @@ class AnthropicClient(ModelClient):
                 if block.name not in client_tool_names or tool_registry is None:
                     # Server tool (e.g. web_search); Anthropic already executed it.
                     print(f"    [tool·{iteration+1}] {block.name} (server)")
+                    if trace is not None:
+                        trace.append({
+                            "iteration": iteration + 1,
+                            "tool": block.name,
+                            "kind": "server",
+                            "args": dict(getattr(block, "input", {}) or {}),
+                            "result_length": 0,
+                            "result_preview": "",
+                            "is_error": False,
+                        })
                     continue
+                args_dict = dict(block.input or {})
                 args_preview = _args_preview(block.input)
                 print(f"    [tool·{iteration+1}] {block.name}({args_preview})")
-                result = tool_registry.execute(block.name, dict(block.input or {}))
+                result = tool_registry.execute(block.name, args_dict)
+                if trace is not None:
+                    trace.append({
+                        "iteration": iteration + 1,
+                        "tool": block.name,
+                        "kind": "client",
+                        "args": args_dict,
+                        "result_length": len(result.content or ""),
+                        "result_preview": (result.content or "")[:500],
+                        "is_error": bool(result.is_error),
+                    })
                 tool_results.append({
                     "type": "tool_result",
                     "tool_use_id": block.id,
@@ -326,8 +355,14 @@ class OpenAICompatClient(ModelClient):
         max_iterations=_DEFAULT_MAX_TOOL_ITERATIONS,
         policy,
         on_retry=None,
+        trace: Optional[list] = None,
     ) -> dict:
-        """OpenAI-compat function-calling loop. Server tools are not supported here."""
+        """OpenAI-compat function-calling loop. Server tools are not supported here.
+
+        If `trace` is provided, each tool invocation appends a dict of
+        {iteration, tool, kind, args, result_length, result_preview, is_error}
+        — used for the verification audit log.
+        """
         del server_tools  # Anthropic-specific; ignored on this path.
 
         messages: list[dict] = [{"role": "user", "content": prompt}]
@@ -398,9 +433,21 @@ class OpenAICompatClient(ModelClient):
                 print(f"    [tool·{iteration+1}] {name}({args_preview})")
                 if tool_registry is None:
                     result_content = "error: no tool registry configured"
+                    is_error = True
                 else:
                     result = tool_registry.execute(name, args)
                     result_content = result.content
+                    is_error = bool(result.is_error)
+                if trace is not None:
+                    trace.append({
+                        "iteration": iteration + 1,
+                        "tool": name,
+                        "kind": "client",
+                        "args": args,
+                        "result_length": len(result_content or ""),
+                        "result_preview": (result_content or "")[:500],
+                        "is_error": is_error,
+                    })
                 messages.append({
                     "role": "tool",
                     "tool_call_id": call.id,

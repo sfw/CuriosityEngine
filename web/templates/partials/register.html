@@ -88,6 +88,165 @@
           </div>
         {% endif %}
 
+        {# ── Phase-structured verification details (new schema) ── #}
+        {% if r.central_architectural_move or r.closest_peer_system or r.functional_decomposition or r.skeptic_probe or r.verification_tool_calls or r.reverification_log %}
+          <details class="mt-3 rounded-lg border border-slate-300 dark:border-slate-700/60 bg-slate-50 dark:bg-slate-900/40">
+            <summary class="px-3 py-2 cursor-pointer text-[11px] uppercase tracking-wider text-slate-500">
+              Verification detail
+              {% if r.verification_tool_calls %}
+                · <span class="mono normal-case tracking-normal">{{ r.verification_tool_calls|length }} tool call{{ '' if r.verification_tool_calls|length == 1 else 's' }}</span>
+              {% endif %}
+              {% if r.reverification_log %}
+                · <span class="mono normal-case tracking-normal text-sky-600 dark:text-sky-400">{{ r.reverification_log|length }} re-verification{{ '' if r.reverification_log|length == 1 else 's' }}</span>
+              {% endif %}
+            </summary>
+            <div class="p-3 border-t border-slate-300 dark:border-slate-700/50 space-y-3 text-xs">
+
+              {% if r.central_architectural_move %}
+                <div>
+                  <div class="text-[10px] uppercase tracking-wider text-slate-500 mb-1">Central architectural move</div>
+                  <div class="text-slate-700 dark:text-slate-300">{{ r.central_architectural_move }}</div>
+                  {% if r.central_move_prior_art %}
+                    <div class="mt-1 text-[10px] text-amber-700 dark:text-amber-400">
+                      ⚠ {{ r.central_move_prior_art|length }} phase-1 prior-art hit{{ '' if r.central_move_prior_art|length == 1 else 's' }} — central move is NOT novel on its own
+                    </div>
+                    <ul class="list-disc pl-5 mt-1 text-slate-600 dark:text-slate-400 space-y-0.5">
+                      {% for c in r.central_move_prior_art[:5] %}<li class="mono text-[11px]">{{ c[:200] }}</li>{% endfor %}
+                    </ul>
+                  {% endif %}
+                </div>
+              {% endif %}
+
+              {% if r.closest_peer_system and r.closest_peer_system.get('name') %}
+                <div>
+                  <div class="text-[10px] uppercase tracking-wider text-slate-500 mb-1">Closest complete peer system</div>
+                  <div class="text-slate-700 dark:text-slate-300">
+                    <span class="font-semibold">{{ r.closest_peer_system.get('name') }}</span>
+                    {% if r.closest_peer_system.get('url') %}
+                      — <a class="text-indigo-500 hover:underline mono text-[11px]" href="{{ r.closest_peer_system.get('url') }}" target="_blank" rel="noopener">{{ r.closest_peer_system.get('url') }}</a>
+                    {% endif %}
+                  </div>
+                  {% if r.closest_peer_system.get('overlap_summary') %}
+                    <div class="text-slate-600 dark:text-slate-400 mt-1">{{ r.closest_peer_system.get('overlap_summary') }}</div>
+                  {% endif %}
+                  {% if r.closest_peer_system.get('differentiators') %}
+                    <div class="text-[10px] uppercase tracking-wider text-slate-500 mt-1 mb-0.5">How this differs</div>
+                    <ul class="list-disc pl-5 text-slate-600 dark:text-slate-400 space-y-0.5">
+                      {% for d in r.closest_peer_system.get('differentiators') %}<li>{{ d }}</li>{% endfor %}
+                    </ul>
+                  {% endif %}
+                </div>
+              {% endif %}
+
+              {% if r.functional_decomposition %}
+                <div>
+                  <div class="text-[10px] uppercase tracking-wider text-slate-500 mb-1">Functional decomposition (phase 3a)</div>
+                  <div class="grid gap-2 md:grid-cols-2">
+                    {% for d in r.functional_decomposition %}
+                      <div class="p-2 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900/60">
+                        <div class="text-[10px] mono text-slate-500">{{ d.get('dimension','?') }}</div>
+                        {% if d.get('nearest_exemplar') %}
+                          <div class="text-slate-700 dark:text-slate-300 mt-0.5">{{ d.get('nearest_exemplar') }}</div>
+                        {% endif %}
+                        {% if d.get('how_ours_differs') %}
+                          <div class="text-[10px] text-slate-500 mt-1">Δ: {{ d.get('how_ours_differs') }}</div>
+                        {% endif %}
+                      </div>
+                    {% endfor %}
+                  </div>
+                </div>
+              {% endif %}
+
+              {% if r.skeptic_probe and r.skeptic_probe.get('query') %}
+                <div>
+                  <div class="text-[10px] uppercase tracking-wider text-slate-500 mb-1">
+                    Skeptic smell test
+                    {% if r.skeptic_probe.get('disqualifies') %}
+                      <span class="ml-1 text-amber-700 dark:text-amber-400 normal-case tracking-normal">⚠ disqualified</span>
+                    {% else %}
+                      <span class="ml-1 text-emerald-700 dark:text-emerald-400 normal-case tracking-normal">✓ survived</span>
+                    {% endif %}
+                  </div>
+                  <div class="mono text-[11px] text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-900 p-2 rounded border border-slate-300 dark:border-slate-700">
+                    {{ r.skeptic_probe.get('query') }}
+                  </div>
+                  {% if r.skeptic_probe.get('top_result_summary') %}
+                    <div class="text-slate-600 dark:text-slate-400 mt-1">{{ r.skeptic_probe.get('top_result_summary') }}</div>
+                  {% endif %}
+                </div>
+              {% endif %}
+
+              {% if r.verification_tool_calls %}
+                <details class="rounded border border-slate-300 dark:border-slate-700">
+                  <summary class="px-2 py-1 cursor-pointer text-[10px] uppercase tracking-wider text-slate-500">
+                    Tool-call trace ({{ r.verification_tool_calls|length }})
+                  </summary>
+                  <ol class="p-2 space-y-1">
+                    {% for tc in r.verification_tool_calls %}
+                      <li class="text-[11px] flex gap-2 items-start">
+                        <span class="mono text-slate-500 flex-shrink-0">{{ '%02d'|format(loop.index) }}</span>
+                        <span class="mono text-slate-500 flex-shrink-0">[it{{ tc.iteration }}]</span>
+                        <span class="mono {% if tc.is_error %}text-rose-600 dark:text-rose-400{% elif tc.kind == 'server' %}text-indigo-600 dark:text-indigo-400{% else %}text-slate-700 dark:text-slate-300{% endif %} flex-shrink-0">{{ tc.tool }}</span>
+                        <span class="mono text-slate-600 dark:text-slate-400 truncate" title="{{ tc.args|tojson }}">
+                          {%- set q = (tc.args.query if tc.args and tc.args.query else tc.args|tojson) -%}
+                          {{ q[:200] }}
+                        </span>
+                      </li>
+                    {% endfor %}
+                  </ol>
+                </details>
+              {% endif %}
+
+              {% if r.reverification_log %}
+                <details class="rounded border border-sky-300 dark:border-sky-500/40 bg-sky-50 dark:bg-sky-500/5">
+                  <summary class="px-2 py-1 cursor-pointer text-[10px] uppercase tracking-wider text-sky-700 dark:text-sky-400">
+                    Re-verification log ({{ r.reverification_log|length }}) — audit under updated rules
+                  </summary>
+                  <div class="p-2 space-y-2">
+                    {% for rv in r.reverification_log %}
+                      <div class="p-2 rounded border border-sky-300/60 dark:border-sky-500/30 bg-white dark:bg-slate-900/60">
+                        <div class="flex items-center gap-2 flex-wrap text-[11px]">
+                          <span class="mono text-slate-500">{{ rv.timestamp[:19].replace('T',' ') }}</span>
+                          {% if rv.verdict_changed %}
+                            <span class="text-amber-700 dark:text-amber-400 font-semibold">⚠ verdict changed</span>
+                          {% else %}
+                            <span class="text-emerald-700 dark:text-emerald-400">✓ verdict unchanged</span>
+                          {% endif %}
+                        </div>
+                        <div class="mt-1 text-[11px]">
+                          <span class="mono text-slate-500">{{ rv.old_verdict }}/{{ rv.old_novelty_type }}</span>
+                          <span class="text-slate-400"> → </span>
+                          <span class="mono {% if rv.verdict_changed %}text-amber-700 dark:text-amber-400 font-semibold{% else %}text-slate-700 dark:text-slate-300{% endif %}">{{ rv.new_verdict }}/{{ rv.new_novelty_type }}</span>
+                          <span class="text-slate-500">
+                            ({{ '%.2f'|format(rv.old_verified_confidence) }} → {{ '%.2f'|format(rv.new_verified_confidence) }})
+                          </span>
+                        </div>
+                        {% if rv.new_verification_summary %}
+                          <div class="text-slate-600 dark:text-slate-400 mt-1">{{ rv.new_verification_summary }}</div>
+                        {% endif %}
+                        {% if rv.new_central_move_prior_art %}
+                          <div class="mt-1 text-[10px] text-amber-700 dark:text-amber-400">
+                            Phase-1 hits ({{ rv.new_central_move_prior_art|length }}):
+                          </div>
+                          <ul class="list-disc pl-5 text-[10px] text-slate-600 dark:text-slate-400 space-y-0.5">
+                            {% for c in rv.new_central_move_prior_art[:3] %}<li class="mono">{{ c[:160] }}</li>{% endfor %}
+                          </ul>
+                        {% endif %}
+                        {% if rv.new_closest_peer_system and rv.new_closest_peer_system.get('name') %}
+                          <div class="mt-1 text-[10px] text-slate-500">
+                            Closest peer system: <span class="text-slate-700 dark:text-slate-300">{{ rv.new_closest_peer_system.get('name') }}</span>
+                          </div>
+                        {% endif %}
+                      </div>
+                    {% endfor %}
+                  </div>
+                </details>
+              {% endif %}
+
+            </div>
+          </details>
+        {% endif %}
+
         {% if is_held %}
           <div class="mt-3 p-3 rounded-lg border border-amber-500/40 bg-amber-500/5">
             <div class="flex items-center gap-1.5 mb-2">

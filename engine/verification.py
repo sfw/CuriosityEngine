@@ -115,10 +115,15 @@ class VerificationMixin:
             {"type": "web_search_20250305", "name": "web_search"},
             {"type": "code_execution_20250825", "name": "code_execution"},
         ]
+        # Capture the full tool-call trace so we can persist it on the register
+        # entry — makes after-the-fact audits of verifier misses ("why didn't
+        # this search find X?") possible without re-running the whole pass.
+        tool_trace: list[dict] = []
         result = self._call_verifier_with_tools(
             prompt,
             server_tools=server_tools,
             max_tokens=self.connection.verifier.investigation_max_tokens,
+            trace=tool_trace,
         )
 
         verdict = (result.get("verdict") or "refuted").strip().lower()
@@ -127,6 +132,62 @@ class VerificationMixin:
         synthesis_findable = bool(result.get("synthesis_findable", False))
         novelty_type = (result.get("novelty_type") or "").strip()
         summary = result.get("verification_summary", "")
+
+        # Phase-structured fields (new verifier schema).
+        central_architectural_move = (result.get("central_architectural_move") or "").strip()
+        central_move_prior_art = result.get("central_move_prior_art", []) or []
+        functional_decomposition = result.get("functional_decomposition", []) or []
+        closest_peer_system = result.get("closest_peer_system") or {}
+        skeptic_probe = result.get("skeptic_probe") or {}
+
+        # Phase-1 guard: if the central architectural move is already published
+        # (central_move_prior_art non-empty with substantive entries), downgrade
+        # novelty_type from new_synthesis → extension. This is the guard that
+        # catches the co-scientist-class failure mode: a headline move matches
+        # a known system, but auxiliary refinements let the verifier call it
+        # "new_synthesis" because the full composite isn't findable.
+        substantive_phase1 = [
+            c for c in central_move_prior_art
+            if isinstance(c, str) and len(c.strip()) > 20
+            and not c.lower().startswith(("no ", "none", "empty", "searched"))
+        ]
+        if novelty_type == "new_synthesis" and substantive_phase1:
+            print(f"  [phase-1 guard] central move has {len(substantive_phase1)} substantive "
+                  f"prior-art hit(s) — downgrading novelty_type new_synthesis → extension.")
+            novelty_type = "extension"
+            # Reflect in the synthesis_findable axis: the central move IS findable
+            # even if the full composite is not. This keeps the register_gate honest.
+            synthesis_findable = True
+
+        # Skeptic-probe guard: if the final skeptic smell test surfaced
+        # disqualifying prior art, respect it. The verifier is instructed not
+        # to rationalise past it, but we enforce it mechanically too.
+        if skeptic_probe.get("disqualifies"):
+            print(f"  [skeptic-probe] verifier's own final smell test disqualified the claim: "
+                  f"{str(skeptic_probe.get('query',''))[:120]}")
+            if verdict == "validated":
+                verdict = "challenged"
+            synthesis_findable = True
+            if novelty_type == "new_synthesis":
+                novelty_type = "extension"
+
+        # Peer-system guard: if a complete peer system was identified with
+        # substantive overlap and no compelling differentiators, likewise
+        # downgrade. This catches "system X already does this" cases the
+        # composite-only search missed.
+        peer_name = (closest_peer_system.get("name") or "").strip()
+        peer_overlap = (closest_peer_system.get("overlap_summary") or "").strip()
+        peer_differentiators = closest_peer_system.get("differentiators") or []
+        if (
+            peer_name
+            and len(peer_overlap) > 30
+            and not peer_differentiators
+            and novelty_type == "new_synthesis"
+        ):
+            print(f"  [peer-system guard] closest peer system {peer_name!r} has substantive "
+                  f"overlap and no stated differentiators — downgrading to extension.")
+            novelty_type = "extension"
+            synthesis_findable = True
 
         # Inconclusive guardrail: if the verifier hedged `inconclusive` without
         # naming a specific epistemic gap in the summary, downgrade to
@@ -294,6 +355,12 @@ class VerificationMixin:
             settlement_triggers=(result.get("settlement_triggers", []) or []) if entry_status == "held" else [],
             open_questions=insight.open_questions,
             counter_arguments=insight.counter_arguments,
+            verification_tool_calls=list(tool_trace),
+            central_architectural_move=central_architectural_move,
+            central_move_prior_art=list(central_move_prior_art),
+            functional_decomposition=list(functional_decomposition),
+            closest_peer_system=dict(closest_peer_system),
+            skeptic_probe=dict(skeptic_probe),
         )
 
         self.journal.add_register_entry(register_entry)
@@ -320,6 +387,20 @@ class VerificationMixin:
             target = (p.get("target_date") or "").strip()
             if not claim or not condition or not target:
                 continue
+
+            # Freshness check: ask the verifier client to evaluate whether the
+            # falsifiable_condition is already observably instantiated. A claim
+            # that's already true at creation time isn't a prediction; it's a
+            # description. Flag it — don't register as pending.
+            freshness = self._check_prediction_freshness(claim, condition)
+
+            status = "pending"
+            if freshness.get("verdict") == "already_fulfilled":
+                status = "already_fulfilled"
+                print(f"  PREDICTION already-fulfilled (skipped pending status): {claim[:100]}")
+                if freshness.get("evidence"):
+                    print(f"    evidence: {str(freshness['evidence'])[:200]}")
+
             prediction = Prediction(
                 id=f"p-{uuid4().hex[:8]}",
                 register_entry_id=register_entry_id,
@@ -328,12 +409,94 @@ class VerificationMixin:
                 claim=claim,
                 falsifiable_condition=condition,
                 check_method=method,
+                status=status,
+                freshness_check=freshness,
             )
             self.journal.add_prediction(prediction)
             kept += 1
-            print(f"  PREDICTION registered: {prediction.id} (target {prediction.target_date})")
+            if status == "pending":
+                print(f"  PREDICTION registered: {prediction.id} (target {prediction.target_date})")
+            else:
+                print(f"  PREDICTION marked already_fulfilled: {prediction.id}")
         if kept == 0:
             print("  No falsifiable predictions emitted for this insight.")
+
+    def _check_prediction_freshness(self, claim: str, condition: str) -> dict:
+        """Probe whether a prediction's falsifiable_condition is ALREADY
+        instantiated in the world at creation time.
+
+        Strategy: one targeted web_search, then a short LLM call asking the
+        verifier to judge whether the top results already satisfy the
+        condition. Keeps it cheap (1 tool call + 1 LLM call) — not a full
+        re-verification loop.
+
+        Returns a dict: {verdict: "fresh"|"already_fulfilled"|"skipped",
+        query: str, top_results_preview: str, evidence: str, reasoning: str}.
+        """
+        from engine.tools.base import registry as tool_registry
+        web_tool = tool_registry.get("web_search")
+        if web_tool is None:
+            return {"verdict": "skipped", "reason": "web_search tool unavailable"}
+
+        # Build the freshness query from the condition — keep it short, the
+        # condition is usually a single sentence describing the observable.
+        query = (condition[:220] + "...") if len(condition) > 220 else condition
+        try:
+            search_result = tool_registry.execute("web_search", {"query": query, "limit": 5})
+            top_preview = search_result.content[:2000] if search_result and search_result.content else ""
+        except Exception as e:  # noqa: BLE001
+            return {
+                "verdict": "skipped",
+                "reason": f"web_search failed: {type(e).__name__}: {e}",
+                "query": query,
+            }
+
+        if not top_preview.strip() or search_result.is_error:
+            return {
+                "verdict": "skipped",
+                "reason": "web_search returned no usable content",
+                "query": query,
+            }
+
+        # LLM judgement — has this condition already been met?
+        judge_prompt = (
+            "You are judging whether a prediction's falsifiable condition has "
+            "ALREADY been observably instantiated in the world AT THIS MOMENT, "
+            "making the prediction not actually a prediction but a description.\n\n"
+            f"CLAIM: {claim}\n\n"
+            f"FALSIFIABLE CONDITION: {condition}\n\n"
+            "TOP WEB SEARCH RESULTS for the condition:\n"
+            f"{top_preview}\n\n"
+            "Decide: do the top results already satisfy the falsifiable condition? "
+            "If the condition describes a state that the search results demonstrate "
+            "is already true, answer already_fulfilled. Only answer already_fulfilled "
+            "if there is concrete, cited evidence the condition holds NOW — a vague "
+            "news item mentioning the topic is not enough.\n\n"
+            'Respond EXACTLY: {"verdict": "fresh" | "already_fulfilled", '
+            '"evidence": "1-2 sentence summary of the specific result(s) that do or '
+            'do not satisfy the condition, with URL if present", '
+            '"reasoning": "short explanation"}'
+        )
+        try:
+            judgement = self._call_verifier(judge_prompt, max_tokens=800)
+        except Exception as e:  # noqa: BLE001
+            return {
+                "verdict": "skipped",
+                "reason": f"freshness judge failed: {type(e).__name__}: {e}",
+                "query": query,
+                "top_results_preview": top_preview[:500],
+            }
+
+        verdict = (judgement.get("verdict") or "").strip().lower()
+        if verdict not in ("fresh", "already_fulfilled"):
+            verdict = "fresh"  # default to fresh on ambiguous judge output
+        return {
+            "verdict": verdict,
+            "query": query,
+            "top_results_preview": top_preview[:500],
+            "evidence": (judgement.get("evidence") or "").strip(),
+            "reasoning": (judgement.get("reasoning") or "").strip(),
+        }
 
     def check_predictions(self, *, all_pending: bool = False) -> list[dict]:
         """Check predictions whose target_date has arrived (or all pending if all_pending=True).
@@ -605,6 +768,152 @@ class VerificationMixin:
             else:
                 self.journal.update_register_entry_status(register_entry_id, "validated_by_prediction")
         # Otherwise leave as-is.
+
+    def reverify_register_entries(
+        self,
+        *,
+        only_ids: Optional[list[str]] = None,
+        max_confidence: Optional[float] = None,
+        novelty_types: Optional[list[str]] = None,
+        only_new_synthesis: bool = False,
+        reason: str = "admin re-verify under updated rules",
+    ) -> dict:
+        """Re-run the verifier over existing register entries WITHOUT mutating
+        the originals. Each pass is appended to the entry's `reverification_log`
+        so the old verdict is preserved alongside the new one.
+
+        Filters (combine as AND):
+          - only_ids: explicit subset of register entry ids
+          - max_confidence: only re-verify entries with verified_confidence ≤ this
+          - novelty_types: only re-verify entries whose novelty_type is in this set
+          - only_new_synthesis: convenience shorthand for novelty_types=['new_synthesis']
+
+        Use this after changing verification rules (e.g. the phase-1 guard for
+        central-move prior art, the skeptic smell test, or the peer-system
+        guard) to audit whether previously-validated entries still hold up.
+        """
+        from models import CrossReference as _CR, Insight as _I
+
+        if only_new_synthesis and not novelty_types:
+            novelty_types = ["new_synthesis"]
+        novelty_set = set(novelty_types or [])
+
+        insights_by_id = {i.get("id"): i for i in self.journal.insights}
+        xrefs_by_id = {x.get("id"): x for x in self.journal.cross_references}
+
+        candidates: list[dict] = []
+        for e in self.journal.register:
+            eid = e.get("id")
+            if not eid:
+                continue
+            if only_ids and eid not in only_ids:
+                continue
+            if novelty_set and (e.get("novelty_type") or "") not in novelty_set:
+                continue
+            if max_confidence is not None and float(e.get("verified_confidence", 0.0)) > max_confidence:
+                continue
+            candidates.append(e)
+
+        print(f"\n--- RE-VERIFYING {len(candidates)} register entr(ies) "
+              f"(filters: only_ids={bool(only_ids)}, novelty={novelty_set or 'any'}, "
+              f"max_conf={max_confidence}) ---")
+        stats = {"examined": 0, "verdict_changed": 0, "same_verdict": 0, "errors": 0, "skipped": 0}
+
+        for e in candidates:
+            stats["examined"] += 1
+            eid = e.get("id")
+            insight_id = e.get("insight_id")
+            xref_id = e.get("supporting_xref_id")
+            insight_dict = insights_by_id.get(insight_id)
+            xref_dict = xrefs_by_id.get(xref_id)
+            if insight_dict is None or xref_dict is None:
+                print(f"  [skip] {eid}: missing source insight ({insight_id}) or xref ({xref_id})")
+                stats["skipped"] += 1
+                continue
+
+            insight_fields = set(_I.__dataclass_fields__)
+            insight = _I(**{k: v for k, v in insight_dict.items() if k in insight_fields})
+            xref_fields = set(_CR.__dataclass_fields__)
+            xref = _CR(**{k: v for k, v in xref_dict.items() if k in xref_fields})
+
+            # Rebuild the verify prompt and run it — we reuse the same pipeline
+            # `verify_insight` uses but WITHOUT calling add_register_entry at the
+            # end. We inline the minimum needed to get verdict fields + trace.
+            supporting = [x for x in self.journal.entries if x["id"] in xref.source_entries]
+            slim_supporting = [self._slim_entry_for_register(x) for x in supporting]
+            from prompts import VERIFY_PROMPT
+            prompt = VERIFY_PROMPT.format(
+                insight_json=json.dumps(asdict(insight), indent=2),
+                xref_json=json.dumps(asdict(xref), indent=2),
+                supporting_entries_json=json.dumps(slim_supporting, indent=2),
+                tool_list=self._tool_list_block(for_client=self.verifier),
+                prior_human_rejections_json=json.dumps(
+                    self.journal.human_rejection_feedback(), indent=2,
+                ),
+            )
+            server_tools = [
+                {"type": "web_search_20250305", "name": "web_search"},
+                {"type": "code_execution_20250825", "name": "code_execution"},
+            ]
+            tool_trace: list[dict] = []
+            try:
+                result = self._call_verifier_with_tools(
+                    prompt,
+                    server_tools=server_tools,
+                    max_tokens=self.connection.verifier.investigation_max_tokens,
+                    trace=tool_trace,
+                )
+            except Exception as ex:  # noqa: BLE001
+                print(f"  [error] {eid}: {type(ex).__name__}: {ex}")
+                stats["errors"] += 1
+                continue
+
+            new_verdict = (result.get("verdict") or "").strip().lower()
+            new_novelty = (result.get("novelty_type") or "").strip()
+            new_conf = float(result.get("verified_confidence", 0.0))
+            old_verdict = (e.get("verdict") or "").strip().lower()
+            old_novelty = (e.get("novelty_type") or "").strip()
+
+            changed = (new_verdict != old_verdict) or (new_novelty != old_novelty)
+            log_entry = {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "reason": reason,
+                "old_verdict": old_verdict,
+                "old_novelty_type": old_novelty,
+                "old_verified_confidence": float(e.get("verified_confidence", 0.0)),
+                "new_verdict": new_verdict,
+                "new_novelty_type": new_novelty,
+                "new_verified_confidence": new_conf,
+                "new_premises_supported": bool(result.get("premises_supported", True)),
+                "new_synthesis_findable": bool(result.get("synthesis_findable", False)),
+                "new_central_architectural_move": (result.get("central_architectural_move") or "").strip(),
+                "new_central_move_prior_art": list(result.get("central_move_prior_art", []) or []),
+                "new_synthesis_prior_art": list(result.get("synthesis_prior_art", []) or []),
+                "new_closest_peer_system": dict(result.get("closest_peer_system") or {}),
+                "new_skeptic_probe": dict(result.get("skeptic_probe") or {}),
+                "new_functional_decomposition": list(result.get("functional_decomposition") or []),
+                "new_contradicting_findings": list(result.get("contradicting_findings") or []),
+                "new_reasoning_flaws": list(result.get("reasoning_flaws") or []),
+                "new_verification_summary": (result.get("verification_summary") or "").strip(),
+                "tool_calls": list(tool_trace),
+                "verdict_changed": changed,
+            }
+            self.journal.append_register_reverification(eid, log_entry)
+
+            if changed:
+                stats["verdict_changed"] += 1
+                print(f"  ⚠ {eid}: {old_verdict}/{old_novelty} → {new_verdict}/{new_novelty} "
+                      f"(conf {float(e.get('verified_confidence',0.0)):.2f} → {new_conf:.2f})")
+            else:
+                stats["same_verdict"] += 1
+                print(f"  ✓ {eid}: verdict unchanged ({new_verdict}/{new_novelty})")
+
+        print(
+            f"\nRe-verify complete: examined={stats['examined']} · "
+            f"verdict_changed={stats['verdict_changed']} · same={stats['same_verdict']} · "
+            f"errors={stats['errors']} · skipped={stats['skipped']}"
+        )
+        return stats
 
     def reverify_unregistered_insights(
         self,

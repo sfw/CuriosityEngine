@@ -154,6 +154,22 @@ class Journal:
                 self._write_register_markdown()
                 return
 
+    def append_register_reverification(self, register_entry_id: str, log_entry: dict) -> bool:
+        """Append a re-verification pass to a register entry's reverification_log.
+
+        The entry's original verdict fields are NEVER overwritten — this is
+        strictly an append-only audit trail so we can compare old vs new
+        verdicts produced under updated verification rules.
+        """
+        for e in self.register:
+            if e.get("id") == register_entry_id:
+                if "reverification_log" not in e or not isinstance(e["reverification_log"], list):
+                    e["reverification_log"] = []
+                e["reverification_log"].append(dict(log_entry))
+                self.save()
+                return True
+        return False
+
     def promote_register_entry(self, register_entry_id: str, *, promoted_by: str):
         """Promote a held register entry to `active`. Records who/when did it."""
         for e in self.register:

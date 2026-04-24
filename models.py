@@ -142,6 +142,28 @@ class RegisterEntry:
     human_reviewer: str = ""
     human_review_at: str = ""
 
+    # Verifier audit trail — full per-call trace of the tool invocations that
+    # produced this register entry. Each entry:
+    # {iteration, tool, kind, args, result_length, result_preview, is_error}
+    # Used by the UI to surface "what did the verifier actually search for?"
+    # and by the admin re-verify pass for diagnosing misses.
+    verification_tool_calls: list[dict] = field(default_factory=list)
+
+    # Phase-structured prior-art outputs from the verifier (see prompts.VERIFY_PROMPT).
+    # Feeds the extension-vs-new_synthesis verdict guard and the register-detail UI.
+    central_architectural_move: str = ""
+    central_move_prior_art: list[str] = field(default_factory=list)
+    functional_decomposition: list[dict] = field(default_factory=list)
+    closest_peer_system: dict = field(default_factory=dict)
+    skeptic_probe: dict = field(default_factory=dict)
+
+    # Append-only log of re-verification passes triggered from the admin UI.
+    # Each entry: {timestamp, verdict, verified_confidence, novelty_type,
+    # synthesis_findable, verification_summary, tool_calls, reason_for_reverify}.
+    # Original verdict fields on this RegisterEntry are NEVER overwritten —
+    # the re-verify flow only appends here, preserving the audit trail.
+    reverification_log: list[dict] = field(default_factory=list)
+
 
 @dataclass
 class Prediction:
@@ -156,9 +178,17 @@ class Prediction:
     falsifiable_condition: str                # what observable outcome would confirm/refute it
     check_method: str                         # how to verify (e.g., "search for papers X/Y", "run experiment Z")
 
-    status: str = "pending"                   # pending | confirmed | refuted | inconclusive | expired
+    status: str = "pending"                   # pending | confirmed | refuted | inconclusive | expired | already_fulfilled
     last_checked_at: str = ""
     review_log: list[dict] = field(default_factory=list)  # [{checked_at, verdict, reasoning, sources}, ...]
+
+    # Freshness check performed before the prediction registered. If the
+    # falsifiable condition was already observably instantiated in the world
+    # at creation time, the prediction isn't falsifiable — it's a description.
+    # freshness_check.verdict is "fresh" (condition not yet observed), "already_fulfilled"
+    # (condition is already true; prediction skipped or marked already_fulfilled),
+    # or "skipped" (check disabled or tool unavailable).
+    freshness_check: dict = field(default_factory=dict)
 
 
 @dataclass

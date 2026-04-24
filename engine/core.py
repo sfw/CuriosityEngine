@@ -208,6 +208,7 @@ class CuriosityEngine(
         *,
         server_tools: Optional[list[dict]] = None,
         max_tokens: Optional[int] = None,
+        trace: Optional[list] = None,
     ) -> dict:
         return self.primary.complete_json_with_tools(
             prompt,
@@ -217,6 +218,7 @@ class CuriosityEngine(
             max_tokens=max_tokens,
             policy=self.connection.retry,
             on_retry=self._on_retry,
+            trace=trace,
         )
 
     def _call_verifier_with_tools(
@@ -225,6 +227,7 @@ class CuriosityEngine(
         *,
         server_tools: Optional[list[dict]] = None,
         max_tokens: Optional[int] = None,
+        trace: Optional[list] = None,
     ) -> dict:
         return self.verifier.complete_json_with_tools(
             prompt,
@@ -234,6 +237,7 @@ class CuriosityEngine(
             max_tokens=max_tokens,
             policy=self.connection.retry,
             on_retry=self._on_retry,
+            trace=trace,
         )
 
     # ── Parallel fan-out helpers ──

@@ -455,6 +455,33 @@ async def maintenance_reverify(name: str):
     return JSONResponse(result)
 
 
+@app.post("/journals/{name}/maintenance/reverify-register")
+async def maintenance_reverify_register(
+    name: str,
+    max_confidence: str = Form(""),
+    novelty_types: str = Form(""),
+):
+    """Batch re-verify existing register entries (audit under updated rules).
+    Appends reverification_log to each entry; never overwrites the original
+    verdict. Optional filters: max_confidence (float 0-1), novelty_types
+    (comma-sep list, e.g. 'new_synthesis,correction')."""
+    extra: list[str] = ["--reverify-register"]
+    mc = (max_confidence or "").strip()
+    if mc:
+        try:
+            float(mc)
+            extra.extend(["--reverify-register-max-confidence", mc])
+        except ValueError:
+            pass
+    nt = (novelty_types or "").strip()
+    if nt:
+        extra.extend(["--reverify-register-novelty-types", nt])
+    result = await _spawn_maintenance_subprocess(
+        _journal_path(name), extra, kind="reverify-register",
+    )
+    return JSONResponse(result)
+
+
 @app.post("/journals/{name}/maintenance/scan-gaps")
 async def maintenance_scan_gaps(name: str):
     """Run a negative-space scan on this journal. Spawns `curiosity_engine.py
@@ -568,6 +595,7 @@ def journal_admin(request: Request, name: str):
         "entries_count": len(journal.entries),
         "gap_min_entries": int(conn.engine.negative_space_min_entries),
         "coverage_scans_count": len(journal.coverage_scans),
+        "register_count": len(journal.register),
     })
 
 

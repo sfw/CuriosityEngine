@@ -194,40 +194,63 @@ PRIOR HUMAN REJECTIONS (patterns to avoid repeating — the reasons a domain exp
 
 If the candidate insight has the same weakness as any of these prior rejections, apply the same skepticism and reflect it in your verdict.
 
-**Tool budget**: aim for roughly 8-15 tool calls, then render your verdict. Efficient refutation beats exhaustive search.
+**Tool budget**: aim for roughly 12-20 tool calls, then render your verdict. Efficient refutation beats exhaustive search. Prior searches can silently miss well-known systems when the query shape is wrong — iterate, don't one-shot.
 
 **CRITICAL — novelty framing**
-A *genuinely novel synthesis* has a specific fingerprint: its individual premises (ingredients) are each established in the literature, but the precise synthesis (how they combine into this specific claim/architecture/mechanism) is NOT published anywhere. That is exactly what we want to register — do not reject it for being a "new combination of known parts."
+A *genuinely novel synthesis* has a specific fingerprint: its individual premises (ingredients) are each established in the literature, AND the central architectural move at its core is not already deployed in a published system under any name. "New combination of known parts" is ONLY novel when the combination itself, or the central move it embodies, is not already published.
 
-Only *restatement* — where the full synthesis itself (not just its ingredients) is already in the literature under a different name — disqualifies novelty.
+Three disqualifiers, in decreasing severity:
+  • *restatement* — full synthesis is already published under some name. Disqualifies.
+  • *central move published* — the headline architectural move (tournament ranking, process-reward ensemble, adversarial debate, etc.) already appears in a peer or competitor system, even if surrounding refinements differ. The claim is then an **extension**, not new_synthesis.
+  • *covered by a closest peer system* — one deployed system already addresses the same problem with substantial architectural overlap. The claim is at most an **extension**.
 
 Score the two axes INDEPENDENTLY:
 
-A) **premises_supported**: Are the building blocks this insight depends on well-grounded in the literature? (TRUE is GOOD — it means the ingredients are real.)
-B) **synthesis_findable**: Is the specific synthesis / composite claim / architecture itself already published, patented, or widely-discussed under any name? (TRUE is BAD — it means the "novel" claim is not novel.)
+A) **premises_supported**: Are the building blocks this insight depends on well-grounded in the literature? (TRUE is GOOD — ingredients are real.)
+B) **synthesis_findable**: Is the specific synthesis / composite claim / architecture itself already published, patented, or widely-discussed under any name? (TRUE is BAD — "novel" claim is not novel.)
 
-The ideal register entry has **premises_supported=TRUE and synthesis_findable=FALSE**. That is the *signature* of genuine novelty, not a weakness.
+The ideal register entry has **premises_supported=TRUE and synthesis_findable=FALSE** AND no published peer system implementing the central move. That is the *signature* of genuine novelty, not a weakness.
 
 **code_execution (when available) lets you actually RUN python** — use it to recompute numerical claims cited by the insight, test the reasoning against real data, or simulate the proposed mechanism.
 
-Complete four tasks using the tools:
+═══════════════════════════════════════════════════════════════════
+PRIOR-ART SEARCH — FOUR PHASES + FINAL SKEPTIC PROBE
+═══════════════════════════════════════════════════════════════════
 
-1. PREMISES CHECK
-For each ingredient the insight depends on, search for evidence the ingredient is real. Record what you found in `premises_support_citations`. Set `premises_supported=true` iff each load-bearing premise has real literature support.
+Past failure mode: the verifier composed all the claim's concepts into ONE compound query (e.g. "pairwise tournament + structured reasoning traces + worst-case aggregation + debate + novelty"), failed to find a paper matching ALL of them, and declared synthesis_findable=false. Meanwhile a peer system implementing 3 of the 5 concepts (the headline move + an auxiliary) existed in the literature and was trivially findable with a domain-anchored query. Do not repeat this.
 
-2. SYNTHESIS PRIOR-ART SEARCH
-Search specifically for prior work that asserts THIS SYNTHESIS — the whole composite claim, not just its parts. Try restatements, different naming conventions, patents, blog posts. Set `synthesis_findable=true` only if you find substantive prior work making essentially the same composite claim. Record what you found (or what you searched and failed to find) in `synthesis_prior_art`.
+Run each phase as an **agentic iteration**: formulate a query, READ the top hits, formulate follow-ups based on what you found, and follow any interesting lead all the way to the originating paper.
 
-3. CONTRADICTING EVIDENCE
+─── PHASE 0: PREMISES CHECK ───
+For each ingredient the insight depends on, search for evidence the ingredient is real. Record in `premises_support_citations`. Set `premises_supported=true` iff each load-bearing premise has literature support.
+
+─── PHASE 1: CENTRAL ARCHITECTURAL MOVE ───
+Decompose the claim into its SINGLE headline move — the one architectural shift the insight proposes (e.g. "replace scalar scoring with tournament ranking in LLM research loops"). Write this down in `central_architectural_move`. Then search for prior work that already makes that move, IGNORING the auxiliary refinements. Record hits in `central_move_prior_art`. If you find a strong match, the novelty_type is AT MOST `extension` — the insight's contribution is the auxiliary refinements, not the central move itself.
+
+─── PHASE 2: FULL COMPOSITE PRIOR ART ───
+Now search for prior work matching the whole composite claim — all the refinements combined. Record in `synthesis_prior_art`. Set `synthesis_findable=true` only if substantive prior work makes essentially the same composite claim.
+
+─── PHASE 3a: FUNCTIONAL DIMENSION DECOMPOSITION ───
+Break the claim into 3-5 independent functional dimensions — e.g. *what it acts on / through what mechanism / at what scale / under what constraint / on what substrate*. For each dimension, name the NEAREST published exemplar and how the insight differs along that dimension. Record in `functional_decomposition`. If any dimension has an exemplar that's *indistinguishable* from the claim along that dimension, treat it as partial prior art.
+
+─── PHASE 3b: CLOSEST PEER SYSTEM ───
+Explicitly search for the closest *complete* peer system — a deployed or published system that addresses the same problem the insight addresses, even if its internals differ. This is the phase that catches system-level competitors that structural-query searches miss. **At least one query in this phase MUST name the insight's target application domain by name** (e.g. "AI scientist", "LLM research agent", "autonomous research system", or whatever domain the claim actually targets). Record in `closest_peer_system` with its overlap summary and the concrete differentiators between it and the insight.
+
+─── PHASE 4: CONTRADICTING EVIDENCE ───
 Search for research that actively disagrees with the composite claim. Record in `contradicting_findings`.
 
-4. REASONING AUDIT
-Examine the connection between supporting entries and the claim. Is the inferential leap justified by the premises, or does the argument smuggle in unsupported steps? Record in `reasoning_flaws`.
+─── PHASE 5: REASONING AUDIT ───
+Examine the connection between supporting entries and the claim. Is the inferential leap justified? Record in `reasoning_flaws`.
+
+─── FINAL: SKEPTIC SMELL TEST ───
+Before you write the verdict, do ONE more probe. You are a skeptical reviewer with one shot at a web search and the goal of killing this insight. What is the SINGLE query you would run — the one most likely to surface disqualifying prior art? Run it. Record the query, the top result's relevance, and whether it disqualifies the claim in `skeptic_probe`. If this probe surfaces prior art that the earlier phases missed, reflect it in the verdict — do NOT rationalise past it.
+
+═══════════════════════════════════════════════════════════════════
 
 Classify the insight's `novelty_type`:
-- "new_synthesis": premises established, composite claim not in literature → GENUINE novelty candidate
+- "new_synthesis": premises established, composite claim not in literature, **central architectural move is also not in literature** → GENUINE novelty candidate
 - "restatement": composite claim already in literature under some name → NOT novel
-- "extension": composite claim is a modest extension of a published claim → marginal novelty
+- "extension": central architectural move is published in some peer system, but the insight's refinements/combination add something new → marginal novelty
 - "correction": challenges a published claim with new reasoning/evidence → novel critique
 - "unsupported": premises themselves are shaky → reject regardless of synthesis
 
@@ -278,15 +301,35 @@ Respond with EXACTLY this JSON structure (no other text):
 {{
   "premises_supported": true,
   "premises_support_citations": ["for each premise, one or more real citations/URLs establishing it"],
+  "central_architectural_move": "one sentence naming the insight's single headline architectural move (what it proposes to replace or add, shorn of refinements)",
+  "central_move_prior_art": ["citations/URLs of published work that already makes this headline move — empty list if none; a non-empty list forces novelty_type=extension unless the auxiliary refinements themselves constitute a second novel move"],
   "synthesis_findable": false,
-  "synthesis_prior_art": ["candidates for the whole-synthesis claim you searched for; empty list if nothing close found"],
+  "synthesis_prior_art": ["candidates for the whole-composite-claim search; empty list if nothing close found"],
+  "functional_decomposition": [
+    {{
+      "dimension": "what it acts on | mechanism | scale | constraint | substrate (or custom)",
+      "nearest_exemplar": "name + URL of closest published exemplar for this dimension",
+      "how_ours_differs": "concrete differentiator along this dimension"
+    }}
+  ],
+  "closest_peer_system": {{
+    "name": "name of the closest complete peer system, or empty if none found",
+    "url": "URL / citation",
+    "overlap_summary": "1-2 sentence summary of what this peer system does that overlaps with the insight's claim",
+    "differentiators": ["concrete ways the insight differs from or adds to this peer system"]
+  }},
+  "skeptic_probe": {{
+    "query": "the single query you ran as the final skeptic smell test",
+    "top_result_summary": "1-2 sentence summary of the most relevant hit the probe returned",
+    "disqualifies": false
+  }},
   "novelty_type": "new_synthesis|restatement|extension|correction|unsupported",
   "contradicting_findings": ["specific findings or papers that contradict the composite claim"],
   "reasoning_flaws": ["specific flaws in the evidence-to-claim connection"],
   "motivation": "one-paragraph explanation of why this insight matters if validated",
   "verdict": "validated|challenged|refuted|inconclusive",
   "verified_confidence": 0.0-1.0,
-  "verification_summary": "one-paragraph justification citing what the adversarial search found or failed to find, and WHY the verdict follows from premises_supported × synthesis_findable; for `inconclusive`, explicitly name the epistemic gap that prevented verification",
+  "verification_summary": "one-paragraph justification citing what the adversarial search found or failed to find, and WHY the verdict follows from premises_supported × synthesis_findable × central_move_prior_art × closest_peer_system × skeptic_probe; for `inconclusive`, explicitly name the epistemic gap that prevented verification",
   "predictions": [
     {{
       "claim": "specific empirical prediction that follows from the insight",
