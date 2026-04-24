@@ -627,78 +627,118 @@ Respond with EXACTLY this JSON structure (no other text):
 }}"""
 
 
-DIRECTIVE_SYNTHESIS_PROMPT = """You are composing a RESEARCH DIRECTIVE — a structured plan a researcher could execute to test a verified theory from our research register. The output must be grounded: every citation, URL, dataset, and tool name you reference must trace to source material we provide below. Fabricating anything sends a human researcher chasing ghosts — worse than no output.
+DIRECTIVE_HYPOTHESIS_PROMPT = """You are composing one section of a RESEARCH DIRECTIVE — a structured plan to test a verified theory. This call writes the HYPOTHESIS section only. Keep it tight; other calls handle other sections.
 
 ENGINE DOMAIN: {engine_domain}
-
 REGISTER ENTRY UNDER TRANSLATION:
 {register_entry_json}
-
-ATTACHED PREDICTIONS:
+ATTACHED OPEN PREDICTIONS (claims already tied to this entry):
 {predictions_json}
 
-CITATIONS ALLOWLIST (every URL / DOI / arXiv ID you cite MUST appear verbatim in this list):
+Your job: state what would be OBSERVABLE in the world if the theory were correct. Two to three sentences. No preamble, no section header — just the prose.
+
+Rules:
+- Derive the observable from the claim itself. Do not invent domain-specific details the source entry does not support.
+- An observable is something a researcher could point at — a measurement, a reported outcome, a state change, a published result. Not an internal belief, not a philosophical stance.
+- If the attached predictions already name a specific observable, restate it precisely; do not weaken or broaden it.
+- No examples from any specific field. Shape, not content.
+
+Respond with EXACTLY this JSON structure (no other text):
+{{
+  "hypothesis": "2-3 sentence observable-in-the-world statement"
+}}"""
+
+
+DIRECTIVE_TEST_PLAN_PROMPT = """You are composing one section of a RESEARCH DIRECTIVE — a structured plan to test a verified theory. This call writes the TEST PLAN section only.
+
+ENGINE DOMAIN: {engine_domain}
+REGISTER ENTRY UNDER TRANSLATION:
+{register_entry_json}
+ATTACHED OPEN PREDICTIONS (with their `check_method` fields — expand these into executable steps):
+{predictions_json}
+HYPOTHESIS FROM PRIOR SECTION (for coherence; do not restate):
+{hypothesis}
+
+Your job: write 3–6 numbered steps that together constitute an executable test plan. Each step must have:
+- A clear INPUT (what the researcher starts with — existing data, a source, a prior step's output)
+- A concrete ACTION (what they do)
+- An OBSERVABLE OUTPUT (what they end up with — a file, a score, a list, a measurement)
+
+Rules:
+- No hand-wave phrasing. Phrases like "figure out", "iterate until it works", "try various approaches", "check relevant sources", "use an appropriate method" are forbidden.
+- Every step must be concretely executable by a person or agent with access to standard research tools.
+- Expand each prediction's `check_method` into at least one step. Do not drop predictions silently.
+- Do NOT name specific tools in this section — the Agentic Prompt section handles tool binding. Here, describe actions at the level of "search the literature for X", "compute Y from the dataset described in source Z", etc.
+- Do NOT reference citations by URL here — the References section aggregates those.
+- No examples from any specific field. Describe structure, not content.
+
+Respond with EXACTLY this JSON structure (no other text):
+{{
+  "steps": [
+    {{"n": 1, "input": "...", "action": "...", "output": "..."}},
+    {{"n": 2, "input": "...", "action": "...", "output": "..."}}
+  ]
+}}"""
+
+
+DIRECTIVE_AGENTIC_PROMPT_PROMPT = """You are composing the AGENTIC PROMPT section of a research directive. This is the most critical section — it is the block a human will paste verbatim into an LLM-driven agent (e.g. Claude Code, an MCP orchestrator) to execute the test plan. Fabrication here sends a researcher chasing ghosts. Grounding is non-negotiable.
+
+ENGINE DOMAIN: {engine_domain}
+REGISTER ENTRY UNDER TRANSLATION:
+{register_entry_json}
+HYPOTHESIS (from prior section):
+{hypothesis}
+TEST PLAN STEPS (from prior section):
+{test_plan_json}
+
+CITATIONS ALLOWLIST (every URL / DOI / identifier you reference MUST appear verbatim in this list):
 {citations_json}
 
-AGENT TOOL ALLOWLIST (every tool name you reference in the agentic prompt MUST exact-match one of these):
+AGENT TOOL ALLOWLIST (every tool you name MUST exact-string-match one of these):
 {tool_allowlist_json}
 
-GROUNDING RULES — non-negotiable:
-- Every URL, DOI, arXiv ID, or dataset identifier you reference must come from the CITATIONS ALLOWLIST. Do not guess URL patterns. Do not infer DOIs.
-- Every tool you name in the agentic prompt must be an exact string from the AGENT TOOL ALLOWLIST. Do not reference tools that "might exist". Do not use generic phrasings like "use a search engine" — write "call `web_search(query=...)`" with a named allowlist tool.
-- If a required tool or dataset isn't in either allowlist, SAY SO in the `unresolved_dependencies` field. Do not invent a plausible-looking replacement.
-- Success/failure criteria for the test plan must be OBJECTIVELY measurable — a specific output pattern, a numerical threshold, a citation count, etc. "See if the approach works" is not measurable.
-- No hand-wave steps. Every step in the test plan and agentic prompt must be concretely executable.
+Write a self-contained instruction block. It must:
+- Bind each test-plan step to concrete tool calls. Reference each tool by its exact allowlist name, e.g. `web_search(query=...)`, `academic_search(query=..., sources=[...])`, `web_fetch(url=...)`. Do NOT write generic phrasings like "use a search engine" / "an agent tool" / "a web crawler" — those are fabrications by omission.
+- Specify inputs explicitly. A file path, a query string, a URL. If a required input is not in the citations allowlist, state "UNRESOLVED: <what's needed>" instead of inventing a plausible-looking URL.
+- Include HALT checkpoints where a human should review before proceeding. Phrase as "HALT: present <what> for approval; proceed only on explicit 'continue'."
+- Specify output format and destination. Where the result goes, in what format.
+- Define STOP conditions — success signal, refutation signal, inconclusive signal. Derive these from the claim itself; they should be measurable.
+- No hand-wave steps. "Figure out", "iterate until", "try various" are forbidden.
+- No field-specific examples. Describe what the agent does structurally; the claim's content provides the specifics.
 
-Produce a markdown document with these sections (in this order):
-
-# {{title}}
-
-> **Source register entry**: `{{register_entry_id}}` · **Verdict**: {{verdict}} · **Novelty**: {{novelty_type}} · **Confidence**: {{confidence}}
-
-## Theory
-[2-4 sentences stating the claim plainly, followed by 1-2 sentences naming the load-bearing premises the claim rests on.]
-
-## Hypothesis
-[What would be observable in the world if the theory is correct. 2-3 sentences.]
-
-## Prior Art Positioning
-[Summarize the closest_peer_system. Name it, cite its URL from the allowlist, describe in 1-2 sentences what it does that overlaps, and enumerate the differentiators — the specific ways this theory differs. If functional_decomposition is provided, use it to structure the differentiators by dimension.]
-
-## Test Plan
-[A concrete experimental design. 3-6 numbered steps. Each step names inputs, actions, and observable outputs. Expand the predictions' `check_method` fields into something a researcher could execute. No hand-waves.]
-
-## Agentic Prompt
-
-```
-[A self-contained instruction block ready to paste into an LLM-driven agent. It must:
-- Use only tools from the AGENT TOOL ALLOWLIST, referenced by exact name (e.g. `web_search`, `academic_search`, `web_fetch`, `code_execution`).
-- Specify inputs (file paths, query strings, URLs) explicitly.
-- Include checkpoint gates where human review is appropriate (e.g. "HALT: present findings for approval before proceeding to step N").
-- Specify output format and where it should be saved.
-- Define stop conditions (success, failure, inconclusive).]
-```
-
-## Verification Criteria
-| Outcome | Observable signal |
-| --- | --- |
-| Confirmed | [concrete, objectively-measurable condition] |
-| Refuted | [concrete, objectively-measurable condition] |
-| Inconclusive | [condition under which the test didn't have purchase] |
-
-## References
-[Bulleted list of the citations actually used in this directive — each MUST be from the allowlist.]
-
----
-
-Respond with EXACTLY this JSON structure (no other text) — the `markdown` field carries the full directive content described above, rendered as a single string. Line breaks inside the string are required (use `\\n` in the JSON string):
-
+Respond with EXACTLY this JSON structure (no other text):
 {{
-  "title": "short descriptive title used in section 1",
-  "markdown": "the full markdown directive as described above — all sections from '# {{title}}' through '## References'",
-  "tool_names_used": ["exact names of tools referenced in the agentic prompt"],
-  "citations_used": ["URLs/DOIs/arXiv IDs referenced anywhere in the directive"],
-  "unresolved_dependencies": ["any required tool/dataset/url that was NOT in either allowlist — should be empty if the directive is fully grounded"]
+  "agentic_prompt": "the full self-contained instruction block, as a single string with \\n for line breaks",
+  "tool_names_used": ["exact allowlist names of tools referenced in the prompt body"],
+  "citations_used": ["URLs/DOIs from the allowlist referenced in the prompt body"],
+  "unresolved_dependencies": ["items marked 'UNRESOLVED' — what was needed but not in the allowlists"]
+}}"""
+
+
+DIRECTIVE_VERIFICATION_CRITERIA_PROMPT = """You are composing the VERIFICATION CRITERIA section of a research directive — a 3-row table mapping test outcomes to concrete observable signals.
+
+ENGINE DOMAIN: {engine_domain}
+REGISTER ENTRY UNDER TRANSLATION:
+{register_entry_json}
+ATTACHED OPEN PREDICTIONS (with falsifiable_condition fields — expand these into observable signals):
+{predictions_json}
+HYPOTHESIS (from prior section):
+{hypothesis}
+
+Write three rows: Confirmed, Refuted, Inconclusive. Each row's signal must be:
+- OBJECTIVELY measurable — a numerical threshold, a specific output pattern, a citation count, a dataset match, a state transition. Not "the approach demonstrates utility" or "evidence supports the claim".
+- Directly derivable from the predictions' falsifiable_conditions OR the hypothesis. No invented criteria.
+- Field-agnostic in shape — do not use examples from any specific research domain.
+
+Rules:
+- Each signal stands alone. A reader should be able to say "that signal either is present in the data or it isn't" without interpretation.
+- Inconclusive describes the state where the test could not resolve — not a weak version of confirmed/refuted. E.g. "required data unavailable at the target date" or "search returned no results matching the query shape", not "mixed evidence".
+
+Respond with EXACTLY this JSON structure (no other text):
+{{
+  "confirmed": "observable signal for confirmation",
+  "refuted": "observable signal for refutation",
+  "inconclusive": "condition under which the test did not resolve"
 }}"""
 
 
