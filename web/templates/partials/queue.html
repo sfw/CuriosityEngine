@@ -61,62 +61,104 @@
     </div>
 
     {% if queue %}
-      <p class="text-xs text-slate-500 mb-2">Sorted by priority — highest-priority questions will be investigated first on the next run.</p>
-      <ul class="space-y-2 text-sm">
-        {% for q in queue|sort(attribute='priority', reverse=True) %}
-          {% set pri = q.priority if q.priority is defined else 0.5 %}
-          <li class="rounded-xl border border-slate-700/60 {% if q.source.startswith('human') %}bg-indigo-500/10 border-indigo-500/30{% else %}bg-slate-800/30{% endif %} p-3 flex items-start gap-3">
-            <div class="flex-1 min-w-0">
-              <div class="flex items-baseline gap-2 mb-0.5 flex-wrap">
-                {# Source can be: "human", "entry:j-xxx", "xref:x-xxx",
-                   "analog:j-xxx" (analog probe from entry), "assumption:j-xxx"
-                   (assumption probe from entry), "gap:cs-xxx" (negative-space
-                   scan). Link the ones that point at a specific data object. #}
-                {% if q.source.startswith('entry:') %}
-                  <a href="/journals/{{ name }}?tab=entries#{{ q.source.split(':', 1)[1] }}"
-                     title="Jump to the entry that generated this question"
-                     class="mono text-xs text-indigo-400 hover:text-indigo-300 no-underline">{{ q.source }}</a>
-                {% elif q.source.startswith('xref:') %}
-                  <a href="/journals/{{ name }}?tab=graph-view#{{ q.source }}"
-                     title="Open this cross-reference in the Graph"
-                     class="mono text-xs text-amber-400 hover:text-amber-300 no-underline">{{ q.source }}</a>
-                {% elif q.source.startswith('analog:') %}
-                  <a href="/journals/{{ name }}?tab=entries#{{ q.source.split(':', 1)[1] }}"
-                     title="Analog probe fired from this entry"
-                     class="mono text-xs text-purple-400 hover:text-purple-300 no-underline">{{ q.source }}</a>
-                {% elif q.source.startswith('assumption:') %}
-                  <a href="/journals/{{ name }}?tab=entries#{{ q.source.split(':', 1)[1] }}"
-                     title="Assumption probe fired from this entry"
-                     class="mono text-xs text-sky-400 hover:text-sky-300 no-underline">{{ q.source }}</a>
-                {% elif q.source.startswith('gap:') %}
-                  <a href="/journals/{{ name }}?tab=coverage"
-                     title="Negative-space scan that identified this gap"
-                     class="mono text-xs text-purple-400 hover:text-purple-300 no-underline">{{ q.source }}</a>
-                {% else %}
-                  <span class="mono text-xs {% if q.source.startswith('human') %}text-indigo-300{% else %}text-slate-500{% endif %}">
-                    {{ q.source }}
-                  </span>
-                {% endif %}
+      {# Bucket questions by source family. The source field's prefix up to
+         the first ':' is the bucket key. "human" and anything without a
+         prefix slot into 'human' / 'fresh' respectively. Bucket order is
+         fixed so the display is predictable across renders. #}
+      {% set _buckets = {'human': [], 'xref': [], 'gap': [], 'analog': [], 'assumption': [], 'entry': [], 'fresh': [], 'other': []} %}
+      {% for q in queue %}
+        {% set _src = q.source or '' %}
+        {% set _prefix = _src.split(':', 1)[0] if ':' in _src else _src %}
+        {% set _bucket = _prefix if _prefix in _buckets else ('fresh' if not _src else 'other') %}
+        {% set _ = _buckets[_bucket].append(q) %}
+      {% endfor %}
+      {% set _bucket_meta = {
+        'human':      {'label': 'Human-directed',   'color': 'indigo'},
+        'xref':       {'label': 'Cross-reference',  'color': 'amber'},
+        'gap':        {'label': 'Unexplored gap',   'color': 'purple'},
+        'analog':     {'label': 'Analog probe',     'color': 'purple'},
+        'assumption': {'label': 'Assumption probe', 'color': 'sky'},
+        'entry':      {'label': 'Entry followup',   'color': 'indigo'},
+        'fresh':      {'label': 'Fresh / generated','color': 'slate'},
+        'other':      {'label': 'Other',            'color': 'slate'},
+      } %}
+      <p class="text-xs text-slate-500 mb-3">
+        Grouped by source; within each group, highest-priority first. Empty groups hidden.
+        <span class="ml-1 text-slate-600">({{ queue|length }} total across {{ _buckets.values()|selectattr('0')|list|length }} sources)</span>
+      </p>
+      <div class="space-y-3 text-sm">
+        {% for _bucket_key in ['human', 'xref', 'gap', 'analog', 'assumption', 'entry', 'fresh', 'other'] %}
+          {% set _items = _buckets[_bucket_key] %}
+          {% if _items %}
+            {% set _meta = _bucket_meta[_bucket_key] %}
+            {% set _color = _meta['color'] %}
+            {% set _sorted = _items|sort(attribute='priority', reverse=True) %}
+            {% set _max_pri = _sorted[0].priority if _sorted else 0 %}
+            <details class="rounded-xl border border-slate-700/60 bg-slate-900/30" {% if _bucket_key == 'human' or _bucket_key == 'xref' %}open{% endif %}>
+              <summary class="px-3 py-2 cursor-pointer flex items-center gap-2 flex-wrap">
+                <span class="w-2 h-2 rounded-full bg-{{ _color }}-400"></span>
+                <span class="text-xs font-semibold text-slate-200">{{ _meta['label'] }}</span>
+                <span class="mono text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">{{ _items|length }} queued</span>
                 <span class="mono text-[10px] px-1.5 py-0.5 rounded
-                             {% if pri >= 0.8 %}bg-emerald-500/20 text-emerald-300
-                             {% elif pri >= 0.6 %}bg-sky-500/20 text-sky-300
-                             {% else %}bg-slate-700 text-slate-400{% endif %}"
-                      title="Expected-reward priority at enqueue time">pri {{ '%.2f'|format(pri) }}</span>
-              </div>
-              <div class="text-slate-200">{{ q.question }}</div>
-            </div>
-            <form method="post" action="/journals/{{ name }}/questions/delete" class="flex-shrink-0">
-              <input type="hidden" name="question_text" value="{{ q.question }}" />
-              <button type="submit" title="Remove from queue"
-                      class="p-1 rounded-md text-slate-500 hover:text-rose-400 hover:bg-slate-800">
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
-                </svg>
-              </button>
-            </form>
-          </li>
+                             {% if _max_pri >= 0.85 %}bg-emerald-500/20 text-emerald-300
+                             {% elif _max_pri >= 0.7 %}bg-sky-500/20 text-sky-300
+                             {% else %}bg-slate-700 text-slate-400{% endif %}">max pri {{ '%.2f'|format(_max_pri) }}</span>
+              </summary>
+              <ul class="px-3 pb-3 space-y-2">
+                {% for q in _sorted %}
+                  {% set pri = q.priority if q.priority is defined else 0.5 %}
+                  <li class="rounded-xl border border-slate-700/60 {% if q.source.startswith('human') %}bg-indigo-500/10 border-indigo-500/30{% else %}bg-slate-800/30{% endif %} p-3 flex items-start gap-3">
+                    <div class="flex-1 min-w-0">
+                      <div class="flex items-baseline gap-2 mb-0.5 flex-wrap">
+                        {% if q.source.startswith('entry:') %}
+                          <a href="/journals/{{ name }}?tab=entries#{{ q.source.split(':', 1)[1] }}"
+                             title="Jump to the entry that generated this question"
+                             class="mono text-xs text-indigo-400 hover:text-indigo-300 no-underline">{{ q.source }}</a>
+                        {% elif q.source.startswith('xref:') %}
+                          <a href="/journals/{{ name }}?tab=graph-view#{{ q.source }}"
+                             title="Open this cross-reference in the Graph"
+                             class="mono text-xs text-amber-400 hover:text-amber-300 no-underline">{{ q.source }}</a>
+                        {% elif q.source.startswith('analog:') %}
+                          <a href="/journals/{{ name }}?tab=entries#{{ q.source.split(':', 1)[1] }}"
+                             title="Analog probe fired from this entry"
+                             class="mono text-xs text-purple-400 hover:text-purple-300 no-underline">{{ q.source }}</a>
+                        {% elif q.source.startswith('assumption:') %}
+                          <a href="/journals/{{ name }}?tab=entries#{{ q.source.split(':', 1)[1] }}"
+                             title="Assumption probe fired from this entry"
+                             class="mono text-xs text-sky-400 hover:text-sky-300 no-underline">{{ q.source }}</a>
+                        {% elif q.source.startswith('gap:') %}
+                          <a href="/journals/{{ name }}?tab=coverage"
+                             title="Negative-space scan that identified this gap"
+                             class="mono text-xs text-purple-400 hover:text-purple-300 no-underline">{{ q.source }}</a>
+                        {% else %}
+                          <span class="mono text-xs {% if q.source.startswith('human') %}text-indigo-300{% else %}text-slate-500{% endif %}">
+                            {{ q.source }}
+                          </span>
+                        {% endif %}
+                        <span class="mono text-[10px] px-1.5 py-0.5 rounded
+                                     {% if pri >= 0.8 %}bg-emerald-500/20 text-emerald-300
+                                     {% elif pri >= 0.6 %}bg-sky-500/20 text-sky-300
+                                     {% else %}bg-slate-700 text-slate-400{% endif %}"
+                              title="Expected-reward priority at enqueue time">pri {{ '%.2f'|format(pri) }}</span>
+                      </div>
+                      <div class="text-slate-200">{{ q.question }}</div>
+                    </div>
+                    <form method="post" action="/journals/{{ name }}/questions/delete" class="flex-shrink-0">
+                      <input type="hidden" name="question_text" value="{{ q.question }}" />
+                      <button type="submit" title="Remove from queue"
+                              class="p-1 rounded-md text-slate-500 hover:text-rose-400 hover:bg-slate-800">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                          <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+                        </svg>
+                      </button>
+                    </form>
+                  </li>
+                {% endfor %}
+              </ul>
+            </details>
+          {% endif %}
         {% endfor %}
-      </ul>
+      </div>
     {% else %}
       <p class="text-sm text-slate-500">Queue is empty. Emergent questions from past cycles and human-directed questions you add here get investigated first on the next run.</p>
     {% endif %}
