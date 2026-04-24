@@ -139,6 +139,7 @@ class VerificationMixin:
             prior_human_rejections_json=json.dumps(
                 self.journal.human_rejection_feedback(), indent=2,
             ),
+            engine_domain=getattr(self.config, "domain", "") or "(unspecified)",
         )
         server_tools = [
             {"type": "web_search_20250305", "name": "web_search"},
@@ -173,6 +174,7 @@ class VerificationMixin:
         functional_decomposition = result.get("functional_decomposition", []) or []
         closest_peer_system = result.get("closest_peer_system") or {}
         skeptic_probe = result.get("skeptic_probe") or {}
+        target_application_domain = (result.get("target_application_domain") or "").strip()
 
         # Phase-1 guard: if the central architectural move is already published
         # (central_move_prior_art non-empty with substantive entries), downgrade
@@ -442,6 +444,7 @@ class VerificationMixin:
             functional_decomposition=list(functional_decomposition),
             closest_peer_system=dict(closest_peer_system),
             skeptic_probe=dict(skeptic_probe),
+            target_application_domain=target_application_domain,
         )
 
         self.journal.add_register_entry(register_entry)
@@ -931,6 +934,7 @@ class VerificationMixin:
                 prior_human_rejections_json=json.dumps(
                     self.journal.human_rejection_feedback(), indent=2,
                 ),
+                engine_domain=getattr(self.config, "domain", "") or "(unspecified)",
             )
             server_tools = [
                 {"type": "web_search_20250305", "name": "web_search"},
@@ -972,6 +976,7 @@ class VerificationMixin:
                 "new_synthesis_prior_art": list(result.get("synthesis_prior_art", []) or []),
                 "new_closest_peer_system": dict(result.get("closest_peer_system") or {}),
                 "new_skeptic_probe": dict(result.get("skeptic_probe") or {}),
+                "new_target_application_domain": (result.get("target_application_domain") or "").strip(),
                 "new_functional_decomposition": list(result.get("functional_decomposition") or []),
                 "new_contradicting_findings": list(result.get("contradicting_findings") or []),
                 "new_reasoning_flaws": list(result.get("reasoning_flaws") or []),

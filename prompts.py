@@ -234,7 +234,11 @@ Now search for prior work matching the whole composite claim — all the refinem
 Break the claim into 3-5 independent functional dimensions — e.g. *what it acts on / through what mechanism / at what scale / under what constraint / on what substrate*. For each dimension, name the NEAREST published exemplar and how the insight differs along that dimension. Record in `functional_decomposition`. If any dimension has an exemplar that's *indistinguishable* from the claim along that dimension, treat it as partial prior art.
 
 ─── PHASE 3b: CLOSEST PEER SYSTEM ───
-Explicitly search for the closest *complete* peer system — a deployed or published system that addresses the same problem the insight addresses, even if its internals differ. This is the phase that catches system-level competitors that structural-query searches miss. **At least one query in this phase MUST name the insight's target application domain by name** (e.g. "AI scientist", "LLM research agent", "autonomous research system", or whatever domain the claim actually targets). Record in `closest_peer_system` with its overlap summary and the concrete differentiators between it and the insight.
+Explicitly search for the closest *complete* peer system — a deployed or published system that addresses the same problem the insight addresses, even if its internals differ. This is the phase that catches system-level competitors that structural-query searches miss.
+
+**Before searching in this phase**: write out the claim's target application domain in one short phrase, derived from the claim text itself — NOT from any prior example. The journal's overall domain context is: "{engine_domain}". Use it as a scoping hint; if the specific claim targets a narrower or orthogonal sub-domain, name that narrower thing instead. Put this phrase in `target_application_domain`.
+
+**At least one query in this phase MUST explicitly include that domain phrase** in the query string. If the domain is "marketing attribution systems", at least one query reads like "marketing attribution systems <concept>". If the domain is "distributed systems consensus", at least one query reads like "distributed systems consensus <concept>". Do NOT default to any fixed example domain from training data — the domain is whatever your target_application_domain phrase says. Record the closest peer in `closest_peer_system` with overlap summary and concrete differentiators.
 
 ─── PHASE 4: CONTRADICTING EVIDENCE ───
 Search for research that actively disagrees with the composite claim. Record in `contradicting_findings`.
@@ -243,7 +247,15 @@ Search for research that actively disagrees with the composite claim. Record in 
 Examine the connection between supporting entries and the claim. Is the inferential leap justified? Record in `reasoning_flaws`.
 
 ─── FINAL: SKEPTIC SMELL TEST ───
-Before you write the verdict, do ONE more probe. You are a skeptical reviewer with one shot at a web search and the goal of killing this insight. What is the SINGLE query you would run — the one most likely to surface disqualifying prior art? Run it. Record the query, the top result's relevance, and whether it disqualifies the claim in `skeptic_probe`. If this probe surfaces prior art that the earlier phases missed, reflect it in the verdict — do NOT rationalise past it.
+Before writing the verdict, run an aggressive adversarial probe. You are a skeptical peer reviewer with 10 minutes and web search, whose JOB is to kill the insight. Follow this sequence:
+
+1. **Enumerate**: write out 3-5 candidate "kill queries" — the queries most likely to surface disqualifying prior art, restatement, or a peer system that does essentially the same thing. Be adversarial: choose queries a hostile reviewer would run. Record in `skeptic_probe.candidate_queries`.
+2. **Pick the most lethal** — the candidate with the best chance of returning disqualifying evidence, not the one you're most confident will survive. Record in `skeptic_probe.query`.
+3. **Run it.** Record `skeptic_probe.top_result_summary`.
+4. **Judge honestly**: would the top result convince a hostile reviewer that the claim is a restatement or covered by existing work? Set `skeptic_probe.disqualifies` accordingly.
+5. **Survivor check**: if the first probe returns disqualifies=false, run ONE more query from your candidate list chosen to attack a DIFFERENT angle. Record that as `skeptic_probe.followup_query` and `skeptic_probe.followup_summary`. If either probe disqualifies, mark disqualifies=true.
+
+The system will penalise the verdict if the skeptic probe survived with queries narrow enough that a reviewer would call them non-adversarial. Picking queries designed to confirm rather than kill is a hedging failure, not a verification pass.
 
 ═══════════════════════════════════════════════════════════════════
 
@@ -312,6 +324,7 @@ Respond with EXACTLY this JSON structure (no other text):
       "how_ours_differs": "concrete differentiator along this dimension"
     }}
   ],
+  "target_application_domain": "one short phrase naming the claim's actual target domain — derived from the claim itself, not from memorized examples",
   "closest_peer_system": {{
     "name": "name of the closest complete peer system, or empty if none found",
     "url": "URL / citation",
@@ -319,8 +332,11 @@ Respond with EXACTLY this JSON structure (no other text):
     "differentiators": ["concrete ways the insight differs from or adds to this peer system"]
   }},
   "skeptic_probe": {{
-    "query": "the single query you ran as the final skeptic smell test",
-    "top_result_summary": "1-2 sentence summary of the most relevant hit the probe returned",
+    "candidate_queries": ["3-5 candidate kill queries a hostile reviewer would run"],
+    "query": "the single most lethal query — the one most likely to surface disqualifying evidence",
+    "top_result_summary": "1-2 sentence summary of the top hit",
+    "followup_query": "one additional adversarial query attacking a different angle (required if first query returned disqualifies=false)",
+    "followup_summary": "1-2 sentence summary of the followup's top hit, or empty if no followup was needed",
     "disqualifies": false
   }},
   "novelty_type": "new_synthesis|restatement|extension|correction|unsupported",
@@ -344,7 +360,7 @@ Respond with EXACTLY this JSON structure (no other text):
 }}"""
 
 
-ANALOG_PROBE_PROMPT = """You are a research engine looking for CROSS-DOMAIN ANALOGS of a finding you just uncovered. Biology has inspired algorithms (neural nets, genetic search, ant colonies). Economics has inspired mechanism design for distributed systems. Thermodynamics has inspired learning-rate schedules. The best novel ideas often come from recognizing that *the same structural mechanism* appears in a foreign field, under a different vocabulary.
+ANALOG_PROBE_PROMPT = """You are a research engine looking for CROSS-DOMAIN ANALOGS of a finding you just uncovered. The best novel ideas often come from recognising that *the same structural mechanism* — same dynamics, same constraints, same failure modes — appears in a field far from the one you're working in, under a different vocabulary.
 
 THE FINDING:
 Question investigated: {entry_question}
@@ -352,19 +368,23 @@ Surprise delta: {entry_surprise:.2f}
 Key takeaways:
 {entry_takeaways}
 
+CURRENT RESEARCH DOMAIN: {engine_domain}
+
 DOMAINS ALREADY IN PLAY ON THIS JOURNAL (avoid these — they're NOT distant enough):
 {recent_tags}
 
-Your task: identify 2-3 DISTANT domains — fields whose established vocabulary, methods, or mechanisms are structurally analogous to the finding but that do NOT appear in the recent-tags list above. Then, for each, produce a specific, investigable question that translates the analog back into the research area of the original finding.
+Your task: identify 2-3 DISTANT domains — fields whose established vocabulary, methods, or mechanisms are structurally analogous to the finding but that do NOT appear in the recent-tags list above. Then, for each, produce a specific, investigable question that translates the analog back into the current research domain.
+
+**"Distant" means a field that a domain expert in {engine_domain} would NOT already routinely consult.** Do not default to a particular off-the-shelf repertoire of cross-domain bridges; your candidate pool is every structured field of knowledge humans have developed, and the best analog is whichever one the finding's structural fingerprint actually matches.
 
 **What counts as a strong analog (not a weak one):**
-- STRONG: "The finding's coupling dynamics mirror predator-prey oscillations studied in population ecology. Question: can Lotka-Volterra stability conditions be applied to <finding's mechanism> to predict when it will collapse?"
-- WEAK: "This is like how brains work." (Vague, already in play, no specific mechanism named.)
-- WEAK: "Evolutionary algorithms already exist." (Not an analog, it's the same field.)
+- STRONG: a specific named mechanism/law/formal result from the analog domain whose dynamics-constraints-failure-modes map onto the finding with enough precision that a concrete testable question falls out.
+- WEAK: "this is like <broad field>". Vague. Name the sub-field AND the specific mechanism.
+- WEAK: an analog drawn from a field adjacent to {engine_domain}. The whole point is reach; the analog should feel non-obvious.
 
 **Rules:**
-- Each analog domain must be STRUCTURALLY analogous (same dynamics, same constraints, same failure modes), not just topically related.
-- Name a specific mechanism, method, law, or formal result from the analog domain. Not just "biology" — name the sub-field and the thing ("population ecology's competitive exclusion principle"; "statistical mechanics' maximum entropy principle"; "antibody-epitope lock-and-key binding in immunology").
+- Each analog must be STRUCTURALLY analogous (same dynamics, same constraints, same failure modes), not merely topically related.
+- Name a specific mechanism, law, method, or formal result — not just the parent field.
 - The investigable question must be answerable with web_search / academic_search — not purely philosophical.
 - If you cannot find a STRONG cross-domain analog, return an empty list. Weak analogs pollute the queue. Quality over quantity.
 
@@ -372,10 +392,10 @@ Respond with EXACTLY this JSON structure (no other text):
 {{
   "analogs": [
     {{
-      "domain": "specific sub-field (e.g. 'population ecology', 'statistical mechanics', 'immune system biology')",
-      "mechanism": "the specific mechanism, law, or named result in that domain",
+      "domain": "specific sub-field naming a body of literature and vocabulary distinct from the current research domain",
+      "mechanism": "the specific mechanism, law, method, or named result in that domain",
       "structural_analogy": "one sentence explaining which dynamics/constraints/failure-modes map between the finding and this analog",
-      "question": "an investigable question that translates the analog into the original research area"
+      "question": "an investigable question that translates the analog into the current research domain"
     }}
   ]
 }}"""
@@ -437,9 +457,9 @@ For each empty cell, classify it into ONE category:
 
 2. **tried_failed** — there's known evidence that this combination has been tried and didn't work (or was explicitly ruled out). Has prior art showing why the combination fails.
 
-3. **trivially_uninteresting** — the combination is technically possible but doesn't make sense in the field. E.g. "using ODE solvers to do image classification" — not underexplored, just absurd or mis-scoped.
+3. **trivially_uninteresting** — the combination is technically possible but doesn't make sense in the field under analysis. The method has no load-bearing purchase on the problem; pairing them would be a category error or a rephrasing of a solved thing — not a gap.
 
-4. **regulated_boundary** — the combination is bounded by ethics, regulation, capability constraints, or infrastructure limits. E.g. "using live-patient clinical trials to test LLM prompt robustness".
+4. **regulated_boundary** — the combination is bounded by ethics, regulation, capability constraints, or infrastructure limits. The gap isn't intellectual; it's that the combination cannot be safely, legally, or technically attempted in the current environment.
 
 5. **adjacent_but_covered** — the combination LOOKS empty in this journal's matrix but is actually well-studied in the wider literature under a different terminology. The journal just hasn't absorbed that literature yet.
 

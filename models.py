@@ -156,6 +156,10 @@ class RegisterEntry:
     functional_decomposition: list[dict] = field(default_factory=list)
     closest_peer_system: dict = field(default_factory=dict)
     skeptic_probe: dict = field(default_factory=dict)
+    # Claim's target application domain as the verifier named it in phase 3b.
+    # Used to detect when the verifier fell back to a memorized example
+    # rather than deriving the domain from the claim text.
+    target_application_domain: str = ""
 
     # Append-only log of re-verification passes triggered from the admin UI.
     # Each entry: {timestamp, verdict, verified_confidence, novelty_type,

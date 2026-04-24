@@ -172,6 +172,7 @@ class InvestigationMixin:
             entry_surprise=entry.surprise_delta,
             entry_takeaways=json.dumps(entry.key_takeaways, indent=2),
             recent_tags=", ".join(recent_tags) if recent_tags else "(none)",
+            engine_domain=getattr(self.config, "domain", "") or "(unspecified)",
         )
         try:
             result = self._call_primary(prompt)
