@@ -20,6 +20,7 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       E2B_API_KEY: ${E2B_API_KEY:-}
+      SEMANTIC_SCHOLAR_API_KEY: ${SEMANTIC_SCHOLAR_API_KEY:-}
     # Default command shows CLI help; real runs override via `docker compose run ... --cycles 3`.
     command: ["--help"]
 
@@ -53,6 +54,7 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       E2B_API_KEY: ${E2B_API_KEY:-}
+      SEMANTIC_SCHOLAR_API_KEY: ${SEMANTIC_SCHOLAR_API_KEY:-}
     # Bind to localhost only — single-user, no auth.
     ports:
       - "127.0.0.1:8000:8000"

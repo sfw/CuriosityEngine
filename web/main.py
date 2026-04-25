@@ -1402,6 +1402,7 @@ def settings_view(request: Request, saved: int = 0):
             "ANTHROPIC_API_KEY": bool(os.environ.get("ANTHROPIC_API_KEY")),
             "OPENAI_API_KEY": bool(os.environ.get("OPENAI_API_KEY")),
             "E2B_API_KEY": bool(os.environ.get("E2B_API_KEY")),
+            "SEMANTIC_SCHOLAR_API_KEY": bool(os.environ.get("SEMANTIC_SCHOLAR_API_KEY")),
         },
         "saved": bool(saved),
     })

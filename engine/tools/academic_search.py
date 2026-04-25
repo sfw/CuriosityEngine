@@ -1,11 +1,16 @@
-"""academic_search — keyless search across Crossref, arXiv, and Semantic Scholar.
+"""academic_search — search across Crossref, arXiv, and Semantic Scholar.
 
-Returns unified, citation-ready results. No API keys required (Semantic Scholar's
-public tier is rate-limited but unauthenticated; use a key if you need higher quotas).
+Crossref + arXiv are keyless. Semantic Scholar's public tier shares a
+1000 req/s global bucket across ALL unauthenticated users — burst
+exhaustion is common. Set the SEMANTIC_SCHOLAR_API_KEY environment
+variable to use a private 1 req/s bucket; without it we still work but
+will hit 429s during shared-bucket exhaustion. Apply for a free key at:
+https://www.semanticscholar.org/product/api#api-key-form
 """
 
 from __future__ import annotations
 
+import os
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from typing import Optional
@@ -17,6 +22,17 @@ from engine.tools._rate_limits import ARXIV, CROSSREF, SEMANTIC_SCHOLAR
 
 _USER_AGENT = "CuriosityEngine/0.1 (research use; contact via repo)"
 _TIMEOUT = 25.0
+
+
+def _semantic_scholar_headers() -> dict:
+    """Build SS request headers. Includes x-api-key if SEMANTIC_SCHOLAR_API_KEY
+    is set in the environment — switches us from the shared-bucket public
+    tier (1000 req/s shared globally) to a private 1 req/s tier."""
+    headers = {"User-Agent": _USER_AGENT}
+    key = (os.environ.get("SEMANTIC_SCHOLAR_API_KEY") or "").strip()
+    if key:
+        headers["x-api-key"] = key
+    return headers
 
 
 @dataclass
@@ -161,13 +177,20 @@ def _semantic_scholar_search(query: str, limit: int) -> list[AcademicResult]:
         "limit": min(max(1, limit), 50),
         "fields": "title,authors.name,year,venue,abstract,externalIds,url,citationCount",
     }
-    with httpx.Client(timeout=_TIMEOUT, headers={"User-Agent": _USER_AGENT}) as c:
+    with httpx.Client(timeout=_TIMEOUT, headers=_semantic_scholar_headers()) as c:
         r = c.get(url, params=params)
         if r.status_code == 429:
             # Set a 60s cooldown so the rest of the scan backs off cleanly
-            # rather than hammering the same endpoint at 1/3s pacing.
+            # rather than hammering the same endpoint. With an API key we
+            # have a private 1 req/s bucket and shouldn't normally see this;
+            # without one, the shared 1000 req/s global pool can be exhausted
+            # by other users at any time.
             SEMANTIC_SCHOLAR.note_failure(60.0)
-            raise ToolError("semantic_scholar rate limited (HTTP 429) — 60s cooldown engaged")
+            keyed = bool((os.environ.get("SEMANTIC_SCHOLAR_API_KEY") or "").strip())
+            note = "with API key" if keyed else "no API key — shared global pool exhausted"
+            raise ToolError(
+                f"semantic_scholar rate limited (HTTP 429, {note}) — 60s cooldown engaged"
+            )
         r.raise_for_status()
         data = r.json()
 
