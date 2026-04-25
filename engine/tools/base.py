@@ -58,14 +58,31 @@ class RateLimiter:
         self._tokens = float(self._capacity)
         self._last = time.monotonic()
         self._cond = threading.Condition()
+        # Cooldown timestamp for back-off-on-429. When the upstream endpoint
+        # signals overload (HTTP 429 / explicit rate-limit error), the caller
+        # invokes note_failure() which sets _cooldown_until to a future
+        # monotonic-clock timestamp. Subsequent acquire() calls block until
+        # that timestamp passes BEFORE consulting the token bucket. This is
+        # the back-off behaviour that pure token-bucket pacing can't provide.
+        self._cooldown_until: float = 0.0
         self.name = name or f"limiter-{id(self):x}"
 
     def acquire(self, tokens: int = 1) -> float:
         """Block until `tokens` are available, then sleep a random jitter.
-        Returns total seconds waited (token-wait + jitter).
+        Returns total seconds waited (cooldown + token-wait + jitter).
         """
         waited = 0.0
+        # Cooldown phase — if note_failure was recently called, wait it out
+        # BEFORE attempting to consume tokens. Logged once per cooldown wait
+        # so the user can see that a back-off is in effect.
         with self._cond:
+            now = time.monotonic()
+            if self._cooldown_until > now:
+                cool_wait = self._cooldown_until - now
+                print(f"  [rate-limit cooldown] {self.name}: backing off "
+                      f"{cool_wait:.1f}s before next request")
+                self._cond.wait(timeout=cool_wait)
+                waited += cool_wait
             while True:
                 now = time.monotonic()
                 elapsed = now - self._last
@@ -89,6 +106,23 @@ class RateLimiter:
             time.sleep(fuzz)
             waited += fuzz
         return waited
+
+    def note_failure(self, cooldown_seconds: float = 60.0):
+        """Record a rate-limit rejection from the upstream endpoint. All
+        future acquire() calls will block until `cooldown_seconds` have
+        elapsed before consuming tokens. Use when the server returns
+        HTTP 429 or an equivalent explicit overload signal.
+
+        Idempotent: multiple note_failure() calls in quick succession set
+        the cooldown to the LATER of the existing one or now+cooldown.
+        """
+        if cooldown_seconds <= 0:
+            return
+        with self._cond:
+            new_until = time.monotonic() + float(cooldown_seconds)
+            if new_until > self._cooldown_until:
+                self._cooldown_until = new_until
+            self._cond.notify_all()
 
     def __repr__(self):
         return (
@@ -120,6 +154,13 @@ class HostRateLimiter:
                 )
                 self._limiters[host] = limiter
         return limiter.acquire(tokens)
+
+    def note_failure(self, host: str, cooldown_seconds: float = 60.0):
+        """Forward a rate-limit failure signal to the per-host limiter."""
+        with self._lock:
+            limiter = self._limiters.get(host)
+        if limiter is not None:
+            limiter.note_failure(cooldown_seconds)
 
 
 @dataclass

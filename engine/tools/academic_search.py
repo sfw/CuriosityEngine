@@ -44,6 +44,9 @@ def _crossref_search(query: str, limit: int) -> list[AcademicResult]:
     }
     with httpx.Client(timeout=_TIMEOUT, headers={"User-Agent": _USER_AGENT}) as c:
         r = c.get(url, params=params)
+        if r.status_code == 429:
+            CROSSREF.note_failure(60.0)
+            raise ToolError("crossref rate limited (HTTP 429) — 60s cooldown engaged")
         r.raise_for_status()
         data = r.json()
 
@@ -83,7 +86,14 @@ def _crossref_search(query: str, limit: int) -> list[AcademicResult]:
 
 
 def _arxiv_search(query: str, limit: int) -> list[AcademicResult]:
-    """arXiv Atom feed API. https://info.arxiv.org/help/api/user-manual.html"""
+    """arXiv Atom feed API. https://info.arxiv.org/help/api/user-manual.html
+
+    On HTTP 429, set a 60s cooldown on the ARXIV limiter so subsequent
+    callers (across the whole process) back off before the next request.
+    arXiv's documented 1 req/3s pacing is sometimes stricter in practice
+    on burst workloads — gap-scan verification with 80+ probes triggers
+    it reliably.
+    """
     ARXIV.acquire()  # arXiv user manual: 3s between requests
     url = "https://export.arxiv.org/api/query"
     params = {
@@ -95,6 +105,9 @@ def _arxiv_search(query: str, limit: int) -> list[AcademicResult]:
     }
     with httpx.Client(timeout=_TIMEOUT, headers={"User-Agent": _USER_AGENT}) as c:
         r = c.get(url, params=params)
+        if r.status_code == 429:
+            ARXIV.note_failure(60.0)
+            raise ToolError("arxiv rate limited (HTTP 429) — 60s cooldown engaged")
         r.raise_for_status()
         body = r.text
 
@@ -151,7 +164,10 @@ def _semantic_scholar_search(query: str, limit: int) -> list[AcademicResult]:
     with httpx.Client(timeout=_TIMEOUT, headers={"User-Agent": _USER_AGENT}) as c:
         r = c.get(url, params=params)
         if r.status_code == 429:
-            raise ToolError("semantic_scholar rate limited — retry in a few seconds")
+            # Set a 60s cooldown so the rest of the scan backs off cleanly
+            # rather than hammering the same endpoint at 1/3s pacing.
+            SEMANTIC_SCHOLAR.note_failure(60.0)
+            raise ToolError("semantic_scholar rate limited (HTTP 429) — 60s cooldown engaged")
         r.raise_for_status()
         data = r.json()
 
