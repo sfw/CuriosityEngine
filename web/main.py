@@ -439,6 +439,56 @@ async def _spawn_maintenance_subprocess(
     return {"run_id": run_id, "cmd": " ".join(cmd), "journal": journal_stem}
 
 
+@app.post("/journals/{name}/runs/{run_id}/kill")
+async def kill_run(name: str, run_id: str):
+    """Stop a streaming run by sending SIGTERM to its subprocess. If the
+    process doesn't exit within 3s, escalates to SIGKILL. Updates run
+    meta so the Runs tab shows the run as failed/killed once refreshed."""
+    state = _active_runs.get(run_id)
+    if state is None or state.get("done"):
+        return JSONResponse(
+            {"ok": False, "reason": "run not found in active set (already completed?)"},
+            status_code=404,
+        )
+    proc = state.get("proc")
+    if proc is None:
+        return JSONResponse({"ok": False, "reason": "no process handle"}, status_code=500)
+
+    journal_stem = state.get("journal", "")
+
+    # Try graceful shutdown first.
+    try:
+        proc.terminate()
+    except ProcessLookupError:
+        pass  # already dead
+
+    # Wait up to 3s for graceful exit, then SIGKILL.
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=3.0)
+        kind = "terminated"
+    except asyncio.TimeoutError:
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=2.0)
+        except asyncio.TimeoutError:
+            pass
+        kind = "killed"
+
+    # Mark the run as failed in meta — so the Runs tab badges it correctly
+    # on next render. The collector task in _collect_run_output will also
+    # set returncode + completed_at when it observes the proc finish.
+    if journal_stem:
+        _update_run_meta(
+            journal_stem, run_id,
+            status="failed",
+            killed_by_user=True,
+        )
+    return JSONResponse({"ok": True, "outcome": kind, "run_id": run_id})
+
+
 @app.post("/journals/{name}/insights/reverify")
 async def insights_reverify(name: str, insight_id: str = Form("")):
     """Reverify unregistered insights (or a specific one) under current rules."""

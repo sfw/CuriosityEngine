@@ -326,5 +326,51 @@
       });
     })();
   </script>
+
+  <script>
+    // Kill-run button wiring — global event delegation. Buttons with
+    // [data-kill-run] in the runs partial trigger SIGTERM (then SIGKILL
+    // after 3s if needed) on the matching subprocess. After success,
+    // refreshes the runs partial so the user sees the updated state.
+    (() => {
+      document.addEventListener('click', async (e) => {
+        const btn = e.target.closest('[data-kill-run]');
+        if (!btn) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const runId = btn.dataset.killRunId;
+        const url = btn.dataset.killRunUrl;
+        if (!url) return;
+        if (!confirm(`Stop run ${runId.slice(0,12)}?\n\nSends SIGTERM, then SIGKILL after 3s if it doesn't exit. Any in-flight LLM call or tool call is interrupted; partial work is lost.`)) return;
+        const orig = btn.innerHTML;
+        btn.disabled = true;
+        btn.innerHTML = 'Stopping…';
+        try {
+          const res = await fetch(url, {method: 'POST'});
+          const j = await res.json().catch(() => ({}));
+          if (!res.ok || !j.ok) {
+            btn.disabled = false;
+            btn.innerHTML = orig;
+            alert('Failed to stop run: ' + (j.reason || 'HTTP ' + res.status));
+            return;
+          }
+          // Trigger htmx to reload the Runs tab so the stopped run shows up
+          // as failed. If htmx isn't available (shouldn't happen but safe),
+          // fall back to a simple location reload.
+          const tabBody = document.getElementById('tab-body');
+          if (tabBody && window.htmx) {
+            const name = window.location.pathname.split('/')[2] || '';
+            window.htmx.ajax('GET', `/journals/${name}/runs`, {target: '#tab-body', swap: 'innerHTML'});
+          } else {
+            window.location.reload();
+          }
+        } catch (err) {
+          btn.disabled = false;
+          btn.innerHTML = orig;
+          alert('Failed to stop run: ' + err.message);
+        }
+      });
+    })();
+  </script>
 </body>
 </html>
