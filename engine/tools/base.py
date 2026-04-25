@@ -25,10 +25,13 @@ class ToolError(Exception):
 
 
 # Staged cooldown schedule for back-off-on-429. Consecutive failures escalate
-# the wait — first failure is cheap (2s), and the cap only kicks in if the
-# upstream endpoint is genuinely struggling for an extended period. After the
-# cap, additional failures stay at 60s. note_success() resets the counter.
-_COOLDOWN_SCHEDULE = (2.0, 4.0, 8.0, 16.0, 30.0, 60.0)
+# the wait — first failure is cheap (2s); after the schedule's max (30s) is
+# reached, the next failure CYCLES BACK to 2s. Cycling rather than plateauing
+# at a long cap is the right choice when the upstream is a shared bucket
+# (e.g. Semantic Scholar's unauthenticated tier) that can refill in seconds —
+# we want to periodically re-probe rather than commit to a long wait.
+# note_success() resets the counter to 0 so the next failure starts at 2s.
+_COOLDOWN_SCHEDULE = (2.0, 4.0, 8.0, 16.0, 30.0)
 
 
 class RateLimiter:
@@ -132,8 +135,12 @@ class RateLimiter:
 
         If `cooldown_seconds` is None (the typical case), uses the staged
         backoff schedule based on consecutive failures: 2s, 4s, 8s, 16s,
-        30s, 60s, then stays at 60s. Caller is expected to invoke
-        note_success() on a successful response to reset the counter.
+        30s, then CYCLES back to 2s on the next failure. Cycling rather
+        than plateauing at a long cap is right for shared-bucket
+        endpoints (e.g. Semantic Scholar's unauthenticated tier) that
+        can refill quickly — short waits between cycles give us periodic
+        probes. Caller is expected to invoke note_success() on a
+        successful response to reset the counter.
 
         If `cooldown_seconds` is explicitly provided, uses that exact value
         WITHOUT advancing the schedule — for callers that want a fixed
@@ -147,9 +154,12 @@ class RateLimiter:
         """
         with self._cond:
             if cooldown_seconds is None:
-                # Use staged schedule. _consecutive_failures is incremented
-                # FIRST so the first failure picks schedule[0] = 2s.
-                idx = min(self._consecutive_failures, len(_COOLDOWN_SCHEDULE) - 1)
+                # Use staged schedule, cycling back to schedule[0] after the
+                # last entry. So failure sequence walks 2, 4, 8, 16, 30, 2,
+                # 4, 8, ... rather than plateauing at the longest wait —
+                # short waits give us periodic probes against shared-bucket
+                # endpoints that can refill quickly.
+                idx = self._consecutive_failures % len(_COOLDOWN_SCHEDULE)
                 cooldown_seconds = _COOLDOWN_SCHEDULE[idx]
                 self._consecutive_failures += 1
             if cooldown_seconds <= 0:
