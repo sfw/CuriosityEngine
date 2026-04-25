@@ -269,7 +269,7 @@ class NegativeSpaceMixin:
         for cell in underexplored:
             queries = [q for q in (cell.get("verification_search_queries") or []) if q.strip()][:2]
             per_query: list[dict] = []
-            any_errors = False
+            error_strings: list[str] = []
             total_hits = 0
             for q in queries:
                 counted = count_results_structured(q, limit_per_source=5)
@@ -281,27 +281,37 @@ class NegativeSpaceMixin:
                     "complete": counted["complete"],
                 })
                 total_hits += counted["total"]
-                if not counted["complete"]:
-                    any_errors = True
+                error_strings.extend(counted["errors"])
 
-            # Verification status requires ALL queries to have run cleanly. A
-            # partial failure (e.g. one source rate-limited) halves the
-            # evidence base; rather than silently accept it, mark the cell
-            # "verification_incomplete" so the scan artifact preserves the
-            # signal and the user can retry. Incomplete cells do NOT enqueue
-            # questions and are NOT counted among verified gaps.
+            # Verification logic — threshold check FIRST, errors only matter
+            # when below threshold. Reasoning: a 429 from one source doesn't
+            # invalidate hits already returned by another. If crossref returns
+            # 5 hits even when arxiv 429s, we know the cell is adjacent_but_covered
+            # — there IS literature, partial-source success is enough signal.
+            # We only need "all sources reachable" when total_hits would otherwise
+            # mark the cell as a verified empty gap (because then a missed source
+            # could be the one that would have provided the disqualifying hits).
             cell_short = f"{cell.get('method','?')[:30]} × {cell.get('problem','?')[:30]}"
-            if not queries or any_errors:
+            if not queries:
                 incomplete_gaps.append({
                     **cell,
                     "search_verification": per_query,
                     "total_hits_estimate": total_hits,
                     "verification_status": "incomplete",
                 })
-                reason = "no queries" if not queries else "query errors"
-                print(f"        ⊘ {cell_short}  (verification incomplete: {reason})")
+                print(f"        ⊘ {cell_short}  (incomplete: no queries)")
                 continue
-            if total_hits < hit_threshold:
+            if total_hits >= hit_threshold:
+                # Confirmed coverage exists — partial-source success is enough
+                # to rule this out as an underexplored gap, even with 429s.
+                err_note = ""
+                if error_strings:
+                    err_note = f" · {len(error_strings)} source error(s) ignored — threshold cleared"
+                print(f"        ✗ {cell_short}  (hits={total_hits} ≥ {hit_threshold}, "
+                      f"likely adjacent_but_covered{err_note})")
+                continue
+            if not error_strings:
+                # All sources cleanly returned, total below threshold → real gap.
                 verified_gaps.append({
                     **cell,
                     "search_verification": per_query,
@@ -310,7 +320,33 @@ class NegativeSpaceMixin:
                 })
                 print(f"        ✓ {cell_short}  (hits={total_hits} < {hit_threshold})")
             else:
-                print(f"        ✗ {cell_short}  (hits={total_hits} ≥ {hit_threshold}, likely adjacent_but_covered)")
+                # Below threshold AND errors — could be a real gap, or could be
+                # that the silent source(s) would have produced disqualifying
+                # hits. Can't tell. Mark incomplete and surface the actual
+                # error strings (deduped, capped) so the user can diagnose.
+                incomplete_gaps.append({
+                    **cell,
+                    "search_verification": per_query,
+                    "total_hits_estimate": total_hits,
+                    "verification_status": "incomplete",
+                })
+                # Extract the source name + first part of the error message,
+                # dedupe (same 429 across queries shows once), cap to 200 chars.
+                seen: set[str] = set()
+                short_errs: list[str] = []
+                for e in error_strings:
+                    src = e.split(":", 1)[0].strip()
+                    err_kind = e.split(":", 2)[-1].strip() if ":" in e else e
+                    sig = f"{src}:{err_kind[:60]}"
+                    if sig in seen:
+                        continue
+                    seen.add(sig)
+                    short_errs.append(f"{src} ({err_kind[:60]})")
+                err_summary = ", ".join(short_errs[:3])
+                if len(error_strings) > len(short_errs):
+                    err_summary += f", +{len(error_strings) - len(short_errs)} more"
+                print(f"        ⊘ {cell_short}  (hits={total_hits} < {hit_threshold} · "
+                      f"errors: {err_summary[:200]})")
 
         # Step 5: Generate investigable questions for verified gaps.
         gap_questions: dict[tuple[str, str], list[str]] = {}
