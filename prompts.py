@@ -681,7 +681,9 @@ Respond with EXACTLY this JSON structure (no other text):
 }}"""
 
 
-DIRECTIVE_AGENTIC_PROMPT_PROMPT = """You are composing the AGENTIC PROMPT section of a research directive. This is the most critical section — it is the block a human will paste verbatim into an LLM-driven agent (e.g. Claude Code, an MCP orchestrator) to execute the test plan. Fabrication here sends a researcher chasing ghosts. Grounding is non-negotiable.
+DIRECTIVE_AGENTIC_PROMPT_PROMPT = """You are composing the AGENTIC PROMPT section of a research directive. The output of this call is what a human pastes into an LLM-driven agent (e.g. Claude Code, an MCP orchestrator) to execute the test plan. Fabrication here sends a researcher chasing ghosts. Grounding is non-negotiable.
+
+**Return STRUCTURED FIELDS — not free-form prose.** The system will render your structured output into the final agentic prompt deterministically. This keeps your response small and checkable.
 
 ENGINE DOMAIN: {engine_domain}
 REGISTER ENTRY UNDER TRANSLATION:
@@ -697,22 +699,38 @@ CITATIONS ALLOWLIST (every URL / DOI / identifier you reference MUST appear verb
 AGENT TOOL ALLOWLIST (every tool you name MUST exact-string-match one of these):
 {tool_allowlist_json}
 
-Write a self-contained instruction block. It must:
-- Bind each test-plan step to concrete tool calls. Reference each tool by its exact allowlist name, e.g. `web_search(query=...)`, `academic_search(query=..., sources=[...])`, `web_fetch(url=...)`. Do NOT write generic phrasings like "use a search engine" / "an agent tool" / "a web crawler" — those are fabrications by omission.
-- Specify inputs explicitly. A file path, a query string, a URL. If a required input is not in the citations allowlist, state "UNRESOLVED: <what's needed>" instead of inventing a plausible-looking URL.
-- Include HALT checkpoints where a human should review before proceeding. Phrase as "HALT: present <what> for approval; proceed only on explicit 'continue'."
-- Specify output format and destination. Where the result goes, in what format.
-- Define STOP conditions — success signal, refutation signal, inconclusive signal. Derive these from the claim itself; they should be measurable.
-- No hand-wave steps. "Figure out", "iterate until", "try various" are forbidden.
-- No field-specific examples. Describe what the agent does structurally; the claim's content provides the specifics.
+Rules:
+- Every `tool_call` string you emit must START with an exact allowlist name followed by `(...)`. No generic phrasings. No prose references to "search engine" / "an agent tool" / "a web crawler".
+- Every URL / DOI in any `input`, `tool_call`, or `expected_output` field must appear verbatim in the CITATIONS ALLOWLIST. If a required input is not in the allowlist, put the string `"UNRESOLVED: <what's needed>"` in its place AND add the same item to `unresolved_dependencies`. Do not invent plausible URLs.
+- No hand-wave language in any field. Phrases like "figure out", "iterate until", "try various", "check relevant sources" are forbidden.
+- Halt checkpoints are where a human should review before the agent proceeds. Use them sparingly — typically 1-2 per directive.
+- Stop conditions must be objectively measurable — numerical threshold, specific output pattern, citation count, dataset match. Derive them from the claim itself.
 
 Respond with EXACTLY this JSON structure (no other text):
 {{
-  "agentic_prompt": "the full self-contained instruction block, as a single string with \\n for line breaks",
-  "tool_names_used": ["exact allowlist names of tools referenced in the prompt body"],
-  "citations_used": ["URLs/DOIs from the allowlist referenced in the prompt body"],
-  "unresolved_dependencies": ["items marked 'UNRESOLVED' — what was needed but not in the allowlists"]
-}}"""
+  "inputs": ["short descriptions of the starting inputs the agent needs (files, URLs, datasets). Each item in 3-15 words."],
+  "setup_preamble": "1-2 sentence context the agent reads before starting work. What it is doing and why.",
+  "steps": [
+    {{
+      "n": 1,
+      "action": "one sentence stating what the agent does at this step",
+      "tool_call": "exact tool invocation, e.g. `web_search(query='...')` or `academic_search(query='...', sources=['arxiv'])`. Must start with an allowlist tool name.",
+      "expected_output": "what the agent should end up with after this step — a file, a count, a state, a specific observable",
+      "halt_after": "empty string OR a short reason to halt for human review after this step"
+    }}
+  ],
+  "output_spec": "where the final outputs land and in what format — a file path, a report structure, a data schema",
+  "stop_conditions": {{
+    "success": "concrete measurable signal that the test confirms the hypothesis",
+    "failure": "concrete measurable signal that the test refutes the hypothesis",
+    "inconclusive": "concrete condition under which the test did not resolve"
+  }},
+  "tool_names_used": ["exact allowlist names that appear in any step's tool_call"],
+  "citations_used": ["URLs/DOIs/IDs from the allowlist that appear in any field"],
+  "unresolved_dependencies": ["items marked UNRESOLVED: descriptions of what was needed but was not in the allowlists; empty if fully grounded"]
+}}
+
+Keep each `action` under 25 words. Keep each `tool_call` under 200 characters. Keep each `expected_output` under 30 words. These caps are not stylistic — they are budget caps that keep this response within the model's practical non-streaming return window."""
 
 
 DIRECTIVE_VERIFICATION_CRITERIA_PROMPT = """You are composing the VERIFICATION CRITERIA section of a research directive — a 3-row table mapping test outcomes to concrete observable signals.

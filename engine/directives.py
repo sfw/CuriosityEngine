@@ -73,8 +73,10 @@ _AGENT_TOOL_ALLOWLIST = [
 
 # Per-section max output tokens — tight caps prevent the hang we saw on
 # the monolithic 8192-token call. Sections are short; these are generous.
+# Agentic prompt now returns structured fields (not free-form prose) which
+# renders down to ~600-900 tokens typical, so the cap can shrink further.
 _SECTION_MAX_TOKENS = 1500
-_AGENTIC_PROMPT_MAX_TOKENS = 2500
+_AGENTIC_PROMPT_MAX_TOKENS = 1800
 
 
 class DirectivesMixin:
@@ -179,6 +181,12 @@ class DirectivesMixin:
         hypothesis: str, test_plan: list[dict],
         citations: list[str], tool_allowlist: list[str],
     ) -> dict:
+        """Call the primary for STRUCTURED agentic-prompt fields, then render
+        deterministically into the markdown code-block. This keeps the LLM
+        response small (under ~800 tokens typical) — prose formatting is done
+        by Python rather than asked of the model. Returns a dict with the
+        rendered `agentic_prompt` markdown AND the structured fields for the
+        verifier footer."""
         prompt = DIRECTIVE_AGENTIC_PROMPT_PROMPT.format(
             engine_domain=engine_domain,
             register_entry_json=json.dumps(entry_for_prompt, indent=2),
@@ -188,8 +196,17 @@ class DirectivesMixin:
             tool_allowlist_json=json.dumps(tool_allowlist, indent=2),
         )
         result = self._call_primary(prompt, max_tokens=_AGENTIC_PROMPT_MAX_TOKENS)
+        structured = {
+            "inputs": list(result.get("inputs") or []),
+            "setup_preamble": (result.get("setup_preamble") or "").strip(),
+            "steps": list(result.get("steps") or []),
+            "output_spec": (result.get("output_spec") or "").strip(),
+            "stop_conditions": dict(result.get("stop_conditions") or {}),
+        }
+        rendered = _render_agentic_prompt(structured)
         return {
-            "agentic_prompt": (result.get("agentic_prompt") or "").strip(),
+            "agentic_prompt": rendered,
+            "structured": structured,
             "tool_names_used": list(result.get("tool_names_used") or []),
             "citations_used": list(result.get("citations_used") or []),
             "unresolved_dependencies": list(result.get("unresolved_dependencies") or []),
@@ -477,6 +494,8 @@ class DirectivesMixin:
         # Selective retry: the agentic prompt is the section most prone to
         # grounding violations; regenerating just it (with the verifier flags
         # appended to its prompt) is cheaper than regenerating everything.
+        # Uses the same structured-fields schema as the first pass — the
+        # renderer + verifier both work identically on a regenerated result.
         try:
             retry_prompt = DIRECTIVE_AGENTIC_PROMPT_PROMPT.format(
                 engine_domain=engine_domain,
@@ -488,14 +507,22 @@ class DirectivesMixin:
             ) + (
                 "\n\nYOUR PRIOR OUTPUT FAILED GROUNDING REVIEW. Flags from the verifier:\n"
                 + json.dumps(flags, indent=2)
-                + "\n\nRegenerate the agentic prompt addressing EACH flag. In particular:\n"
-                "- Remove any non-allowlist citation; replace with an allowlist citation or mark 'UNRESOLVED: ...'.\n"
-                "- Replace any non-allowlist tool with an allowlist tool, or say so in unresolved_dependencies.\n"
+                + "\n\nRegenerate the structured fields addressing EACH flag. In particular:\n"
+                "- Replace any non-allowlist tool_call with an allowlist tool, or move the item to unresolved_dependencies.\n"
+                "- Replace any non-allowlist citation with 'UNRESOLVED: <what>' and add it to unresolved_dependencies.\n"
                 "- Rewrite hand-wave steps into concrete executable tool calls."
             )
             retry_result = self._call_primary(retry_prompt, max_tokens=_AGENTIC_PROMPT_MAX_TOKENS)
+            retry_structured = {
+                "inputs": list(retry_result.get("inputs") or []),
+                "setup_preamble": (retry_result.get("setup_preamble") or "").strip(),
+                "steps": list(retry_result.get("steps") or []),
+                "output_spec": (retry_result.get("output_spec") or "").strip(),
+                "stop_conditions": dict(retry_result.get("stop_conditions") or {}),
+            }
             agentic_retry = {
-                "agentic_prompt": (retry_result.get("agentic_prompt") or "").strip(),
+                "agentic_prompt": _render_agentic_prompt(retry_structured),
+                "structured": retry_structured,
                 "tool_names_used": list(retry_result.get("tool_names_used") or []),
                 "citations_used": list(retry_result.get("citations_used") or []),
                 "unresolved_dependencies": list(retry_result.get("unresolved_dependencies") or []),
@@ -649,6 +676,61 @@ class DirectivesMixin:
             "entries_included": len(qualifying),
             "entries_flagged": flagged_count,
         }
+
+
+def _render_agentic_prompt(s: dict) -> str:
+    """Render the primary's structured agentic-prompt fields into the final
+    markdown instruction block a human pastes into an LLM-driven agent.
+    Deterministic — no LLM involvement. Keeps the primary's response small.
+    """
+    lines: list[str] = []
+    inputs = s.get("inputs") or []
+    preamble = (s.get("setup_preamble") or "").strip()
+    steps = s.get("steps") or []
+    output_spec = (s.get("output_spec") or "").strip()
+    stop = s.get("stop_conditions") or {}
+
+    if preamble:
+        lines.append(preamble)
+        lines.append("")
+
+    if inputs:
+        lines.append("**Inputs:**")
+        for i in inputs:
+            lines.append(f"- {str(i).strip()}")
+        lines.append("")
+
+    if steps:
+        lines.append("**Steps:**")
+        for step in steps:
+            n = step.get("n", "?")
+            action = (step.get("action") or "").strip()
+            tool_call = (step.get("tool_call") or "").strip()
+            expected = (step.get("expected_output") or "").strip()
+            halt = (step.get("halt_after") or "").strip()
+            lines.append(f"{n}. {action}")
+            if tool_call:
+                lines.append(f"   `{tool_call}`")
+            if expected:
+                lines.append(f"   → {expected}")
+            if halt:
+                lines.append(f"   **HALT after this step:** {halt}")
+        lines.append("")
+
+    if output_spec:
+        lines.append("**Output:**")
+        lines.append(output_spec)
+        lines.append("")
+
+    if stop:
+        lines.append("**Stop conditions:**")
+        for key in ("success", "failure", "inconclusive"):
+            val = (stop.get(key) or "").strip()
+            if val:
+                lines.append(f"- **{key.capitalize()}**: {val}")
+        lines.append("")
+
+    return "\n".join(lines).rstrip()
 
 
 def _collect_flags(report: dict) -> list[str]:
