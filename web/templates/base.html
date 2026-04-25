@@ -327,6 +327,160 @@
     })();
   </script>
 
+  {# ── Coverage cell modal — opened by [data-coverage-cell] buttons ── #}
+  <div id="coverage-cell-modal"
+       style="display:none; position:fixed; inset:0; z-index:60; align-items:center; justify-content:center; padding:1rem; background:rgba(0,0,0,0.7); backdrop-filter:blur(4px);"
+       role="dialog" aria-modal="true">
+    <div style="position:relative; width:100%; max-width:56rem; max-height:90vh; display:flex; flex-direction:column; border-radius:0.75rem; border:1px solid rgb(51 65 85); background:rgb(15 23 42); box-shadow:0 25px 50px -12px rgba(0,0,0,0.5);">
+      <header style="display:flex; align-items:flex-start; justify-content:space-between; gap:1rem; padding:0.75rem 1.25rem; border-bottom:1px solid rgb(51 65 85 / .6); flex-shrink:0;">
+        <div style="min-width:0; flex:1;">
+          <div class="flex items-center gap-2 flex-wrap">
+            <h3 id="coverage-modal-title" class="text-sm font-semibold text-slate-200">Coverage cell</h3>
+            <span id="coverage-modal-status" class="mono text-[10px] px-1.5 py-0.5 rounded"></span>
+          </div>
+          <div id="coverage-modal-cell-label" class="mono text-[11px] text-slate-500 mt-0.5"></div>
+        </div>
+        <button type="button" id="coverage-modal-close" aria-label="Close"
+                class="p-1.5 rounded-md text-slate-400 hover:text-slate-200 hover:bg-slate-800 flex-shrink-0">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      </header>
+      <div id="coverage-modal-content" style="flex:1; overflow-y:auto; padding:1rem 1.25rem; color:rgb(226 232 240);">
+        <!-- populated by JS -->
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Coverage cell modal — global event delegation. Buttons with
+    // [data-coverage-cell] in the coverage partial open the modal showing
+    // every piece of data for that cell (classification reasoning,
+    // verification queries, hits per source, errors, supporting entries,
+    // enqueued questions). Cell data is embedded as a JSON blob on the
+    // button's data-cell attribute so no backend round-trip is needed.
+    (() => {
+      const modal = document.getElementById('coverage-cell-modal');
+      const titleEl = document.getElementById('coverage-modal-title');
+      const statusEl = document.getElementById('coverage-modal-status');
+      const cellLabelEl = document.getElementById('coverage-modal-cell-label');
+      const contentEl = document.getElementById('coverage-modal-content');
+      const closeBtn = document.getElementById('coverage-modal-close');
+      if (!modal || !contentEl) return;
+
+      function open() { modal.style.display = 'flex'; document.body.style.overflow = 'hidden'; }
+      function close() { modal.style.display = 'none'; document.body.style.overflow = ''; }
+
+      function statusChip(status) {
+        const map = {
+          'covered':                ['Covered', 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'],
+          'verified_empty':         ['Verified empty (gap)', 'bg-amber-500/30 text-amber-200 border-amber-500/50'],
+          'underexplored':          ['Underexplored (unverified)', 'bg-amber-500/10 text-amber-300 border-amber-500/30'],
+          'adjacent_but_covered':   ['Adjacent — covered elsewhere', 'bg-sky-500/20 text-sky-300 border-sky-500/40'],
+          'verification_incomplete':['Verification incomplete', 'bg-rose-500/15 text-rose-300 border-rose-500/40'],
+          'tried_failed':           ['Tried & failed', 'bg-slate-700 text-slate-300 border-slate-600'],
+          'trivially_uninteresting':['Trivially uninteresting', 'bg-slate-700 text-slate-400 border-slate-600'],
+          'regulated_boundary':     ['Regulated boundary', 'bg-slate-700 text-slate-400 border-slate-600'],
+        };
+        const [label, cls] = map[status] || [status || 'unknown', 'bg-slate-700 text-slate-300 border-slate-600'];
+        return {label, cls};
+      }
+
+      function escapeHtml(s) {
+        return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({
+          '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+        }[c]));
+      }
+
+      function renderCell(cell, name) {
+        const parts = [];
+        const status = cell.verification_status || cell.classification || 'unknown';
+        const cls = cell.classification || '';
+        const orig = cell.original_classification || '';
+
+        // Reasoning + override note
+        if (cell.reasoning) {
+          parts.push(`<div class="mb-3"><div class="text-[10px] uppercase tracking-wider text-slate-500 mb-1">Classifier reasoning</div><div class="text-sm text-slate-300">${escapeHtml(cell.reasoning)}</div></div>`);
+        }
+        if (orig && orig !== cls) {
+          parts.push(`<div class="mb-3 text-[11px] text-amber-300/80"><span class="font-semibold">Note:</span> originally classified as <span class="mono">${escapeHtml(orig)}</span>; reclassified as <span class="mono">${escapeHtml(cls)}</span> by search verification.</div>`);
+        }
+
+        // Covered cells: list entries
+        if (cell.entry_ids && cell.entry_ids.length) {
+          const entryLinks = cell.entry_ids.map(eid =>
+            `<a href="/journals/${encodeURIComponent(name)}?tab=entries#${encodeURIComponent(eid)}" class="mono text-[11px] text-indigo-400 hover:underline">${escapeHtml(eid)}</a>`
+          ).join(', ');
+          parts.push(`<div class="mb-3"><div class="text-[10px] uppercase tracking-wider text-slate-500 mb-1">Supporting entries (${cell.entry_ids.length})</div><div class="text-xs">${entryLinks}</div></div>`);
+        }
+
+        // Hit counts
+        if (typeof cell.verification_hits_estimate === 'number') {
+          parts.push(`<div class="mb-3"><span class="text-[10px] uppercase tracking-wider text-slate-500">Verification hits:</span> <span class="mono text-sm">${cell.verification_hits_estimate}</span></div>`);
+        }
+
+        // Per-query verification breakdown
+        if (cell.search_verification && cell.search_verification.length) {
+          const rows = cell.search_verification.map((q, i) => {
+            const perSrc = q.per_source || {};
+            const srcCells = Object.entries(perSrc).map(([s, n]) =>
+              `<span class="mono text-[10px] mr-2 ${n === null ? 'text-rose-400' : 'text-slate-400'}">${escapeHtml(s)}=${n === null ? 'err' : n}</span>`
+            ).join('');
+            const errs = (q.errors || []).length
+              ? `<div class="mt-1 text-[10px] text-rose-400">${(q.errors || []).map(escapeHtml).join('<br>')}</div>`
+              : '';
+            return `<div class="mb-2 p-2 rounded border border-slate-700/60 bg-slate-900/40"><div class="mono text-xs text-slate-300 mb-1">${escapeHtml(q.query)}</div><div class="flex flex-wrap items-center text-xs"><span class="text-[10px] uppercase tracking-wider text-slate-500 mr-2">total ${q.total_hits} ·</span> ${srcCells}</div>${errs}</div>`;
+          }).join('');
+          parts.push(`<div class="mb-3"><div class="text-[10px] uppercase tracking-wider text-slate-500 mb-1">Search verification (${cell.search_verification.length} queries)</div>${rows}</div>`);
+        } else if (cell.verification_search_queries && cell.verification_search_queries.length) {
+          // Queries planned but no verification ran (e.g. classify step only)
+          const list = cell.verification_search_queries.map(q => `<li class="mono text-xs">${escapeHtml(q)}</li>`).join('');
+          parts.push(`<div class="mb-3"><div class="text-[10px] uppercase tracking-wider text-slate-500 mb-1">Planned verification queries</div><ul class="list-disc pl-5">${list}</ul></div>`);
+        }
+
+        // Enqueued gap questions
+        if (cell.questions_enqueued && cell.questions_enqueued.length) {
+          const qlist = cell.questions_enqueued.map(q => `<li class="text-sm text-slate-300">${escapeHtml(q)}</li>`).join('');
+          parts.push(`<div class="mb-3"><div class="text-[10px] uppercase tracking-wider text-emerald-300 mb-1">Questions enqueued from this gap</div><ul class="list-disc pl-5 space-y-1">${qlist}</ul></div>`);
+        }
+
+        if (!parts.length) {
+          parts.push('<div class="text-sm text-slate-500 italic">No additional information for this cell.</div>');
+        }
+        return parts.join('');
+      }
+
+      document.addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-coverage-cell]');
+        if (!btn) return;
+        e.preventDefault();
+        let cell = {};
+        try { cell = JSON.parse(btn.dataset.cell || '{}'); } catch (_) {}
+        const name = btn.dataset.journalName || (window.location.pathname.split('/')[2] || '');
+        const m = btn.dataset.method || cell.method || '?';
+        const p = btn.dataset.problem || cell.problem || '?';
+        const status = cell.verification_status || cell.classification || 'unknown';
+        const sc = statusChip(status);
+        titleEl.textContent = `${m} × ${p}`;
+        statusEl.className = `mono text-[10px] px-1.5 py-0.5 rounded border ${sc.cls}`;
+        statusEl.textContent = sc.label;
+        cellLabelEl.textContent = `${m} (method) × ${p} (problem)`;
+        contentEl.innerHTML = renderCell(cell, name);
+        contentEl.scrollTop = 0;
+        open();
+      });
+
+      closeBtn?.addEventListener('click', close);
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && modal.style.display === 'flex') close();
+      });
+      modal.addEventListener('click', (e) => {
+        if (e.target === modal) close();
+      });
+    })();
+  </script>
+
   <script>
     // Kill-run button wiring — global event delegation. Buttons with
     // [data-kill-run] in the runs partial trigger SIGTERM (then SIGKILL

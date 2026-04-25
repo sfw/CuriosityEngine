@@ -266,6 +266,13 @@ class NegativeSpaceMixin:
         print(f"  [3/4] verifying {len(underexplored)} underexplored gap(s) via academic_search...")
         verified_gaps: list[dict] = []
         incomplete_gaps: list[dict] = []
+        # Cells whose initial classification was `underexplored` but whose
+        # verification search returned ≥ threshold hits — i.e. literature
+        # actually exists, the cell is NOT a real gap. We track them so the
+        # persisted scan can mark them adjacent_but_covered (overriding the
+        # LLM's initial classification). Without this, the matrix shows them
+        # as amber `underexplored` even though search proved otherwise.
+        searched_adjacent_gaps: list[dict] = []
         for cell in underexplored:
             queries = [q for q in (cell.get("verification_search_queries") or []) if q.strip()][:2]
             per_query: list[dict] = []
@@ -304,11 +311,19 @@ class NegativeSpaceMixin:
             if total_hits >= hit_threshold:
                 # Confirmed coverage exists — partial-source success is enough
                 # to rule this out as an underexplored gap, even with 429s.
+                # Track for the persisted scan so the matrix correctly shows
+                # this cell as adjacent_but_covered, not underexplored.
+                searched_adjacent_gaps.append({
+                    **cell,
+                    "search_verification": per_query,
+                    "total_hits_estimate": total_hits,
+                    "verification_status": "adjacent_but_covered",
+                })
                 err_note = ""
                 if error_strings:
                     err_note = f" · {len(error_strings)} source error(s) ignored — threshold cleared"
                 print(f"        ✗ {cell_short}  (hits={total_hits} ≥ {hit_threshold}, "
-                      f"likely adjacent_but_covered{err_note})")
+                      f"adjacent_but_covered{err_note})")
                 continue
             if not error_strings:
                 # All sources cleanly returned, total below threshold → real gap.
@@ -387,11 +402,15 @@ class NegativeSpaceMixin:
             f" {len(incomplete_gaps)} verification_incomplete (retry-worthy);"
             if incomplete_gaps else ""
         )
+        searched_adj_note = (
+            f" {len(searched_adjacent_gaps)} reclassified adjacent_but_covered by search;"
+            if searched_adjacent_gaps else ""
+        )
         summary = (
             f"Scan over {n_entries} entries. Matrix: {len(methods)} methods × "
             f"{len(problems)} problems. "
             f"{len(covered)} cells covered, {len(empty_cells)} empty. "
-            f"{len(underexplored)} classified underexplored;{incomplete_note} "
+            f"{len(underexplored)} classified underexplored;{searched_adj_note}{incomplete_note} "
             f"{len(verified_gaps)} verified by search; "
             f"{sum(len(qs) for qs in gap_questions.values())} questions enqueued."
         )
@@ -401,6 +420,7 @@ class NegativeSpaceMixin:
             methods=methods, problems=problems, covered=covered,
             classified=classified, verified_gaps=verified_gaps,
             incomplete_gaps=incomplete_gaps,
+            searched_adjacent_gaps=searched_adjacent_gaps,
             gap_questions=gap_questions, summary=summary,
         )
         return scan
@@ -416,6 +436,7 @@ class NegativeSpaceMixin:
         gap_questions: dict[tuple[str, str], list[str]],
         summary: str,
         incomplete_gaps: Optional[list[dict]] = None,
+        searched_adjacent_gaps: Optional[list[dict]] = None,
     ) -> dict:
         """Persist the scan into journal.coverage_scans."""
         cells = [
@@ -437,23 +458,39 @@ class NegativeSpaceMixin:
             ((g.get("method") or "").strip(), (g.get("problem") or "").strip()): g
             for g in (incomplete_gaps or [])
         }
+        searched_adj_by_key: dict[tuple[str, str], dict] = {
+            ((g.get("method") or "").strip(), (g.get("problem") or "").strip()): g
+            for g in (searched_adjacent_gaps or [])
+        }
         for cell_key, cell_info in class_by_cell.items():
             m, p = cell_key
+            # Effective classification: search verification can OVERRIDE the
+            # LLM's initial classification when search has new evidence.
+            # An underexplored cell whose hits cleared the threshold becomes
+            # adjacent_but_covered (not stuck on the LLM's first label).
+            effective_classification = cell_info.get("classification", "?")
             if cell_key in verified_by_key:
                 verification_status = "verified_empty"
                 verification = verified_by_key[cell_key]
             elif cell_key in incomplete_by_key:
                 verification_status = "verification_incomplete"
                 verification = incomplete_by_key[cell_key]
+            elif cell_key in searched_adj_by_key:
+                # LLM said underexplored but search found ≥ threshold hits —
+                # override the classification to reflect the search evidence.
+                verification_status = "adjacent_but_covered"
+                verification = searched_adj_by_key[cell_key]
+                effective_classification = "adjacent_but_covered"
             else:
-                # Classified but either not "underexplored" or verified to have
-                # coverage (adjacent_but_covered). Neither enqueued nor retry-worthy.
-                verification_status = cell_info.get("classification", "?")
+                # No search verification ran (cell wasn't classified
+                # underexplored, or otherwise skipped). Use the LLM's label.
+                verification_status = effective_classification
                 verification = None
             gaps.append({
                 "method": m,
                 "problem": p,
-                "classification": cell_info.get("classification", "?"),
+                "classification": effective_classification,
+                "original_classification": cell_info.get("classification", "?"),
                 "reasoning": cell_info.get("reasoning", ""),
                 "verification_search_queries": cell_info.get("verification_search_queries", []),
                 "verified_empty": verification_status == "verified_empty",

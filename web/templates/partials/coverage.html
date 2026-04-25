@@ -193,13 +193,19 @@
               {% set cov = covered_by_cell.get(cell_key) %}
               {% set gap = gap_by_cell.get(cell_key) %}
               {% if cov %}
-                {# Covered cell #}
-                <td class="p-2 border-b border-l border-slate-700/60 align-top bg-emerald-500/15"
-                    title="{{ cov.entry_count }} entr{{ 'y' if cov.entry_count == 1 else 'ies' }}: {{ cov.entry_ids|join(', ') }}">
+                {# Covered cell — clickable, opens modal with entry list. #}
+                {% set cov_payload = {'method': m, 'problem': p, 'entry_ids': cov.entry_ids, 'entry_count': cov.entry_count, 'verification_status': 'covered', 'classification': 'covered'} %}
+                <td class="p-2 border-b border-l border-slate-700/60 align-top bg-emerald-500/15 hover:bg-emerald-500/25 cursor-pointer transition-colors"
+                    data-coverage-cell
+                    data-cell="{{ cov_payload|tojson|forceescape }}"
+                    data-method="{{ m }}"
+                    data-problem="{{ p }}"
+                    data-journal-name="{{ name }}"
+                    title="Click for details · {{ cov.entry_count }} entr{{ 'y' if cov.entry_count == 1 else 'ies' }}">
                   <div class="text-[10px] mono text-emerald-300 font-semibold">{{ cov.entry_count }}×</div>
                   <div class="mt-0.5 text-[10px] text-emerald-200/70 truncate">
                     {% for eid in cov.entry_ids[:2] %}
-                      <a href="/journals/{{ name }}?tab=entries#{{ eid }}" class="hover:underline">{{ eid[:10] }}</a>{% if not loop.last %}, {% endif %}
+                      {{ eid[:10] }}{% if not loop.last %}, {% endif %}
                     {% endfor %}
                     {% if cov.entry_count > 2 %}…{% endif %}
                   </div>
@@ -209,15 +215,27 @@
                 {% set bg_class = {
                   'underexplored': ('bg-amber-500/30 border-amber-500/50' if gap.verified_empty else 'bg-amber-500/10 border-amber-500/30'),
                   'adjacent_but_covered': 'bg-sky-500/15',
+                  'verification_incomplete': 'bg-rose-500/10 border-rose-500/30',
                   'tried_failed': 'bg-slate-700/40',
                   'trivially_uninteresting': 'bg-slate-700/40',
                   'regulated_boundary': 'bg-slate-700/40',
                 }.get(cls, 'bg-slate-800/30') %}
-                <td class="p-2 border-b border-l border-slate-700/60 align-top {{ bg_class }}"
-                    title="{{ cls }} — {{ gap.reasoning }}">
+                {% set hover_class = {
+                  'underexplored': 'hover:bg-amber-500/40',
+                  'adjacent_but_covered': 'hover:bg-sky-500/25',
+                  'verification_incomplete': 'hover:bg-rose-500/20',
+                }.get(cls, 'hover:bg-slate-700/60') %}
+                <td class="p-2 border-b border-l border-slate-700/60 align-top {{ bg_class }} {{ hover_class }} cursor-pointer transition-colors"
+                    data-coverage-cell
+                    data-cell="{{ gap|tojson|forceescape }}"
+                    data-method="{{ m }}"
+                    data-problem="{{ p }}"
+                    data-journal-name="{{ name }}"
+                    title="Click for details · {{ cls }}">
                   <div class="text-[10px] mono uppercase tracking-wider
                               {% if cls == 'underexplored' %}text-amber-300
                               {% elif cls == 'adjacent_but_covered' %}text-sky-300
+                              {% elif cls == 'verification_incomplete' %}text-rose-300
                               {% else %}text-slate-500{% endif %}">
                     {% if cls == 'underexplored' %}{{ '✓' if gap.verified_empty else '?' }} {% endif %}{{ cls.replace('_', ' ') }}
                   </div>
