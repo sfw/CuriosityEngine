@@ -47,6 +47,46 @@ app.mount("/static", StaticFiles(directory=str(ROOT / "static")), name="static")
 _active_runs: dict[str, dict] = {}
 
 
+def _reconcile_orphaned_runs():
+    """Scan all run-meta files at startup and mark any `status=running`
+    entries as interrupted. The in-memory _active_runs map is empty on a
+    fresh container start, so by definition any meta still claiming to be
+    "running" is orphaned by a container restart. Without this fixup,
+    stale meta files render as active runs forever in the UI but lack
+    a Stop button (because they're not in _active_runs).
+    """
+    runs_root = DATA_DIR / "_runs"
+    if not runs_root.exists():
+        return
+    fixed = 0
+    for meta_path in runs_root.glob("*/*.meta.json"):
+        try:
+            with open(meta_path) as f:
+                meta = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            continue
+        if (meta.get("status") or "") != "running":
+            continue
+        # Found a stale "running" meta. Container restart killed its
+        # subprocess; mark it interrupted with a clear note.
+        meta["status"] = "failed"
+        meta["completed_at"] = datetime.now(timezone.utc).isoformat()
+        meta["returncode"] = None  # we don't know what it would have been
+        meta["interrupted_by_restart"] = True
+        try:
+            meta_path.write_text(json.dumps(meta, indent=2))
+            fixed += 1
+        except OSError:
+            pass
+    if fixed:
+        print(f"[startup] reconciled {fixed} orphaned run meta file(s) "
+              f"(status=running with no live subprocess → marked failed/interrupted)")
+
+
+# Reconcile at module load — runs once when uvicorn imports web.main.
+_reconcile_orphaned_runs()
+
+
 # ─────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────
