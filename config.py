@@ -91,6 +91,14 @@ class EngineSettings:
     # Same idea for the directive grounding-review pass. Empty = use the
     # journal's `verifier` profile (the cross-family verifier already configured).
     directive_verifier_role: str = ""
+    # How many verifier passes (initial + retries) the directive pipeline will
+    # run trying to land a clean output. The loop stops as soon as the verifier
+    # returns clean OR this cap is reached. Each retry regenerates the agentic
+    # prompt with the previous flags appended; other sections are kept (the
+    # agentic prompt is the riskiest section by far). 1 = no retries, 2 =
+    # current behavior (initial + 1 retry), 3 = default — gives one more
+    # chance to converge after the LLM addresses the first round of flags.
+    directive_max_verification_passes: int = 3
     # Negative-space gap scan — structural analysis that builds a (method × problem)
     # matrix from the journal's entries and identifies empty cells (combinations
     # nobody in the field has studied). Gated to require a minimum journal size:
@@ -261,6 +269,9 @@ class CuriosityEngineConfig:
             cross_ref_role=str(eng_section.get("cross_ref_role", "")).strip(),
             directive_primary_role=str(eng_section.get("directive_primary_role", "")).strip(),
             directive_verifier_role=str(eng_section.get("directive_verifier_role", "")).strip(),
+            directive_max_verification_passes=int(
+                eng_section.get("directive_max_verification_passes", 3)
+            ),
             parallel_investigations=int(eng_section.get("parallel_investigations", 1)),
             parallel_xref_pipeline=int(eng_section.get("parallel_xref_pipeline", 1)),
         )
@@ -605,6 +616,12 @@ cross_ref_role = "{eng.cross_ref_role}"
 directive_primary_role = "{eng.directive_primary_role}"
 # Directive grounding-review pass. Empty = use the cross-family verifier.
 directive_verifier_role = "{eng.directive_verifier_role}"
+# Total verifier passes the directive pipeline will run trying to land a
+# clean output (initial + retries). Each retry regenerates the agentic
+# prompt with the verifier's flags from the prior pass appended. The loop
+# stops as soon as a pass returns clean OR this cap is reached. Output
+# beyond the cap ships with a prominent "⚠ FLAGGED ISSUES" block.
+directive_max_verification_passes = {eng.directive_max_verification_passes}
 # Parallel fan-out. 1 = fully serial (default, preserves prior behavior).
 # Higher values run multiple investigations / xref-synth+verify pipelines
 # concurrently within a single cycle. Rate limiters are shared process-wide

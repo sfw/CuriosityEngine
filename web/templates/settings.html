@@ -272,6 +272,21 @@
           </select>
         </label>
 
+        <label class="block md:col-span-3">
+          <span class="text-xs uppercase tracking-wider text-slate-400">directive_max_verification_passes</span>
+          <span class="block text-[11px] text-slate-500">
+            Total verifier passes the directive pipeline runs trying to land a clean output
+            (initial + retries). Each retry regenerates the agentic prompt with the prior round's
+            flags appended. Loop stops on first clean pass or when this cap is reached. Output
+            beyond the cap ships annotated with a prominent <span class="mono">⚠ FLAGGED ISSUES</span> block.
+            <span class="mono">1</span> = no retries, <span class="mono">2</span> = one retry,
+            <span class="mono">3</span> = default.
+          </span>
+          <input name="engine_directive_max_verification_passes" type="number" min="1" max="10"
+                 value="{{ connection.engine.directive_max_verification_passes }}"
+                 class="mt-1 w-32 px-3 py-2 rounded-lg border border-slate-700 bg-slate-900/60 text-sm mono" />
+        </label>
+
         <label class="flex items-center gap-2 md:col-span-3">
           <input type="checkbox" name="engine_verify_insights"
                  {% if connection.engine.verify_insights %}checked{% endif %}

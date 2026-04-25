@@ -130,13 +130,42 @@
             {% set _rv = r.reverification_log or [] %}
             {% set _eff_verdict = (_rv[-1].new_verdict if _rv else r.verdict) or '' %}
             {% if _eff_verdict == 'validated' %}
-              <button type="button"
-                      class="directive-export-btn px-2 py-1 rounded-md bg-teal-600/80 hover:bg-teal-500 text-white text-[11px] font-medium shadow whitespace-nowrap flex-shrink-0 disabled:opacity-50"
-                      data-directive-url="/journals/{{ name }}/register/{{ r.id }}/directive"
-                      data-directive-id="{{ r.id }}"
-                      title="Export research directive — runs primary + verifier pipeline (~1-2 min). Output lands in data/{{ name }}_directives/{{ r.id }}.md. Watch progress in the Runs tab.">
-                Export directive →
-              </button>
+              {% set _dir = (directive_status or {}).get(r.id) %}
+              <div class="flex items-center gap-1.5 flex-shrink-0">
+                {% if _dir %}
+                  {# An existing directive on disk: surface a link + verdict chip,
+                     and rename the kickoff button to "Regenerate". #}
+                  <a href="/journals/{{ name }}/directives/{{ _dir.filename }}"
+                     target="_blank" rel="noopener"
+                     class="px-2 py-1 rounded-md text-[11px] font-medium shadow whitespace-nowrap no-underline
+                            {% if _dir.verdict == 'clean' %}bg-emerald-600/80 hover:bg-emerald-500 text-white
+                            {% elif _dir.verdict == 'needs_fixes' %}bg-amber-600/80 hover:bg-amber-500 text-white
+                            {% elif _dir.verdict == 'fatal' %}bg-rose-600/80 hover:bg-rose-500 text-white
+                            {% else %}bg-slate-700 hover:bg-slate-600 text-slate-200{% endif %}"
+                     title="View generated research directive · verdict: {{ _dir.verdict or 'unknown' }}{% if _dir.flagged_issues_count %} · {{ _dir.flagged_issues_count }} flagged issue(s){% endif %}">
+                    View directive ↗
+                    {% if _dir.verdict == 'clean' %} ✓
+                    {% elif _dir.verdict == 'needs_fixes' %} ⚠
+                    {% elif _dir.verdict == 'fatal' %} ✗
+                    {% endif %}
+                  </a>
+                  <button type="button"
+                          class="directive-export-btn px-2 py-1 rounded-md bg-slate-700 hover:bg-slate-600 text-slate-200 text-[11px] whitespace-nowrap disabled:opacity-50"
+                          data-directive-url="/journals/{{ name }}/register/{{ r.id }}/directive"
+                          data-directive-id="{{ r.id }}"
+                          title="Regenerate the directive — overwrites the current file at data/{{ name }}_directives/{{ _dir.filename }}.">
+                    Regenerate
+                  </button>
+                {% else %}
+                  <button type="button"
+                          class="directive-export-btn px-2 py-1 rounded-md bg-teal-600/80 hover:bg-teal-500 text-white text-[11px] font-medium shadow whitespace-nowrap disabled:opacity-50"
+                          data-directive-url="/journals/{{ name }}/register/{{ r.id }}/directive"
+                          data-directive-id="{{ r.id }}"
+                          title="Export research directive — runs primary + verifier pipeline. Output lands in data/{{ name }}_directives/{{ r.id }}.md. Watch progress in the Runs tab.">
+                    Export directive →
+                  </button>
+                {% endif %}
+              </div>
             {% endif %}
           {% endif %}
         </div>

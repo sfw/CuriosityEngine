@@ -247,4 +247,10 @@ class EngineConfig:
     # limiter is the hard guarantee against upstream blocks.
     parallel_investigations: int = 1
     parallel_xref_pipeline: int = 1
+    # Total verifier passes the directive pipeline runs trying to land a clean
+    # output (initial + retries). Each retry regenerates the agentic prompt
+    # with the verifier's flags appended. Loop stops on first clean pass or
+    # when this cap is reached. 1 = no retries; 3 = default (gives one extra
+    # round of convergence after the first round of fixes).
+    directive_max_verification_passes: int = 3
     connection: "CuriosityEngineConfig | None" = None

@@ -288,6 +288,10 @@ def journal_register(
             register = [r for r in register if r.get("_effective_novelty") == nt]
     held_count = sum(1 for r in journal.register if r.get("status") == "held")
     active_count = len(journal.register) - held_count
+    # Map register-id → directive sidecar verdict for entries with a generated
+    # directive on disk. Lets the template render a "View directive" link
+    # alongside the export button + a verdict chip (clean / needs_fixes / fatal).
+    directive_status = _directive_status_map(name)
     return templates.TemplateResponse(request, "partials/register.html", {
         "name": name,
         "register": register,
@@ -299,7 +303,36 @@ def journal_register(
         "novelty_total": total_for_all_button,
         "held_count": held_count,
         "active_count": active_count,
+        "directive_status": directive_status,
     })
+
+
+def _directive_status_map(name: str) -> dict:
+    """Walk the journal's directives directory and build a map of
+    register_id → {filename, verdict, flagged_issues_count, generated_at}.
+    The verdict comes from the .verification.json sidecar when present,
+    so the register UI can render a status chip without re-parsing the markdown.
+    """
+    journal_path = _journal_path(name)
+    d = journal_path.parent / f"{journal_path.stem}_directives"
+    if not d.exists():
+        return {}
+    out: dict = {}
+    for md_file in d.glob("r-*.md"):
+        rid = md_file.stem  # "r-<id>"
+        sidecar = md_file.with_suffix(".verification.json")
+        info: dict = {"filename": md_file.name, "verdict": "", "flagged_issues_count": 0}
+        if sidecar.exists():
+            try:
+                with open(sidecar) as f:
+                    s = json.load(f)
+                info["verdict"] = s.get("verdict", "")
+                info["flagged_issues_count"] = len(s.get("flagged_issues") or [])
+                info["generated_at"] = s.get("generated_at", "")
+            except (OSError, json.JSONDecodeError):
+                pass
+        out[rid] = info
+    return out
 
 
 @app.post("/journals/{name}/register/{entry_id}/promote")
@@ -1412,6 +1445,7 @@ def settings_save(
     engine_cross_ref_role: str = Form(""),
     engine_directive_primary_role: str = Form(""),
     engine_directive_verifier_role: str = Form(""),
+    engine_directive_max_verification_passes: int = Form(3),
     engine_parallel_investigations: int = Form(1),
     engine_parallel_xref_pipeline: int = Form(1),
     engine_negative_space_min_entries: int = Form(15),
@@ -1520,6 +1554,7 @@ def settings_save(
             f'cross_ref_role = "{cross_ref_role}"\n'
             f'directive_primary_role = "{directive_primary_role}"\n'
             f'directive_verifier_role = "{directive_verifier_role}"\n'
+            f"directive_max_verification_passes = {max(1, min(10, engine_directive_max_verification_passes))}\n"
             f"parallel_investigations = {max(1, min(5, engine_parallel_investigations))}\n"
             f"parallel_xref_pipeline = {max(1, min(5, engine_parallel_xref_pipeline))}\n"
             f"negative_space_min_entries = {max(1, min(500, engine_negative_space_min_entries))}\n"

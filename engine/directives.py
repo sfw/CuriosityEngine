@@ -488,95 +488,127 @@ class DirectivesMixin:
                 "register_entry_id": entry_id,
             }
 
+        # Configurable verify-fix loop. Each iteration regenerates the agentic
+        # prompt with the previous round's flags appended (other sections are
+        # kept — the agentic prompt is the riskiest section by far). Loop
+        # exits as soon as a verifier pass returns clean OR the configured
+        # cap is reached. After exhaustion the output ships annotated with
+        # the remaining flags so a human reads them BEFORE executing.
+        max_passes = max(
+            1, int(getattr(self.config, "directive_max_verification_passes", 3)),
+        )
         flags = _collect_flags(report)
-        self._heartbeat(f"verifier flagged {len(flags)} issue(s) — retrying agentic prompt only", t0)
+        current_agentic = agentic
+        current_report = report
+        current_flags = flags
+        # We've already spent one pass on the initial verify above. Each loop
+        # iteration is one additional retry+verify pass. So budget = max_passes - 1.
+        retries_remaining = max_passes - 1
 
-        # Selective retry: the agentic prompt is the section most prone to
-        # grounding violations; regenerating just it (with the verifier flags
-        # appended to its prompt) is cheaper than regenerating everything.
-        # Uses the same structured-fields schema as the first pass — the
-        # renderer + verifier both work identically on a regenerated result.
-        try:
-            retry_prompt = DIRECTIVE_AGENTIC_PROMPT_PROMPT.format(
-                engine_domain=engine_domain,
+        while retries_remaining > 0 and current_flags:
+            pass_no = max_passes - retries_remaining + 1
+            self._heartbeat(
+                f"verifier flagged {len(current_flags)} — retry pass {pass_no}/{max_passes} on agentic prompt",
+                t0,
+            )
+
+            # Selective retry: regenerate only the agentic prompt with the
+            # previous round's flags appended. Same structured-fields schema —
+            # the renderer + verifier work identically on regenerated output.
+            try:
+                retry_prompt = DIRECTIVE_AGENTIC_PROMPT_PROMPT.format(
+                    engine_domain=engine_domain,
+                    register_entry_json=json.dumps(entry_for_prompt, indent=2),
+                    hypothesis=hypothesis,
+                    test_plan_json=json.dumps(test_plan, indent=2),
+                    citations_json=json.dumps(citations, indent=2),
+                    tool_allowlist_json=json.dumps(tool_allowlist, indent=2),
+                ) + (
+                    "\n\nYOUR PRIOR OUTPUT FAILED GROUNDING REVIEW. Flags from the verifier:\n"
+                    + json.dumps(current_flags, indent=2)
+                    + "\n\nRegenerate the structured fields addressing EACH flag. In particular:\n"
+                    "- Replace any non-allowlist tool_call with an allowlist tool, or move the item to unresolved_dependencies.\n"
+                    "- Replace any non-allowlist citation with 'UNRESOLVED: <what>' and add it to unresolved_dependencies.\n"
+                    "- Rewrite hand-wave steps into concrete executable tool calls."
+                )
+                retry_result = self._call_directive_primary(
+                    retry_prompt, max_tokens=_AGENTIC_PROMPT_MAX_TOKENS,
+                )
+                retry_structured = {
+                    "inputs": list(retry_result.get("inputs") or []),
+                    "setup_preamble": (retry_result.get("setup_preamble") or "").strip(),
+                    "steps": list(retry_result.get("steps") or []),
+                    "output_spec": (retry_result.get("output_spec") or "").strip(),
+                    "stop_conditions": dict(retry_result.get("stop_conditions") or {}),
+                }
+                current_agentic = {
+                    "agentic_prompt": _render_agentic_prompt(retry_structured),
+                    "structured": retry_structured,
+                    "tool_names_used": list(retry_result.get("tool_names_used") or []),
+                    "citations_used": list(retry_result.get("citations_used") or []),
+                    "unresolved_dependencies": list(retry_result.get("unresolved_dependencies") or []),
+                }
+            except Exception as e:  # noqa: BLE001
+                print(f"  [error] agentic retry failed: {type(e).__name__}: {e}")
+                # Keep the previous attempt's output; bail out of the loop.
+                break
+
+            # Re-verify the regenerated output.
+            current_markdown = self._assemble_markdown(
+                entry, hypothesis, test_plan, current_agentic, criteria, citations,
+            )
+            footer = {
+                "title": (entry.get("title") or "").strip(),
+                "tool_names_used": current_agentic.get("tool_names_used", []),
+                "citations_used": current_agentic.get("citations_used", []),
+                "unresolved_dependencies": current_agentic.get("unresolved_dependencies", []),
+            }
+            verify_prompt = DIRECTIVE_VERIFIER_PROMPT.format(
                 register_entry_json=json.dumps(entry_for_prompt, indent=2),
-                hypothesis=hypothesis,
-                test_plan_json=json.dumps(test_plan, indent=2),
                 citations_json=json.dumps(citations, indent=2),
                 tool_allowlist_json=json.dumps(tool_allowlist, indent=2),
-            ) + (
-                "\n\nYOUR PRIOR OUTPUT FAILED GROUNDING REVIEW. Flags from the verifier:\n"
-                + json.dumps(flags, indent=2)
-                + "\n\nRegenerate the structured fields addressing EACH flag. In particular:\n"
-                "- Replace any non-allowlist tool_call with an allowlist tool, or move the item to unresolved_dependencies.\n"
-                "- Replace any non-allowlist citation with 'UNRESOLVED: <what>' and add it to unresolved_dependencies.\n"
-                "- Rewrite hand-wave steps into concrete executable tool calls."
+                directive_markdown=current_markdown,
+                directive_footer_json=json.dumps(footer, indent=2),
             )
-            retry_result = self._call_directive_primary(retry_prompt, max_tokens=_AGENTIC_PROMPT_MAX_TOKENS)
-            retry_structured = {
-                "inputs": list(retry_result.get("inputs") or []),
-                "setup_preamble": (retry_result.get("setup_preamble") or "").strip(),
-                "steps": list(retry_result.get("steps") or []),
-                "output_spec": (retry_result.get("output_spec") or "").strip(),
-                "stop_conditions": dict(retry_result.get("stop_conditions") or {}),
-            }
-            agentic_retry = {
-                "agentic_prompt": _render_agentic_prompt(retry_structured),
-                "structured": retry_structured,
-                "tool_names_used": list(retry_result.get("tool_names_used") or []),
-                "citations_used": list(retry_result.get("citations_used") or []),
-                "unresolved_dependencies": list(retry_result.get("unresolved_dependencies") or []),
-            }
-        except Exception as e:  # noqa: BLE001
-            print(f"  [error] agentic retry failed: {type(e).__name__}: {e}")
-            agentic_retry = agentic  # keep the original
+            try:
+                current_report = self._call_directive_verifier(
+                    verify_prompt, max_tokens=self.connection.verifier.max_tokens,
+                )
+            except Exception as e:  # noqa: BLE001
+                print(f"  [error] verifier retry failed: {type(e).__name__}: {e}")
+                current_report = {"ok": False, "severity": "fatal"}
+                break
 
-        markdown_retry = self._assemble_markdown(
-            entry, hypothesis, test_plan, agentic_retry, criteria, citations,
+            sev = (current_report.get("severity") or "").strip().lower()
+            if current_report.get("ok") or sev == "clean":
+                self._heartbeat(f"verifier (retry pass {pass_no}): ✓ clean", t0)
+                return {
+                    "markdown": current_markdown,
+                    "verdict": "clean",
+                    "verifier_report": current_report,
+                    "flagged_issues": [],
+                    "register_entry_id": entry_id,
+                }
+
+            current_flags = _collect_flags(current_report)
+            retries_remaining -= 1
+
+        # Loop exited without clean — annotate the most-recent markdown with
+        # whatever flags remain and ship.
+        sev_final = (current_report.get("severity") or "").strip().lower()
+        self._heartbeat(
+            f"verifier still flagged {len(current_flags)} after {max_passes} pass(es) — annotating output",
+            t0,
         )
-
-        # Re-verify the retry
-        footer_retry = {
-            "title": (entry.get("title") or "").strip(),
-            "tool_names_used": agentic_retry.get("tool_names_used", []),
-            "citations_used": agentic_retry.get("citations_used", []),
-            "unresolved_dependencies": agentic_retry.get("unresolved_dependencies", []),
-        }
-        verify_prompt_retry = DIRECTIVE_VERIFIER_PROMPT.format(
-            register_entry_json=json.dumps(entry_for_prompt, indent=2),
-            citations_json=json.dumps(citations, indent=2),
-            tool_allowlist_json=json.dumps(tool_allowlist, indent=2),
-            directive_markdown=markdown_retry,
-            directive_footer_json=json.dumps(footer_retry, indent=2),
-        )
-        try:
-            report_retry = self._call_directive_verifier(verify_prompt_retry, max_tokens=self.connection.verifier.max_tokens)
-        except Exception as e:  # noqa: BLE001
-            print(f"  [error] verifier retry failed: {type(e).__name__}: {e}")
-            report_retry = {"ok": False, "severity": "fatal"}
-
-        sev_retry = (report_retry.get("severity") or "").strip().lower()
-        if report_retry.get("ok") or sev_retry == "clean":
-            self._heartbeat("verifier (retry): ✓ clean", t0)
-            return {
-                "markdown": markdown_retry,
-                "verdict": "clean",
-                "verifier_report": report_retry,
-                "flagged_issues": [],
-                "register_entry_id": entry_id,
-            }
-
-        flags_retry = _collect_flags(report_retry)
-        self._heartbeat(f"verifier (retry) still flagged {len(flags_retry)} — annotating output", t0)
         annotated = self._assemble_markdown(
-            entry, hypothesis, test_plan, agentic_retry, criteria, citations,
-            flags=flags_retry,
+            entry, hypothesis, test_plan, current_agentic, criteria, citations,
+            flags=current_flags,
         )
         return {
             "markdown": annotated,
-            "verdict": "needs_fixes" if sev_retry != "fatal" else "fatal",
-            "verifier_report": report_retry,
-            "flagged_issues": flags_retry,
+            "verdict": "needs_fixes" if sev_final != "fatal" else "fatal",
+            "verifier_report": current_report,
+            "flagged_issues": current_flags,
             "register_entry_id": entry_id,
         }
 

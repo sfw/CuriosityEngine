@@ -240,6 +240,7 @@ def main():
         gap_verification_hit_threshold=connection.engine.gap_verification_hit_threshold,
         confidence_drop_on_downgrade=connection.engine.confidence_drop_on_downgrade,
         question_priority_floor=connection.engine.question_priority_floor,
+        directive_max_verification_passes=connection.engine.directive_max_verification_passes,
     )
 
     engine = CuriosityEngine(config)
