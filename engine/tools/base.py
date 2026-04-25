@@ -24,6 +24,13 @@ class ToolError(Exception):
     """Raised when a tool cannot complete its work. The message is returned to the model."""
 
 
+# Staged cooldown schedule for back-off-on-429. Consecutive failures escalate
+# the wait — first failure is cheap (2s), and the cap only kicks in if the
+# upstream endpoint is genuinely struggling for an extended period. After the
+# cap, additional failures stay at 60s. note_success() resets the counter.
+_COOLDOWN_SCHEDULE = (2.0, 4.0, 8.0, 16.0, 30.0, 60.0)
+
+
 class RateLimiter:
     """Thread-safe token-bucket rate limiter.
 
@@ -64,7 +71,14 @@ class RateLimiter:
         # monotonic-clock timestamp. Subsequent acquire() calls block until
         # that timestamp passes BEFORE consulting the token bucket. This is
         # the back-off behaviour that pure token-bucket pacing can't provide.
+        #
+        # Staged backoff: consecutive failures escalate the cooldown duration
+        # via _COOLDOWN_SCHEDULE. Caller is expected to invoke note_success()
+        # on a successful response to reset the counter; without that the
+        # cooldown would stay at the cap forever.
         self._cooldown_until: float = 0.0
+        self._consecutive_failures: int = 0
+        self._cooldown_logged_for: float = 0.0
         self.name = name or f"limiter-{id(self):x}"
 
     def acquire(self, tokens: int = 1) -> float:
@@ -73,14 +87,18 @@ class RateLimiter:
         """
         waited = 0.0
         # Cooldown phase — if note_failure was recently called, wait it out
-        # BEFORE attempting to consume tokens. Logged once per cooldown wait
-        # so the user can see that a back-off is in effect.
+        # BEFORE attempting to consume tokens. Logged ONCE per distinct
+        # cooldown engagement (deduped on _cooldown_until timestamp) so the
+        # log doesn't repeat the same line for every blocked acquire.
         with self._cond:
             now = time.monotonic()
             if self._cooldown_until > now:
                 cool_wait = self._cooldown_until - now
-                print(f"  [rate-limit cooldown] {self.name}: backing off "
-                      f"{cool_wait:.1f}s before next request")
+                if self._cooldown_logged_for != self._cooldown_until:
+                    print(f"  [rate-limit cooldown] {self.name}: backing off "
+                          f"{cool_wait:.1f}s before next request "
+                          f"(failure #{self._consecutive_failures})")
+                    self._cooldown_logged_for = self._cooldown_until
                 self._cond.wait(timeout=cool_wait)
                 waited += cool_wait
             while True:
@@ -107,22 +125,49 @@ class RateLimiter:
             waited += fuzz
         return waited
 
-    def note_failure(self, cooldown_seconds: float = 60.0):
+    def note_failure(self, cooldown_seconds: Optional[float] = None) -> float:
         """Record a rate-limit rejection from the upstream endpoint. All
-        future acquire() calls will block until `cooldown_seconds` have
-        elapsed before consuming tokens. Use when the server returns
-        HTTP 429 or an equivalent explicit overload signal.
+        future acquire() calls will block until the chosen cooldown has
+        elapsed before consuming tokens.
 
-        Idempotent: multiple note_failure() calls in quick succession set
-        the cooldown to the LATER of the existing one or now+cooldown.
+        If `cooldown_seconds` is None (the typical case), uses the staged
+        backoff schedule based on consecutive failures: 2s, 4s, 8s, 16s,
+        30s, 60s, then stays at 60s. Caller is expected to invoke
+        note_success() on a successful response to reset the counter.
+
+        If `cooldown_seconds` is explicitly provided, uses that exact value
+        WITHOUT advancing the schedule — for callers that want a fixed
+        cooldown regardless of history.
+
+        Returns the cooldown duration that was applied (so the caller can
+        log it).
+
+        Idempotent: re-engaging within an existing cooldown window will
+        only extend if the new deadline is later than the existing one.
         """
-        if cooldown_seconds <= 0:
-            return
         with self._cond:
+            if cooldown_seconds is None:
+                # Use staged schedule. _consecutive_failures is incremented
+                # FIRST so the first failure picks schedule[0] = 2s.
+                idx = min(self._consecutive_failures, len(_COOLDOWN_SCHEDULE) - 1)
+                cooldown_seconds = _COOLDOWN_SCHEDULE[idx]
+                self._consecutive_failures += 1
+            if cooldown_seconds <= 0:
+                return 0.0
             new_until = time.monotonic() + float(cooldown_seconds)
             if new_until > self._cooldown_until:
                 self._cooldown_until = new_until
+                # Reset the log-dedupe so the new cooldown gets one log line.
+                self._cooldown_logged_for = 0.0
             self._cond.notify_all()
+        return float(cooldown_seconds)
+
+    def note_success(self):
+        """Caller signals a successful API response — resets the
+        consecutive-failure counter so the next failure (if any) starts
+        from the bottom of the staged backoff schedule (2s)."""
+        with self._cond:
+            self._consecutive_failures = 0
 
     def __repr__(self):
         return (

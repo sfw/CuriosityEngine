@@ -61,9 +61,12 @@ def _crossref_search(query: str, limit: int) -> list[AcademicResult]:
     with httpx.Client(timeout=_TIMEOUT, headers={"User-Agent": _USER_AGENT}) as c:
         r = c.get(url, params=params)
         if r.status_code == 429:
-            CROSSREF.note_failure(60.0)
-            raise ToolError("crossref rate limited (HTTP 429) — 60s cooldown engaged")
+            cooldown = CROSSREF.note_failure()  # staged: 2/4/8/16/30/60s
+            raise ToolError(
+                f"crossref rate limited (HTTP 429) — {cooldown:.0f}s cooldown engaged"
+            )
         r.raise_for_status()
+        CROSSREF.note_success()
         data = r.json()
 
     out: list[AcademicResult] = []
@@ -122,9 +125,12 @@ def _arxiv_search(query: str, limit: int) -> list[AcademicResult]:
     with httpx.Client(timeout=_TIMEOUT, headers={"User-Agent": _USER_AGENT}) as c:
         r = c.get(url, params=params)
         if r.status_code == 429:
-            ARXIV.note_failure(60.0)
-            raise ToolError("arxiv rate limited (HTTP 429) — 60s cooldown engaged")
+            cooldown = ARXIV.note_failure()  # staged: 2/4/8/16/30/60s
+            raise ToolError(
+                f"arxiv rate limited (HTTP 429) — {cooldown:.0f}s cooldown engaged"
+            )
         r.raise_for_status()
+        ARXIV.note_success()
         body = r.text
 
     ns = {"atom": "http://www.w3.org/2005/Atom", "arxiv": "http://arxiv.org/schemas/atom"}
@@ -180,18 +186,19 @@ def _semantic_scholar_search(query: str, limit: int) -> list[AcademicResult]:
     with httpx.Client(timeout=_TIMEOUT, headers=_semantic_scholar_headers()) as c:
         r = c.get(url, params=params)
         if r.status_code == 429:
-            # Set a 60s cooldown so the rest of the scan backs off cleanly
-            # rather than hammering the same endpoint. With an API key we
-            # have a private 1 req/s bucket and shouldn't normally see this;
-            # without one, the shared 1000 req/s global pool can be exhausted
-            # by other users at any time.
-            SEMANTIC_SCHOLAR.note_failure(60.0)
+            # Staged cooldown: 2/4/8/16/30/60s based on consecutive failures.
+            # Without an API key, the shared global pool can be exhausted by
+            # other users at any time and short cooldowns are often enough
+            # for it to refill. With a key we have a private 1 req/s bucket
+            # and shouldn't normally see 429s.
+            cooldown = SEMANTIC_SCHOLAR.note_failure()
             keyed = bool((os.environ.get("SEMANTIC_SCHOLAR_API_KEY") or "").strip())
             note = "with API key" if keyed else "no API key — shared global pool exhausted"
             raise ToolError(
-                f"semantic_scholar rate limited (HTTP 429, {note}) — 60s cooldown engaged"
+                f"semantic_scholar rate limited (HTTP 429, {note}) — {cooldown:.0f}s cooldown engaged"
             )
         r.raise_for_status()
+        SEMANTIC_SCHOLAR.note_success()
         data = r.json()
 
     out: list[AcademicResult] = []
