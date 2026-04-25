@@ -1410,6 +1410,8 @@ def settings_save(
     engine_held_entries_enabled: str = Form(""),
     engine_held_confidence_floor: float = Form(0.7),
     engine_cross_ref_role: str = Form(""),
+    engine_directive_primary_role: str = Form(""),
+    engine_directive_verifier_role: str = Form(""),
     engine_parallel_investigations: int = Form(1),
     engine_parallel_xref_pipeline: int = Form(1),
     engine_negative_space_min_entries: int = Form(15),
@@ -1459,6 +1461,12 @@ def settings_save(
     cross_ref_role = engine_cross_ref_role.strip().lower()
     if cross_ref_role and cross_ref_role not in known_roles:
         cross_ref_role = ""  # treat unknown role as "default"
+    directive_primary_role = engine_directive_primary_role.strip().lower()
+    if directive_primary_role and directive_primary_role not in known_roles:
+        directive_primary_role = ""
+    directive_verifier_role = engine_directive_verifier_role.strip().lower()
+    if directive_verifier_role and directive_verifier_role not in known_roles:
+        directive_verifier_role = ""
 
     # Render any extra [models.<name>] profiles back out verbatim — we don't
     # expose them in the web form yet, but we mustn't erase them on save.
@@ -1510,6 +1518,8 @@ def settings_save(
             f"held_entries_enabled = {str(held_entries_on).lower()}\n"
             f"held_confidence_floor = {max(0.0, min(1.0, engine_held_confidence_floor))}\n"
             f'cross_ref_role = "{cross_ref_role}"\n'
+            f'directive_primary_role = "{directive_primary_role}"\n'
+            f'directive_verifier_role = "{directive_verifier_role}"\n'
             f"parallel_investigations = {max(1, min(5, engine_parallel_investigations))}\n"
             f"parallel_xref_pipeline = {max(1, min(5, engine_parallel_xref_pipeline))}\n"
             f"negative_space_min_entries = {max(1, min(500, engine_negative_space_min_entries))}\n"

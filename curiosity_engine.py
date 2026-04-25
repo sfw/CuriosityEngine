@@ -67,6 +67,10 @@ def main():
                         help="Copy a configured profile into the verifier slot.")
     parser.add_argument("--cross-ref-role", type=str, default=None, metavar="ROLE",
                         help="Override the profile used for the cross-reference phase (e.g. 'verifier' to offload cross-ref to the verifier's model for this run).")
+    parser.add_argument("--directive-primary-role", type=str, default=None, metavar="ROLE",
+                        help="Override the profile used for directive section generation (hypothesis / test plan / agentic fields / verification criteria). Use a fast non-reasoning model — directive synthesis is constrained schema-filling, reasoning is latency overhead.")
+    parser.add_argument("--directive-verifier-role", type=str, default=None, metavar="ROLE",
+                        help="Override the profile used for the directive grounding-review pass (defaults to verifier).")
     parser.add_argument("--cross-ref-freq", type=int, default=engine_defaults.cross_ref_frequency, help="Run cross-ref every N cycles")
     # Per-run engine-knob overrides. default=None means "inherit from engine.toml".
     parser.add_argument("--cross-ref-window", type=int, default=None,
@@ -190,6 +194,17 @@ def main():
         # Copy the resolved profile into the cross_ref slot so the engine
         # builds a dedicated client for it (or aliases to primary if same).
         connection.cross_ref = replace(src)
+
+    if args.directive_primary_role:
+        src = _resolve_role(args.directive_primary_role)
+        if src is None:
+            parser.error(f"--directive-primary-role: unknown profile role {args.directive_primary_role!r}")
+        connection.directive_primary = replace(src)
+    if args.directive_verifier_role:
+        src = _resolve_role(args.directive_verifier_role)
+        if src is None:
+            parser.error(f"--directive-verifier-role: unknown profile role {args.directive_verifier_role!r}")
+        connection.directive_verifier = replace(src)
 
     if args.primary_model:
         connection.primary = replace(connection.primary, name=args.primary_model)

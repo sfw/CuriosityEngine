@@ -64,6 +64,25 @@ class CuriosityEngine(
         else:
             self.cross_ref_client = build_client(cross_ref_profile)
 
+        # Directive-pipeline clients: route directive section generation
+        # ([primary]) and the directive grounding-review pass ([verifier]) to
+        # whichever profiles the user configured via [engine].directive_*_role.
+        # Defaults: directive_primary → primary, directive_verifier → verifier.
+        # The point is to let the user keep a reasoning model on investigation
+        # while routing directive synthesis to a fast non-reasoning model
+        # (directive synthesis is constrained schema-filling — reasoning is
+        # latency overhead with no quality gain).
+        directive_primary_profile = getattr(self.connection, "directive_primary", None)
+        if directive_primary_profile is None or directive_primary_profile is self.connection.primary:
+            self.directive_primary_client: ModelClient = self.primary
+        else:
+            self.directive_primary_client = build_client(directive_primary_profile)
+        directive_verifier_profile = getattr(self.connection, "directive_verifier", None)
+        if directive_verifier_profile is None or directive_verifier_profile is self.connection.verifier:
+            self.directive_verifier_client: ModelClient = self.verifier
+        else:
+            self.directive_verifier_client = build_client(directive_verifier_profile)
+
         self.journal = Journal(
             config.journal_path,
             register_markdown_path=config.register_markdown_path,
@@ -80,6 +99,14 @@ class CuriosityEngine(
             cr_profile = getattr(self.connection, "cross_ref", None)
             if cr_profile is not None:
                 print(f"  cross_ref: {cr_profile.provider} / {cr_profile.name}")
+        if self.directive_primary_client is not self.primary:
+            dp_profile = getattr(self.connection, "directive_primary", None)
+            if dp_profile is not None:
+                print(f"  directive_primary: {dp_profile.provider} / {dp_profile.name}")
+        if self.directive_verifier_client is not self.verifier:
+            dv_profile = getattr(self.connection, "directive_verifier", None)
+            if dv_profile is not None:
+                print(f"  directive_verifier: {dv_profile.provider} / {dv_profile.name}")
         tool_names = self.tool_registry.names()
         if tool_names:
             print(f"  tools:    {', '.join(tool_names)}")
@@ -146,6 +173,39 @@ class CuriosityEngine(
         return self.verifier.complete_json(
             prompt,
             tools=tools if self.verifier.supports_server_web_search else None,
+            max_tokens=max_tokens,
+            policy=self.connection.retry,
+            on_retry=self._on_retry,
+        )
+
+    def _call_directive_primary(
+        self,
+        prompt: str,
+        *,
+        max_tokens: Optional[int] = None,
+    ) -> dict:
+        """Route directive section generation (hypothesis / test plan / agentic
+        fields / verification criteria) to the configured directive_primary
+        client. Defaults to the same client as `primary`."""
+        return self.directive_primary_client.complete_json(
+            prompt,
+            tools=None,
+            max_tokens=max_tokens,
+            policy=self.connection.retry,
+            on_retry=self._on_retry,
+        )
+
+    def _call_directive_verifier(
+        self,
+        prompt: str,
+        *,
+        max_tokens: Optional[int] = None,
+    ) -> dict:
+        """Route the directive grounding-review pass to the configured
+        directive_verifier client. Defaults to the same client as `verifier`."""
+        return self.directive_verifier_client.complete_json(
+            prompt,
+            tools=None,
             max_tokens=max_tokens,
             policy=self.connection.retry,
             on_retry=self._on_retry,

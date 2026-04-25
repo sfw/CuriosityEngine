@@ -79,6 +79,18 @@ class EngineSettings:
     # faster non-reasoning model while keeping reasoning on investigation.
     # Empty / "primary" = use the primary profile (backward-compatible default).
     cross_ref_role: str = ""
+    # Per-phase routing for the research-directive export pipeline. Directive
+    # synthesis is constrained schema-filling (hypothesis / test plan / agentic
+    # fields / verification criteria) — it does NOT benefit from reasoning-mode
+    # thinking, which adds 60-180s of latency per call without improving output.
+    # Route directive section generation to a fast non-reasoning model while
+    # keeping the primary as a reasoning model for investigation. Same
+    # resolution rules as cross_ref_role: empty / "primary" = use primary;
+    # "verifier" = use verifier; any other name = look up under [models.<name>].
+    directive_primary_role: str = ""
+    # Same idea for the directive grounding-review pass. Empty = use the
+    # journal's `verifier` profile (the cross-family verifier already configured).
+    directive_verifier_role: str = ""
     # Negative-space gap scan — structural analysis that builds a (method × problem)
     # matrix from the journal's entries and identifies empty cells (combinations
     # nobody in the field has studied). Gated to require a minimum journal size:
@@ -147,6 +159,11 @@ class CuriosityEngineConfig:
     # Resolved cross-ref profile (None = use primary). Computed at load time from
     # [engine].cross_ref_role or [models.cross_ref].
     cross_ref: "ModelProfile | None" = None
+    # Resolved directive-pipeline profiles (None = use primary / verifier).
+    # Computed at load time from [engine].directive_primary_role /
+    # directive_verifier_role or [models.directive_primary] / directive_verifier.
+    directive_primary: "ModelProfile | None" = None
+    directive_verifier: "ModelProfile | None" = None
 
     def resolve_profile(self, role: str) -> "ModelProfile | None":
         """Look up a configured profile by role name."""
@@ -242,6 +259,8 @@ class CuriosityEngineConfig:
             held_entries_enabled=bool(eng_section.get("held_entries_enabled", True)),
             held_confidence_floor=float(eng_section.get("held_confidence_floor", 0.7)),
             cross_ref_role=str(eng_section.get("cross_ref_role", "")).strip(),
+            directive_primary_role=str(eng_section.get("directive_primary_role", "")).strip(),
+            directive_verifier_role=str(eng_section.get("directive_verifier_role", "")).strip(),
             parallel_investigations=int(eng_section.get("parallel_investigations", 1)),
             parallel_xref_pipeline=int(eng_section.get("parallel_xref_pipeline", 1)),
         )
@@ -265,10 +284,41 @@ class CuriosityEngineConfig:
         elif "cross_ref" in extras:
             cross_ref_profile = extras["cross_ref"]
 
+        # Resolve directive profiles — same rules as cross_ref. Empty = use
+        # primary/verifier; "verifier" = use verifier; any other name = look up
+        # in extras. Auto-pickup of [models.directive_primary] /
+        # [models.directive_verifier] if those sections exist.
+        def _resolve_role(role_name: str, role_label: str) -> "ModelProfile | None":
+            r = (role_name or "").strip().lower()
+            if not r or r == "primary":
+                return None
+            if r == "verifier":
+                return verifier
+            if r in extras:
+                return extras[r]
+            raise ValueError(
+                f"[engine].{role_label} = {r!r} but no matching profile is "
+                f"configured. Add [models.{r}] or pick an existing role."
+            )
+
+        directive_primary_profile = _resolve_role(
+            engine.directive_primary_role, "directive_primary_role",
+        )
+        if directive_primary_profile is None and "directive_primary" in extras:
+            directive_primary_profile = extras["directive_primary"]
+
+        directive_verifier_profile = _resolve_role(
+            engine.directive_verifier_role, "directive_verifier_role",
+        )
+        if directive_verifier_profile is None and "directive_verifier" in extras:
+            directive_verifier_profile = extras["directive_verifier"]
+
         return cls(
             primary=primary, verifier=verifier,
             retry=retry, engine=engine,
             extras=extras, cross_ref=cross_ref_profile,
+            directive_primary=directive_primary_profile,
+            directive_verifier=directive_verifier_profile,
         )
 
 
@@ -544,6 +594,17 @@ held_confidence_floor = {eng.held_confidence_floor}
 # [models.<name>] section) to offload cross-ref to a faster model while
 # keeping reasoning for investigation. Empty / "primary" = use primary.
 cross_ref_role = "{eng.cross_ref_role}"
+# Per-phase model routing for the research-directive export pipeline.
+# Directive synthesis is constrained schema-filling — it does NOT benefit
+# from reasoning-mode thinking (which adds 60-180s of latency per call
+# without improving output). Route directive section generation to a fast
+# non-reasoning model while keeping the primary as a reasoning model for
+# investigation. Same resolution rules as cross_ref_role.
+# Empty / "primary" = use primary; "verifier" = use verifier; any other
+# name must match a [models.<name>] section.
+directive_primary_role = "{eng.directive_primary_role}"
+# Directive grounding-review pass. Empty = use the cross-family verifier.
+directive_verifier_role = "{eng.directive_verifier_role}"
 # Parallel fan-out. 1 = fully serial (default, preserves prior behavior).
 # Higher values run multiple investigations / xref-synth+verify pipelines
 # concurrently within a single cycle. Rate limiters are shared process-wide

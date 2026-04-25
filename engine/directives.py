@@ -160,7 +160,7 @@ class DirectivesMixin:
             register_entry_json=json.dumps(entry_for_prompt, indent=2),
             predictions_json=json.dumps(predictions, indent=2),
         )
-        result = self._call_primary(prompt, max_tokens=_SECTION_MAX_TOKENS)
+        result = self._call_directive_primary(prompt, max_tokens=_SECTION_MAX_TOKENS)
         return (result.get("hypothesis") or "").strip()
 
     def _section_test_plan(
@@ -173,7 +173,7 @@ class DirectivesMixin:
             predictions_json=json.dumps(predictions, indent=2),
             hypothesis=hypothesis or "(none generated)",
         )
-        result = self._call_primary(prompt, max_tokens=_SECTION_MAX_TOKENS)
+        result = self._call_directive_primary(prompt, max_tokens=_SECTION_MAX_TOKENS)
         return list(result.get("steps") or [])
 
     def _section_agentic_prompt(
@@ -195,7 +195,7 @@ class DirectivesMixin:
             citations_json=json.dumps(citations, indent=2),
             tool_allowlist_json=json.dumps(tool_allowlist, indent=2),
         )
-        result = self._call_primary(prompt, max_tokens=_AGENTIC_PROMPT_MAX_TOKENS)
+        result = self._call_directive_primary(prompt, max_tokens=_AGENTIC_PROMPT_MAX_TOKENS)
         structured = {
             "inputs": list(result.get("inputs") or []),
             "setup_preamble": (result.get("setup_preamble") or "").strip(),
@@ -222,7 +222,7 @@ class DirectivesMixin:
             predictions_json=json.dumps(predictions, indent=2),
             hypothesis=hypothesis or "(none generated)",
         )
-        result = self._call_primary(prompt, max_tokens=_SECTION_MAX_TOKENS)
+        result = self._call_directive_primary(prompt, max_tokens=_SECTION_MAX_TOKENS)
         return {
             "confirmed": (result.get("confirmed") or "").strip(),
             "refuted": (result.get("refuted") or "").strip(),
@@ -466,7 +466,7 @@ class DirectivesMixin:
             directive_footer_json=json.dumps(footer, indent=2),
         )
         try:
-            report = self._call_verifier(verify_prompt, max_tokens=self.connection.verifier.max_tokens)
+            report = self._call_directive_verifier(verify_prompt, max_tokens=self.connection.verifier.max_tokens)
         except Exception as e:  # noqa: BLE001
             print(f"  [error] verifier review failed: {type(e).__name__}: {e}")
             report = {
@@ -512,7 +512,7 @@ class DirectivesMixin:
                 "- Replace any non-allowlist citation with 'UNRESOLVED: <what>' and add it to unresolved_dependencies.\n"
                 "- Rewrite hand-wave steps into concrete executable tool calls."
             )
-            retry_result = self._call_primary(retry_prompt, max_tokens=_AGENTIC_PROMPT_MAX_TOKENS)
+            retry_result = self._call_directive_primary(retry_prompt, max_tokens=_AGENTIC_PROMPT_MAX_TOKENS)
             retry_structured = {
                 "inputs": list(retry_result.get("inputs") or []),
                 "setup_preamble": (retry_result.get("setup_preamble") or "").strip(),
@@ -550,7 +550,7 @@ class DirectivesMixin:
             directive_footer_json=json.dumps(footer_retry, indent=2),
         )
         try:
-            report_retry = self._call_verifier(verify_prompt_retry, max_tokens=self.connection.verifier.max_tokens)
+            report_retry = self._call_directive_verifier(verify_prompt_retry, max_tokens=self.connection.verifier.max_tokens)
         except Exception as e:  # noqa: BLE001
             print(f"  [error] verifier retry failed: {type(e).__name__}: {e}")
             report_retry = {"ok": False, "severity": "fatal"}

@@ -217,6 +217,61 @@
           </select>
         </label>
 
+        <label class="block md:col-span-3">
+          <span class="text-xs uppercase tracking-wider text-slate-400">directive_primary_role</span>
+          <span class="block text-[11px] text-slate-500">
+            Which profile runs the four directive section-generator calls (hypothesis / test plan /
+            agentic fields / verification criteria). Defaults to <span class="mono">primary</span>.
+            Directive synthesis is constrained schema-filling — reasoning models add 60–180s of
+            thinking latency per call without improving quality. Set to <span class="mono">verifier</span>
+            (or any custom role) to route directive generation to a fast non-reasoning model while
+            keeping the primary as a reasoning model for investigation.
+          </span>
+          <select name="engine_directive_primary_role"
+                  class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-700 bg-slate-900/60 text-sm mono">
+            <option value="" {% if not connection.engine.directive_primary_role %}selected{% endif %}>
+              (default — use primary)
+            </option>
+            <option value="primary" {% if connection.engine.directive_primary_role == 'primary' %}selected{% endif %}>
+              primary · {{ connection.primary.name }}
+            </option>
+            <option value="verifier" {% if connection.engine.directive_primary_role == 'verifier' %}selected{% endif %}>
+              verifier · {{ connection.verifier.name }}
+            </option>
+            {% for extra_role, extra_profile in (connection.extras or {}).items() %}
+              <option value="{{ extra_role }}" {% if connection.engine.directive_primary_role == extra_role %}selected{% endif %}>
+                {{ extra_role }} · {{ extra_profile.name }}
+              </option>
+            {% endfor %}
+          </select>
+        </label>
+
+        <label class="block md:col-span-3">
+          <span class="text-xs uppercase tracking-wider text-slate-400">directive_verifier_role</span>
+          <span class="block text-[11px] text-slate-500">
+            Which profile runs the directive grounding-review pass (checks for unlisted citations /
+            tools / hand-wave language). Defaults to <span class="mono">verifier</span>. Useful if you want
+            a different model for directive review than for insight verification.
+          </span>
+          <select name="engine_directive_verifier_role"
+                  class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-700 bg-slate-900/60 text-sm mono">
+            <option value="" {% if not connection.engine.directive_verifier_role %}selected{% endif %}>
+              (default — use verifier)
+            </option>
+            <option value="primary" {% if connection.engine.directive_verifier_role == 'primary' %}selected{% endif %}>
+              primary · {{ connection.primary.name }}
+            </option>
+            <option value="verifier" {% if connection.engine.directive_verifier_role == 'verifier' %}selected{% endif %}>
+              verifier · {{ connection.verifier.name }}
+            </option>
+            {% for extra_role, extra_profile in (connection.extras or {}).items() %}
+              <option value="{{ extra_role }}" {% if connection.engine.directive_verifier_role == extra_role %}selected{% endif %}>
+                {{ extra_role }} · {{ extra_profile.name }}
+              </option>
+            {% endfor %}
+          </select>
+        </label>
+
         <label class="flex items-center gap-2 md:col-span-3">
           <input type="checkbox" name="engine_verify_insights"
                  {% if connection.engine.verify_insights %}checked{% endif %}
