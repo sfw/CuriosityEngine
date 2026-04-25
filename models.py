@@ -237,8 +237,9 @@ class EngineConfig:
     # Minimum priority for questions to enter the queue. Non-human sources with
     # priority below this floor are dropped at enqueue time (with a log line).
     # Human-sourced questions always bypass — explicit intent overrides the
-    # autoscreen. Default 0.70. Set to 0 to disable.
-    question_priority_floor: float = 0.70
+    # autoscreen. Default 0.0 = disabled (prior 0.70 default was starving
+    # new journals; turn back on for mature journals with clear noise).
+    question_priority_floor: float = 0.0
     held_entries_enabled: bool = True
     held_confidence_floor: float = 0.7
     # Parallel fan-out knobs. Default 1 = serial (preserves prior behavior

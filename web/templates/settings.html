@@ -489,10 +489,12 @@
           <span class="text-xs uppercase tracking-wider text-slate-400">question_priority_floor</span>
           <span class="block text-[11px] text-slate-500">
             Minimum priority for a question to enter the investigation queue. Non-human sources below
-            this floor are dropped at enqueue with a log line. Human-sourced questions always bypass —
-            explicit user intent overrides the autoscreen. Typical priorities observed: xref 0.87+,
-            gap/analog 0.85, assumption 0.80. Default 0.70 drops noise without pruning real work.
-            Set to 0 to disable.
+            this floor are dropped at enqueue with a log line. Human-sourced questions always bypass.
+            <span class="text-slate-400">Default <span class="mono">0.0</span> = disabled.</span>
+            An earlier <span class="mono">0.70</span> default was found to starve new journals (early-cycle entry
+            followups have low priority and got dropped before the journal could build context).
+            Turn on (e.g. <span class="mono">0.70</span>) only on mature journals where you specifically want to prune
+            low-priority noise.
           </span>
           <input name="engine_question_priority_floor" type="number" step="0.05" min="0" max="1"
                  value="{{ connection.engine.question_priority_floor }}"

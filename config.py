@@ -137,11 +137,14 @@ class EngineSettings:
     # stored confidence honest. Set to 0.0 to disable.
     confidence_drop_on_downgrade: float = 0.10
     # Questions below this priority are rejected at enqueue time (except
-    # human-sourced questions, which always bypass). Default 0.70 — the
-    # observed priority ceiling for most emergent sources is 0.85-0.95;
-    # a 0.70 floor drops noise without pruning useful work. Set to 0 to
-    # disable the floor entirely.
-    question_priority_floor: float = 0.70
+    # human-sourced questions, which always bypass). Default 0.0 = disabled.
+    # An earlier default of 0.70 was found to starve new journals — early
+    # cycles produce mostly low-priority entry followups (priority scales
+    # with surprise_delta) which got dropped en masse before a journal
+    # could build enough context to generate higher-priority questions.
+    # Set to a non-zero value (e.g. 0.70) on mature journals where you
+    # specifically want to prune low-priority noise.
+    question_priority_floor: float = 0.0
     # Parallel fan-out — how many investigations / xref-synth+verify pipelines
     # run concurrently per cycle. Default 1 = fully serial (zero behavior change).
     # Rate limiters are shared across threads so raising these does not burst
@@ -630,7 +633,11 @@ gap_verification_hit_threshold = {eng.gap_verification_hit_threshold}
 confidence_drop_on_downgrade = {eng.confidence_drop_on_downgrade}
 # Minimum priority for a question to enter the investigation queue. Non-human
 # sources with priority below this floor are dropped at enqueue. Human-sourced
-# questions bypass — explicit intent overrides the autoscreen. 0 disables.
+# questions bypass — explicit intent overrides the autoscreen.
+# Default 0.0 = disabled. An earlier 0.70 default starved new journals (early
+# cycles produce mostly low-priority entry followups; the floor dropped them
+# before the journal could build context). Set to a non-zero value only on
+# mature journals where you specifically want to prune low-priority noise.
 question_priority_floor = {eng.question_priority_floor}
 # Held-state pipeline — when the verifier returns `inconclusive` (couldn't reach
 # the claim, not refuted it), insights become held register entries pending
