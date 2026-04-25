@@ -71,6 +71,10 @@ def main():
                         help="Override the profile used for directive section generation (hypothesis / test plan / agentic fields / verification criteria). Use a fast non-reasoning model — directive synthesis is constrained schema-filling, reasoning is latency overhead.")
     parser.add_argument("--directive-verifier-role", type=str, default=None, metavar="ROLE",
                         help="Override the profile used for the directive grounding-review pass (defaults to verifier).")
+    parser.add_argument("--gap-scan-extract-role", type=str, default=None, metavar="ROLE",
+                        help="Override the profile used for negative-space matrix extraction (step 1). Multi-document categorization that benefits from inference — REASONING MODEL recommended. Defaults to primary.")
+    parser.add_argument("--gap-scan-classify-role", type=str, default=None, metavar="ROLE",
+                        help="Override the profile used for gap classification (step 2) and question generation (step 4). Step 2 has large outputs that timeout on reasoning models — NON-REASONING MODEL recommended. Defaults to verifier.")
     parser.add_argument("--cross-ref-freq", type=int, default=engine_defaults.cross_ref_frequency, help="Run cross-ref every N cycles")
     # Per-run engine-knob overrides. default=None means "inherit from engine.toml".
     parser.add_argument("--cross-ref-window", type=int, default=None,
@@ -205,6 +209,17 @@ def main():
         if src is None:
             parser.error(f"--directive-verifier-role: unknown profile role {args.directive_verifier_role!r}")
         connection.directive_verifier = replace(src)
+
+    if args.gap_scan_extract_role:
+        src = _resolve_role(args.gap_scan_extract_role)
+        if src is None:
+            parser.error(f"--gap-scan-extract-role: unknown profile role {args.gap_scan_extract_role!r}")
+        connection.gap_scan_extract = replace(src)
+    if args.gap_scan_classify_role:
+        src = _resolve_role(args.gap_scan_classify_role)
+        if src is None:
+            parser.error(f"--gap-scan-classify-role: unknown profile role {args.gap_scan_classify_role!r}")
+        connection.gap_scan_classify = replace(src)
 
     if args.primary_model:
         connection.primary = replace(connection.primary, name=args.primary_model)

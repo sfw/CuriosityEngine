@@ -99,6 +99,23 @@ class EngineSettings:
     # current behavior (initial + 1 retry), 3 = default — gives one more
     # chance to converge after the LLM addresses the first round of flags.
     directive_max_verification_passes: int = 3
+    # Per-phase routing for the negative-space gap scan. Same resolution
+    # rules as cross_ref_role / directive_*_role.
+    #
+    # gap_scan_extract_role — runs matrix extraction (step 1 of the scan):
+    # reads all journal entries, identifies methods + problems + which
+    # entries cover which (method, problem) cells. Multi-document
+    # categorization that benefits from inference — REASONING MODEL is the
+    # right fit here. Empty / "primary" = use primary (default).
+    gap_scan_extract_role: str = ""
+    # gap_scan_classify_role — runs cell classification (step 2) and
+    # investigable-question generation (step 4). Step 2 has large outputs
+    # (5,000-10,000 tokens for ~100 empty cells); on reasoning models in
+    # non-streaming mode this reliably triggers timeouts. NON-REASONING
+    # MODEL is the right fit here; per-cell judgement is world-knowledge
+    # heavy, not chain-of-thought heavy. Empty / "verifier" = use verifier
+    # (default; assumes verifier is non-reasoning-tier).
+    gap_scan_classify_role: str = ""
     # Negative-space gap scan — structural analysis that builds a (method × problem)
     # matrix from the journal's entries and identifies empty cells (combinations
     # nobody in the field has studied). Gated to require a minimum journal size:
@@ -172,6 +189,12 @@ class CuriosityEngineConfig:
     # directive_verifier_role or [models.directive_primary] / directive_verifier.
     directive_primary: "ModelProfile | None" = None
     directive_verifier: "ModelProfile | None" = None
+    # Resolved negative-space gap-scan profiles (None = use primary / verifier).
+    # gap_scan_extract handles step 1 (matrix extraction) — reasoning helps;
+    # gap_scan_classify handles steps 2 + 4 (classify + question generation) —
+    # non-reasoning preferred due to large output sizes.
+    gap_scan_extract: "ModelProfile | None" = None
+    gap_scan_classify: "ModelProfile | None" = None
 
     def resolve_profile(self, role: str) -> "ModelProfile | None":
         """Look up a configured profile by role name."""
@@ -272,6 +295,8 @@ class CuriosityEngineConfig:
             directive_max_verification_passes=int(
                 eng_section.get("directive_max_verification_passes", 3)
             ),
+            gap_scan_extract_role=str(eng_section.get("gap_scan_extract_role", "")).strip(),
+            gap_scan_classify_role=str(eng_section.get("gap_scan_classify_role", "")).strip(),
             parallel_investigations=int(eng_section.get("parallel_investigations", 1)),
             parallel_xref_pipeline=int(eng_section.get("parallel_xref_pipeline", 1)),
         )
@@ -324,12 +349,26 @@ class CuriosityEngineConfig:
         if directive_verifier_profile is None and "directive_verifier" in extras:
             directive_verifier_profile = extras["directive_verifier"]
 
+        gap_scan_extract_profile = _resolve_role(
+            engine.gap_scan_extract_role, "gap_scan_extract_role",
+        )
+        if gap_scan_extract_profile is None and "gap_scan_extract" in extras:
+            gap_scan_extract_profile = extras["gap_scan_extract"]
+
+        gap_scan_classify_profile = _resolve_role(
+            engine.gap_scan_classify_role, "gap_scan_classify_role",
+        )
+        if gap_scan_classify_profile is None and "gap_scan_classify" in extras:
+            gap_scan_classify_profile = extras["gap_scan_classify"]
+
         return cls(
             primary=primary, verifier=verifier,
             retry=retry, engine=engine,
             extras=extras, cross_ref=cross_ref_profile,
             directive_primary=directive_primary_profile,
             directive_verifier=directive_verifier_profile,
+            gap_scan_extract=gap_scan_extract_profile,
+            gap_scan_classify=gap_scan_classify_profile,
         )
 
 
@@ -622,6 +661,20 @@ directive_verifier_role = "{eng.directive_verifier_role}"
 # stops as soon as a pass returns clean OR this cap is reached. Output
 # beyond the cap ships with a prominent "⚠ FLAGGED ISSUES" block.
 directive_max_verification_passes = {eng.directive_max_verification_passes}
+# Per-phase routing for the negative-space gap scan. Same resolution rules
+# as cross_ref_role / directive_*_role.
+# gap_scan_extract_role — matrix extraction (step 1). Reads all journal
+# entries, identifies methods + problems + cell coverage. Multi-document
+# categorization that benefits from inference: REASONING MODEL recommended.
+# Empty / "primary" = use primary.
+gap_scan_extract_role = "{eng.gap_scan_extract_role}"
+# gap_scan_classify_role — cell classification (step 2) + question
+# generation (step 4). Step 2 has large outputs (5K-10K tokens for ~100
+# empty cells); on reasoning models in non-streaming mode this reliably
+# triggers timeouts. NON-REASONING MODEL recommended; per-cell judgement
+# is world-knowledge heavy, not chain-of-thought heavy.
+# Empty / "verifier" = use verifier.
+gap_scan_classify_role = "{eng.gap_scan_classify_role}"
 # Parallel fan-out. 1 = fully serial (default, preserves prior behavior).
 # Higher values run multiple investigations / xref-synth+verify pipelines
 # concurrently within a single cycle. Rate limiters are shared process-wide

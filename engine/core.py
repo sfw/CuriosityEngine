@@ -83,6 +83,22 @@ class CuriosityEngine(
         else:
             self.directive_verifier_client = build_client(directive_verifier_profile)
 
+        # Gap-scan clients. Step 1 (matrix extraction) benefits from
+        # reasoning — defaults to primary. Steps 2 + 4 (classify + question
+        # generation) have large outputs that reliably timeout on reasoning
+        # models in non-streaming mode — defaults to verifier. The user can
+        # route either to any configured profile via the role knobs.
+        gap_extract_profile = getattr(self.connection, "gap_scan_extract", None)
+        if gap_extract_profile is None or gap_extract_profile is self.connection.primary:
+            self.gap_scan_extract_client: ModelClient = self.primary
+        else:
+            self.gap_scan_extract_client = build_client(gap_extract_profile)
+        gap_classify_profile = getattr(self.connection, "gap_scan_classify", None)
+        if gap_classify_profile is None or gap_classify_profile is self.connection.verifier:
+            self.gap_scan_classify_client: ModelClient = self.verifier
+        else:
+            self.gap_scan_classify_client = build_client(gap_classify_profile)
+
         self.journal = Journal(
             config.journal_path,
             register_markdown_path=config.register_markdown_path,
@@ -107,6 +123,14 @@ class CuriosityEngine(
             dv_profile = getattr(self.connection, "directive_verifier", None)
             if dv_profile is not None:
                 print(f"  directive_verifier: {dv_profile.provider} / {dv_profile.name}")
+        if self.gap_scan_extract_client is not self.primary:
+            ge_profile = getattr(self.connection, "gap_scan_extract", None)
+            if ge_profile is not None:
+                print(f"  gap_scan_extract: {ge_profile.provider} / {ge_profile.name}")
+        if self.gap_scan_classify_client is not self.verifier:
+            gc_profile = getattr(self.connection, "gap_scan_classify", None)
+            if gc_profile is not None:
+                print(f"  gap_scan_classify: {gc_profile.provider} / {gc_profile.name}")
         tool_names = self.tool_registry.names()
         if tool_names:
             print(f"  tools:    {', '.join(tool_names)}")
@@ -204,6 +228,42 @@ class CuriosityEngine(
         """Route the directive grounding-review pass to the configured
         directive_verifier client. Defaults to the same client as `verifier`."""
         return self.directive_verifier_client.complete_json(
+            prompt,
+            tools=None,
+            max_tokens=max_tokens,
+            policy=self.connection.retry,
+            on_retry=self._on_retry,
+        )
+
+    def _call_gap_extract(
+        self,
+        prompt: str,
+        *,
+        max_tokens: Optional[int] = None,
+    ) -> dict:
+        """Route negative-space matrix extraction (step 1) to the configured
+        gap_scan_extract client. Defaults to the same client as `primary` —
+        reasoning helps for multi-document categorization."""
+        return self.gap_scan_extract_client.complete_json(
+            prompt,
+            tools=None,
+            max_tokens=max_tokens,
+            policy=self.connection.retry,
+            on_retry=self._on_retry,
+        )
+
+    def _call_gap_classify(
+        self,
+        prompt: str,
+        *,
+        max_tokens: Optional[int] = None,
+    ) -> dict:
+        """Route negative-space cell classification (step 2) and question
+        generation (step 4) to the configured gap_scan_classify client.
+        Defaults to the same client as `verifier` — non-reasoning preferred
+        because step 2's output can be 5K-10K tokens and reasoning models
+        in non-streaming mode reliably timeout at that size."""
+        return self.gap_scan_classify_client.complete_json(
             prompt,
             tools=None,
             max_tokens=max_tokens,

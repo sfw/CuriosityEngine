@@ -287,6 +287,61 @@
                  class="mt-1 w-32 px-3 py-2 rounded-lg border border-slate-700 bg-slate-900/60 text-sm mono" />
         </label>
 
+        <label class="block md:col-span-3">
+          <span class="text-xs uppercase tracking-wider text-slate-400">gap_scan_extract_role</span>
+          <span class="block text-[11px] text-slate-500">
+            Which profile runs the negative-space matrix extraction (step 1 of the gap scan).
+            Reads all journal entries, identifies methods + problems + cell coverage.
+            <span class="text-amber-300">Reasoning model recommended</span> — multi-document categorization
+            benefits from inference. Defaults to <span class="mono">primary</span>.
+          </span>
+          <select name="engine_gap_scan_extract_role"
+                  class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-700 bg-slate-900/60 text-sm mono">
+            <option value="" {% if not connection.engine.gap_scan_extract_role %}selected{% endif %}>
+              (default — use primary)
+            </option>
+            <option value="primary" {% if connection.engine.gap_scan_extract_role == 'primary' %}selected{% endif %}>
+              primary · {{ connection.primary.name }}
+            </option>
+            <option value="verifier" {% if connection.engine.gap_scan_extract_role == 'verifier' %}selected{% endif %}>
+              verifier · {{ connection.verifier.name }}
+            </option>
+            {% for extra_role, extra_profile in (connection.extras or {}).items() %}
+              <option value="{{ extra_role }}" {% if connection.engine.gap_scan_extract_role == extra_role %}selected{% endif %}>
+                {{ extra_role }} · {{ extra_profile.name }}
+              </option>
+            {% endfor %}
+          </select>
+        </label>
+
+        <label class="block md:col-span-3">
+          <span class="text-xs uppercase tracking-wider text-slate-400">gap_scan_classify_role</span>
+          <span class="block text-[11px] text-slate-500">
+            Which profile runs the cell classification (step 2) and gap-question generation (step 4).
+            Step 2 has large outputs (5K-10K tokens for ~100 empty cells); on reasoning models in
+            non-streaming mode this reliably triggers timeouts.
+            <span class="text-emerald-300">Non-reasoning model recommended</span> — per-cell judgement
+            is world-knowledge heavy, not chain-of-thought heavy. Defaults to <span class="mono">verifier</span>.
+          </span>
+          <select name="engine_gap_scan_classify_role"
+                  class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-700 bg-slate-900/60 text-sm mono">
+            <option value="" {% if not connection.engine.gap_scan_classify_role %}selected{% endif %}>
+              (default — use verifier)
+            </option>
+            <option value="primary" {% if connection.engine.gap_scan_classify_role == 'primary' %}selected{% endif %}>
+              primary · {{ connection.primary.name }}
+            </option>
+            <option value="verifier" {% if connection.engine.gap_scan_classify_role == 'verifier' %}selected{% endif %}>
+              verifier · {{ connection.verifier.name }}
+            </option>
+            {% for extra_role, extra_profile in (connection.extras or {}).items() %}
+              <option value="{{ extra_role }}" {% if connection.engine.gap_scan_classify_role == extra_role %}selected{% endif %}>
+                {{ extra_role }} · {{ extra_profile.name }}
+              </option>
+            {% endfor %}
+          </select>
+        </label>
+
         <label class="flex items-center gap-2 md:col-span-3">
           <input type="checkbox" name="engine_verify_insights"
                  {% if connection.engine.verify_insights %}checked{% endif %}

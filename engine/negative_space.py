@@ -191,7 +191,7 @@ class NegativeSpaceMixin:
             tag_anchors=", ".join(tag_anchors) if tag_anchors else "(none)",
         )
         try:
-            extract_result = self._call_primary(extract_prompt)
+            extract_result = self._call_gap_extract(extract_prompt)
         except Exception as e:  # noqa: BLE001
             print(f"  [abort] matrix extraction failed: {type(e).__name__}: {e}")
             return None
@@ -244,7 +244,7 @@ class NegativeSpaceMixin:
             empty_cells_json=json.dumps(empty_cells, indent=2),
         )
         try:
-            classify_result = self._call_primary(classify_prompt)
+            classify_result = self._call_gap_classify(classify_prompt)
         except Exception as e:  # noqa: BLE001
             print(f"  [abort] classification failed: {type(e).__name__}: {e}")
             return None
@@ -322,7 +322,7 @@ class NegativeSpaceMixin:
                 verified_gaps_json=json.dumps(verified_gaps, indent=2),
             )
             try:
-                questions_result = self._call_primary(questions_prompt)
+                questions_result = self._call_gap_classify(questions_prompt)
             except Exception as e:  # noqa: BLE001
                 print(f"        [warn] question generation failed: {type(e).__name__}: {e}")
                 questions_result = {"gap_questions": []}

@@ -1446,6 +1446,8 @@ def settings_save(
     engine_directive_primary_role: str = Form(""),
     engine_directive_verifier_role: str = Form(""),
     engine_directive_max_verification_passes: int = Form(3),
+    engine_gap_scan_extract_role: str = Form(""),
+    engine_gap_scan_classify_role: str = Form(""),
     engine_parallel_investigations: int = Form(1),
     engine_parallel_xref_pipeline: int = Form(1),
     engine_negative_space_min_entries: int = Form(15),
@@ -1501,6 +1503,12 @@ def settings_save(
     directive_verifier_role = engine_directive_verifier_role.strip().lower()
     if directive_verifier_role and directive_verifier_role not in known_roles:
         directive_verifier_role = ""
+    gap_scan_extract_role = engine_gap_scan_extract_role.strip().lower()
+    if gap_scan_extract_role and gap_scan_extract_role not in known_roles:
+        gap_scan_extract_role = ""
+    gap_scan_classify_role = engine_gap_scan_classify_role.strip().lower()
+    if gap_scan_classify_role and gap_scan_classify_role not in known_roles:
+        gap_scan_classify_role = ""
 
     # Render any extra [models.<name>] profiles back out verbatim — we don't
     # expose them in the web form yet, but we mustn't erase them on save.
@@ -1555,6 +1563,8 @@ def settings_save(
             f'directive_primary_role = "{directive_primary_role}"\n'
             f'directive_verifier_role = "{directive_verifier_role}"\n'
             f"directive_max_verification_passes = {max(1, min(10, engine_directive_max_verification_passes))}\n"
+            f'gap_scan_extract_role = "{gap_scan_extract_role}"\n'
+            f'gap_scan_classify_role = "{gap_scan_classify_role}"\n'
             f"parallel_investigations = {max(1, min(5, engine_parallel_investigations))}\n"
             f"parallel_xref_pipeline = {max(1, min(5, engine_parallel_xref_pipeline))}\n"
             f"negative_space_min_entries = {max(1, min(500, engine_negative_space_min_entries))}\n"
