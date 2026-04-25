@@ -39,14 +39,22 @@ from __future__ import annotations
 from engine.tools.base import HostRateLimiter, RateLimiter
 
 # --- Academic endpoints --------------------------------------------------------
-# arXiv: 1 req / 3s. Hard-documented in their user manual.
-# Jitter widens effective pacing to 3.0–4.0s.
-ARXIV = RateLimiter(rate=1 / 3.0, burst=1, jitter=1.0, name="arxiv")
+# arXiv: documented as "1 req / 3s" in their user manual, but empirical
+# evidence shows that pacing reliably triggers HTTP 429 on sustained
+# burst workloads (gap scan verification fires 80+ probes back-to-back).
+# Their server applies sliding-window detection in addition to the
+# documented limit. Slowed to 1/5s + 2s jitter (5–7s pacing, ~10 req/min)
+# to stay clear of the burst-detection threshold. Combined with
+# cooldown-on-429 in academic_search.py, this is belt-and-suspenders:
+# the slower steady state reduces 429 frequency, and any 429 that does
+# fire engages a 60s cooldown automatically.
+ARXIV = RateLimiter(rate=1 / 5.0, burst=1, jitter=2.0, name="arxiv")
 
-# Semantic Scholar unauthenticated: 100 req / 5min ≈ 0.33 req/s. 1/3s pacing
-# with burst=2 gives us clean handling of a typical multi-query academic_search.
-# Jitter 1.0s — effective 3.0–4.0s between depletion refills.
-SEMANTIC_SCHOLAR = RateLimiter(rate=1 / 3.0, burst=2, jitter=1.0, name="semantic_scholar")
+# Semantic Scholar unauthenticated: documented 100 req / 5min ≈ 0.33 req/s.
+# Same story as arxiv — empirical 429s at 1/3s pacing during bursts
+# despite being below the documented limit. Slowed to 1/5s + 2s jitter
+# to match arxiv. Cooldown-on-429 backs it off when their throttle fires.
+SEMANTIC_SCHOLAR = RateLimiter(rate=1 / 5.0, burst=1, jitter=2.0, name="semantic_scholar")
 
 # Crossref polite pool is 50+ req/s; we cap at 5 for safety + burst=10 so a
 # whole academic_search call can fire in one shot. Small jitter — this endpoint
