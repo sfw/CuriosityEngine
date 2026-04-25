@@ -134,21 +134,26 @@
               <div class="flex items-center gap-1.5 flex-shrink-0">
                 {% if _dir %}
                   {# An existing directive on disk: surface a link + verdict chip,
-                     and rename the kickoff button to "Regenerate". #}
-                  <a href="/journals/{{ name }}/directives/{{ _dir.filename }}"
-                     target="_blank" rel="noopener"
-                     class="px-2 py-1 rounded-md text-[11px] font-medium shadow whitespace-nowrap no-underline
+                     and rename the kickoff button to "Regenerate". The link
+                     opens a modal that renders the markdown client-side and
+                     offers a download button. #}
+                  <button type="button"
+                     data-directive-modal
+                     data-directive-filename="{{ _dir.filename }}"
+                     data-directive-url="/journals/{{ name }}/directives/{{ _dir.filename }}"
+                     data-directive-title="{{ r.title|replace('"', '&quot;') }}"
+                     class="px-2 py-1 rounded-md text-[11px] font-medium shadow whitespace-nowrap
                             {% if _dir.verdict == 'clean' %}bg-emerald-600/80 hover:bg-emerald-500 text-white
                             {% elif _dir.verdict == 'needs_fixes' %}bg-amber-600/80 hover:bg-amber-500 text-white
                             {% elif _dir.verdict == 'fatal' %}bg-rose-600/80 hover:bg-rose-500 text-white
                             {% else %}bg-slate-700 hover:bg-slate-600 text-slate-200{% endif %}"
                      title="View generated research directive · verdict: {{ _dir.verdict or 'unknown' }}{% if _dir.flagged_issues_count %} · {{ _dir.flagged_issues_count }} flagged issue(s){% endif %}">
-                    View directive ↗
+                    View directive
                     {% if _dir.verdict == 'clean' %} ✓
                     {% elif _dir.verdict == 'needs_fixes' %} ⚠
                     {% elif _dir.verdict == 'fatal' %} ✗
                     {% endif %}
-                  </a>
+                  </button>
                   <button type="button"
                           class="directive-export-btn px-2 py-1 rounded-md bg-slate-700 hover:bg-slate-600 text-slate-200 text-[11px] whitespace-nowrap disabled:opacity-50"
                           data-directive-url="/journals/{{ name }}/register/{{ r.id }}/directive"
@@ -596,6 +601,164 @@
         alert('Failed to start export: ' + err.message);
       }
     });
+  });
+})();
+</script>
+
+{# ── Directive-viewer modal — opened by [data-directive-modal] buttons ── #}
+<div id="directive-modal"
+     class="hidden fixed inset-0 z-50 items-center justify-center p-4 bg-black/70 backdrop-blur-sm"
+     role="dialog" aria-modal="true" aria-labelledby="directive-modal-title">
+  <div class="relative w-full max-w-4xl max-h-[90vh] flex flex-col rounded-xl border border-slate-700 bg-slate-900 shadow-2xl">
+    <header class="flex items-start justify-between gap-4 px-5 py-3 border-b border-slate-700/60 flex-shrink-0">
+      <div class="min-w-0 flex-1">
+        <h3 id="directive-modal-title" class="text-sm font-semibold text-slate-200 truncate">Research directive</h3>
+        <div id="directive-modal-meta" class="mono text-[10px] text-slate-500 truncate"></div>
+      </div>
+      <div class="flex items-center gap-2 flex-shrink-0">
+        <button type="button" id="directive-modal-download"
+                class="px-3 py-1.5 rounded-md bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium shadow"
+                title="Download the markdown file as-is">
+          Download .md
+        </button>
+        <button type="button" id="directive-modal-close" aria-label="Close"
+                class="p-1.5 rounded-md text-slate-400 hover:text-slate-200 hover:bg-slate-800">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+    </header>
+    <div id="directive-modal-content"
+         class="flex-1 overflow-y-auto px-6 py-5 text-slate-200 directive-prose">
+      <div class="text-sm text-slate-500">Loading…</div>
+    </div>
+  </div>
+</div>
+
+{# Lightweight prose styling for the rendered markdown — scoped to the modal
+   so it doesn't leak into the rest of the app. #}
+<style>
+  .directive-prose h1 { font-size: 1.4rem; font-weight: 700; margin: 0.2rem 0 0.6rem; color: #e2e8f0; }
+  .directive-prose h2 { font-size: 1.1rem; font-weight: 600; margin: 1rem 0 0.4rem; color: #cbd5e1; border-bottom: 1px solid rgb(51 65 85 / .5); padding-bottom: 0.2rem; }
+  .directive-prose h3 { font-size: 0.95rem; font-weight: 600; margin: 0.8rem 0 0.3rem; color: #cbd5e1; }
+  .directive-prose p { margin: 0.5rem 0; line-height: 1.55; color: #cbd5e1; }
+  .directive-prose ul, .directive-prose ol { margin: 0.4rem 0 0.4rem 1.2rem; line-height: 1.5; color: #cbd5e1; }
+  .directive-prose li { margin: 0.15rem 0; }
+  .directive-prose ul { list-style: disc outside; }
+  .directive-prose ol { list-style: decimal outside; }
+  .directive-prose a { color: #818cf8; text-decoration: underline; }
+  .directive-prose a:hover { color: #a5b4fc; }
+  .directive-prose code { font-family: ui-monospace, monospace; font-size: 0.85em; background: rgb(15 23 42); padding: 0.08rem 0.3rem; border-radius: 0.25rem; color: #e2e8f0; }
+  .directive-prose pre { background: rgb(2 6 23); padding: 0.7rem 0.9rem; border-radius: 0.5rem; overflow-x: auto; margin: 0.6rem 0; border: 1px solid rgb(30 41 59); }
+  .directive-prose pre code { background: transparent; padding: 0; font-size: 0.8rem; }
+  .directive-prose blockquote { border-left: 3px solid rgb(99 102 241 / .6); padding: 0.1rem 0 0.1rem 0.8rem; margin: 0.6rem 0; color: #94a3b8; font-style: italic; }
+  .directive-prose blockquote.warning { border-left-color: #f59e0b; background: rgb(245 158 11 / .1); padding: 0.5rem 0.9rem; color: #fbbf24; font-style: normal; border-radius: 0.25rem; }
+  .directive-prose table { border-collapse: collapse; margin: 0.6rem 0; font-size: 0.85rem; width: 100%; }
+  .directive-prose th, .directive-prose td { border: 1px solid rgb(51 65 85); padding: 0.35rem 0.55rem; text-align: left; vertical-align: top; }
+  .directive-prose th { background: rgb(30 41 59); font-weight: 600; color: #e2e8f0; }
+  .directive-prose hr { border: 0; border-top: 1px solid rgb(51 65 85 / .6); margin: 0.9rem 0; }
+  .directive-prose strong { color: #e2e8f0; }
+</style>
+
+<script src="https://cdn.jsdelivr.net/npm/marked@13.0.3/marked.min.js" defer></script>
+<script>
+(() => {
+  // Directive-viewer modal wiring. Buttons with data-directive-modal open
+  // the modal, fetch the markdown, render via marked.js, and surface a
+  // download button that hands back the original .md file.
+  const modal = document.getElementById('directive-modal');
+  const titleEl = document.getElementById('directive-modal-title');
+  const metaEl = document.getElementById('directive-modal-meta');
+  const contentEl = document.getElementById('directive-modal-content');
+  const closeBtn = document.getElementById('directive-modal-close');
+  const downloadBtn = document.getElementById('directive-modal-download');
+  if (!modal || !contentEl) return;
+
+  let currentMarkdown = '';
+  let currentFilename = 'directive.md';
+
+  function open() {
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+    document.body.style.overflow = 'hidden';
+  }
+  function close() {
+    modal.classList.add('hidden');
+    modal.classList.remove('flex');
+    document.body.style.overflow = '';
+    contentEl.innerHTML = '<div class="text-sm text-slate-500">Loading…</div>';
+    currentMarkdown = '';
+  }
+
+  // Marked may not be defined yet (script defer). Poll briefly.
+  function withMarked(cb) {
+    if (typeof marked !== 'undefined') return cb();
+    let tries = 0;
+    const id = setInterval(() => {
+      if (typeof marked !== 'undefined') {
+        clearInterval(id);
+        cb();
+      } else if (++tries > 50) {
+        clearInterval(id);
+        contentEl.innerHTML = '<div class="text-sm text-rose-400">Failed to load markdown renderer (marked.js). Refresh and try again.</div>';
+      }
+    }, 100);
+  }
+
+  document.querySelectorAll('[data-directive-modal]').forEach(btn => {
+    if (btn.dataset.modalWired === '1') return;
+    btn.dataset.modalWired = '1';
+    btn.addEventListener('click', async () => {
+      const url = btn.dataset.directiveUrl;
+      const filename = btn.dataset.directiveFilename || 'directive.md';
+      const title = btn.dataset.directiveTitle || filename;
+      titleEl.textContent = title;
+      metaEl.textContent = filename;
+      contentEl.innerHTML = '<div class="text-sm text-slate-500">Loading…</div>';
+      currentFilename = filename;
+      open();
+      try {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        currentMarkdown = await res.text();
+        withMarked(() => {
+          // marked.js — sane defaults: GFM tables, line breaks, no raw HTML.
+          marked.setOptions({ gfm: true, breaks: false, headerIds: false, mangle: false });
+          let html = marked.parse(currentMarkdown);
+          // Promote ⚠ FLAGGED ISSUES blockquotes to a warning style — they
+          // open with the literal "⚠" in the directive markdown.
+          html = html.replace(/<blockquote>([\s\S]*?⚠[\s\S]*?)<\/blockquote>/, '<blockquote class="warning">$1</blockquote>');
+          contentEl.innerHTML = html;
+          contentEl.scrollTop = 0;
+        });
+      } catch (err) {
+        contentEl.innerHTML = '<div class="text-sm text-rose-400">Failed to load directive: ' + err.message + '</div>';
+      }
+    });
+  });
+
+  // Close interactions: button, ESC, click outside the card.
+  closeBtn?.addEventListener('click', close);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !modal.classList.contains('hidden')) close();
+  });
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) close();
+  });
+
+  // Download — hand back the original markdown text via a Blob.
+  downloadBtn?.addEventListener('click', () => {
+    if (!currentMarkdown) return;
+    const blob = new Blob([currentMarkdown], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = currentFilename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   });
 })();
 </script>
