@@ -288,6 +288,20 @@
             <input name="novelty_types" type="text" placeholder="new_synthesis,correction"
                    class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-700 bg-slate-900/60 text-sm mono" />
           </label>
+          <label class="block md:col-span-2 flex items-start gap-2">
+            <input type="checkbox" name="needs_canonicalization" value="on"
+                   class="mt-1 accent-violet-500" />
+            <span>
+              <span class="text-xs text-slate-400">only entries that need canonicalization</span>
+              <span class="block text-[11px] text-slate-500">
+                Scope to register entries whose <span class="mono">canonical_form</span> is empty
+                — typically legacy "dark" entries from before the Phase 1 canonicalization layer.
+                Reverifying lifts them into Phase 1+ coverage (alias-gap, component novelty,
+                Pareto admission) without re-running the verifier on entries that are already
+                canonicalized.
+              </span>
+            </span>
+          </label>
         </form>
       </details>
     </div>

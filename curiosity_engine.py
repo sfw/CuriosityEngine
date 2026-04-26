@@ -109,6 +109,8 @@ def main():
                         help="Re-verify a single register entry by id (e.g. r-abc12345). Overrides --reverify-register scope.")
     parser.add_argument("--reverify-register-max-confidence", type=float, default=None, metavar="CONF",
                         help="Only re-verify register entries with verified_confidence ≤ this (e.g. 0.8 to skip the most confident ones).")
+    parser.add_argument("--reverify-register-needs-canonicalization", action="store_true",
+                        help="When used with --reverify-register, only target entries that LACK a canonical_form (i.e. predate the Phase 1 canonicalization layer). Lets you bring legacy register entries into Phase 1+ coverage without re-running the verifier on entries that are already canonicalized.")
     parser.add_argument("--reverify-register-novelty-types", type=str, default=None, metavar="TYPES",
                         help="Comma-separated novelty_types to re-verify (e.g. 'new_synthesis,correction'). Default: all.")
     parser.add_argument("--synth-orphaned-xrefs", action="store_true",
@@ -368,6 +370,7 @@ def main():
         engine.reverify_register_entries(
             max_confidence=args.reverify_register_max_confidence,
             novelty_types=novelty_types,
+            needs_canonicalization=args.reverify_register_needs_canonicalization,
         )
     elif args.synth_orphaned_xrefs:
         engine.synthesize_orphaned_xrefs()

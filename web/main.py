@@ -645,11 +645,13 @@ async def maintenance_reverify_register(
     name: str,
     max_confidence: str = Form(""),
     novelty_types: str = Form(""),
+    needs_canonicalization: str = Form(""),
 ):
     """Batch re-verify existing register entries (audit under updated rules).
     Appends reverification_log to each entry; never overwrites the original
     verdict. Optional filters: max_confidence (float 0-1), novelty_types
-    (comma-sep list, e.g. 'new_synthesis,correction')."""
+    (comma-sep list, e.g. 'new_synthesis,correction'), needs_canonicalization
+    (checkbox; only entries lacking canonical_form)."""
     extra: list[str] = ["--reverify-register"]
     mc = (max_confidence or "").strip()
     if mc:
@@ -661,6 +663,8 @@ async def maintenance_reverify_register(
     nt = (novelty_types or "").strip()
     if nt:
         extra.extend(["--reverify-register-novelty-types", nt])
+    if (needs_canonicalization or "").strip().lower() in ("on", "true", "1", "yes"):
+        extra.append("--reverify-register-needs-canonicalization")
     result = await _spawn_maintenance_subprocess(
         _journal_path(name), extra, kind="reverify-register",
     )

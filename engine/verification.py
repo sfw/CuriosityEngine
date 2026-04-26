@@ -1725,6 +1725,7 @@ class VerificationMixin:
         max_confidence: Optional[float] = None,
         novelty_types: Optional[list[str]] = None,
         only_new_synthesis: bool = False,
+        needs_canonicalization: bool = False,
         reason: str = "admin re-verify under updated rules",
     ) -> dict:
         """Re-run the verifier over existing register entries WITHOUT mutating
@@ -1736,6 +1737,10 @@ class VerificationMixin:
           - max_confidence: only re-verify entries with verified_confidence ≤ this
           - novelty_types: only re-verify entries whose novelty_type is in this set
           - only_new_synthesis: convenience shorthand for novelty_types=['new_synthesis']
+          - needs_canonicalization: only re-verify entries that LACK a populated
+            canonical_form (predate the Phase 1 canonicalization layer). Use to
+            scope a reverify pass to legacy "dark" entries without re-running
+            the heavy verifier on entries already canonicalized.
 
         Use this after changing verification rules (e.g. the phase-1 guard for
         central-move prior art, the skeptic smell test, or the peer-system
@@ -1761,11 +1766,15 @@ class VerificationMixin:
                 continue
             if max_confidence is not None and float(e.get("verified_confidence", 0.0)) > max_confidence:
                 continue
+            if needs_canonicalization and (e.get("canonical_form") or {}).get("move_predicate"):
+                # Entry already has a populated canonical_form — skip; the
+                # caller wants to scope to legacy "dark" entries only.
+                continue
             candidates.append(e)
 
         print(f"\n--- RE-VERIFYING {len(candidates)} register entr(ies) "
               f"(filters: only_ids={bool(only_ids)}, novelty={novelty_set or 'any'}, "
-              f"max_conf={max_confidence}) ---")
+              f"max_conf={max_confidence}, needs_canon={needs_canonicalization}) ---")
         stats = {"examined": 0, "verdict_changed": 0, "same_verdict": 0, "errors": 0, "skipped": 0}
 
         for e in candidates:
