@@ -1,11 +1,17 @@
-"""academic_search — search across Crossref, arXiv, and Semantic Scholar.
+"""academic_search — search across Crossref, arXiv, OpenAlex, and Semantic Scholar.
 
-Crossref + arXiv are keyless. Semantic Scholar's public tier shares a
-1000 req/s global bucket across ALL unauthenticated users — burst
-exhaustion is common. Set the SEMANTIC_SCHOLAR_API_KEY environment
-variable to use a private 1 req/s bucket; without it we still work but
-will hit 429s during shared-bucket exhaustion. Apply for a free key at:
+Default sources are keyless: Crossref, arXiv, OpenAlex. Semantic Scholar is
+opt-in: its public tier shares a 1000 req/s global bucket across ALL
+unauthenticated users and burst exhaustion is common, so we only include
+it in the default source list when SEMANTIC_SCHOLAR_API_KEY is set in the
+environment (which gives us a private 1 req/s bucket). Callers that
+explicitly request `sources=["semantic_scholar"]` always get it tried,
+keyed or not. Apply for a free key at:
 https://www.semanticscholar.org/product/api#api-key-form
+
+OpenAlex enters the "polite pool" (faster + more consistent latency) when
+OPENALEX_MAILTO is set in the environment; without it we still get the
+default pool's 10 req/s.
 """
 
 from __future__ import annotations
@@ -18,7 +24,7 @@ from typing import Optional
 import httpx
 
 from engine.tools.base import Tool, ToolError
-from engine.tools._rate_limits import ARXIV, CROSSREF, SEMANTIC_SCHOLAR
+from engine.tools._rate_limits import ARXIV, CROSSREF, OPENALEX, SEMANTIC_SCHOLAR
 
 _USER_AGENT = "CuriosityEngine/0.1 (research use; contact via repo)"
 _TIMEOUT = 25.0
@@ -35,9 +41,32 @@ def _semantic_scholar_headers() -> dict:
     return headers
 
 
+def _has_semantic_scholar_key() -> bool:
+    return bool((os.environ.get("SEMANTIC_SCHOLAR_API_KEY") or "").strip())
+
+
+def _openalex_mailto() -> str:
+    return (os.environ.get("OPENALEX_MAILTO") or "").strip()
+
+
+def _reconstruct_inverted_abstract(inverted: Optional[dict]) -> str:
+    """OpenAlex returns abstracts as {word: [positions]}; reconstruct in order."""
+    if not inverted:
+        return ""
+    positions: list[tuple[int, str]] = []
+    for word, idxs in inverted.items():
+        for i in idxs or []:
+            try:
+                positions.append((int(i), word))
+            except (TypeError, ValueError):
+                continue
+    positions.sort(key=lambda p: p[0])
+    return " ".join(w for _, w in positions)
+
+
 @dataclass
 class AcademicResult:
-    source: str                       # "crossref" | "arxiv" | "semantic_scholar"
+    source: str                       # "crossref" | "arxiv" | "openalex" | "semantic_scholar"
     title: str
     authors: list[str] = field(default_factory=list)
     year: Optional[int] = None
@@ -223,11 +252,97 @@ def _semantic_scholar_search(query: str, limit: int) -> list[AcademicResult]:
     return out
 
 
+def _openalex_search(query: str, limit: int) -> list[AcademicResult]:
+    """OpenAlex Works API. https://docs.openalex.org/
+
+    Default pool allows 10 req/s; setting OPENALEX_MAILTO in the env enters
+    the polite pool (faster + more consistent latency, same 10 req/s).
+    Abstracts are returned as an inverted index (word → positions) which we
+    reconstruct in-place.
+    """
+    OPENALEX.acquire()
+    url = "https://api.openalex.org/works"
+    params: dict = {
+        "search": query,
+        "per-page": min(max(1, limit), 50),
+        "select": (
+            "id,doi,title,authorships,publication_year,primary_location,"
+            "abstract_inverted_index,cited_by_count"
+        ),
+    }
+    mailto = _openalex_mailto()
+    if mailto:
+        params["mailto"] = mailto
+    headers = {"User-Agent": _USER_AGENT}
+    if mailto:
+        headers["From"] = mailto
+    with httpx.Client(timeout=_TIMEOUT, headers=headers) as c:
+        r = c.get(url, params=params)
+        if r.status_code == 429:
+            cooldown = OPENALEX.note_failure()
+            raise ToolError(
+                f"openalex rate limited (HTTP 429) — {cooldown:.0f}s cooldown engaged"
+            )
+        r.raise_for_status()
+        OPENALEX.note_success()
+        data = r.json()
+
+    out: list[AcademicResult] = []
+    for item in (data.get("results") or [])[:limit]:
+        title = (item.get("title") or "").strip()
+        authors: list[str] = []
+        for a in item.get("authorships") or []:
+            name = ((a.get("author") or {}).get("display_name") or "").strip()
+            if name:
+                authors.append(name)
+        year = item.get("publication_year")
+        try:
+            year = int(year) if year is not None else None
+        except (TypeError, ValueError):
+            year = None
+        venue = ""
+        primary = item.get("primary_location") or {}
+        source_obj = primary.get("source") or {}
+        venue = (source_obj.get("display_name") or "").strip()
+        abstract = _reconstruct_inverted_abstract(item.get("abstract_inverted_index"))
+        doi_full = (item.get("doi") or "").strip()
+        # OpenAlex returns DOIs as full URLs ("https://doi.org/..."); normalize
+        # to the bare identifier for parity with crossref/semantic_scholar.
+        doi = doi_full.replace("https://doi.org/", "") if doi_full else ""
+        openalex_id = (item.get("id") or "").rsplit("/", 1)[-1]
+        url_out = doi_full or (item.get("id") or "")
+        out.append(AcademicResult(
+            source="openalex",
+            title=title,
+            authors=authors,
+            year=year,
+            venue=venue,
+            abstract=abstract,
+            url=url_out,
+            doi=doi,
+            identifier=openalex_id or doi,
+            citation_count=item.get("cited_by_count"),
+        ))
+    return out
+
+
 _SEARCHERS = {
     "crossref": _crossref_search,
     "arxiv": _arxiv_search,
+    "openalex": _openalex_search,
     "semantic_scholar": _semantic_scholar_search,
 }
+
+
+def _default_sources() -> list[str]:
+    """Default source list for unspecified callers. Always includes
+    crossref/arxiv/openalex; includes semantic_scholar only when an API key
+    is set (otherwise the shared-bucket public tier reliably 429s during
+    gap-scan bursts and just adds noise to the logs)."""
+    sources = ["crossref", "arxiv", "openalex"]
+    if _has_semantic_scholar_key():
+        sources.append("semantic_scholar")
+    return sources
 
 
 def count_results_structured(
@@ -255,7 +370,7 @@ def count_results_structured(
     query = (query or "").strip()
     if not query:
         return {"total": 0, "per_source": {}, "errors": ["empty query"], "complete": False}
-    srcs = list(sources) if sources else list(_SEARCHERS.keys())
+    srcs = list(sources) if sources else _default_sources()
     unknown = [s for s in srcs if s not in _SEARCHERS]
     if unknown:
         return {
@@ -324,11 +439,13 @@ def _format_results(results: list[AcademicResult], max_chars: int = 20_000) -> s
 class AcademicSearchTool(Tool):
     name = "academic_search"
     description = (
-        "Search academic literature across Crossref, arXiv, and Semantic Scholar "
-        "(keyless). Returns unified results with title, authors, year, venue, abstract, "
-        "DOI, url, and citation count where available. Use for discovering primary "
-        "sources, checking prior art, and building citation lists. Specify `sources` "
-        "to restrict to one or more providers."
+        "Search academic literature across Crossref, arXiv, OpenAlex, and (when "
+        "keyed) Semantic Scholar. Returns unified results with title, authors, "
+        "year, venue, abstract, DOI, url, and citation count where available. "
+        "Use for discovering primary sources, checking prior art, and building "
+        "citation lists. Specify `sources` to restrict to one or more providers; "
+        "semantic_scholar is opt-in and skipped from the default list when no "
+        "API key is configured."
     )
     input_schema = {
         "type": "object",
@@ -339,8 +456,14 @@ class AcademicSearchTool(Tool):
             },
             "sources": {
                 "type": "array",
-                "items": {"type": "string", "enum": ["crossref", "arxiv", "semantic_scholar"]},
-                "description": "Subset of sources to query. Default: all three.",
+                "items": {
+                    "type": "string",
+                    "enum": ["crossref", "arxiv", "openalex", "semantic_scholar"],
+                },
+                "description": (
+                    "Subset of sources to query. Default: crossref + arxiv + "
+                    "openalex (+ semantic_scholar if SEMANTIC_SCHOLAR_API_KEY is set)."
+                ),
             },
             "limit_per_source": {
                 "type": "integer",
@@ -358,7 +481,7 @@ class AcademicSearchTool(Tool):
         query = (args.get("query") or "").strip()
         if not query:
             raise ToolError("no query provided")
-        sources = args.get("sources") or list(_SEARCHERS.keys())
+        sources = args.get("sources") or _default_sources()
         if isinstance(sources, str):
             sources = [sources]
         unknown = [s for s in sources if s not in _SEARCHERS]

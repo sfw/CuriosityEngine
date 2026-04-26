@@ -61,6 +61,14 @@ SEMANTIC_SCHOLAR = RateLimiter(rate=1 / 5.0, burst=1, jitter=2.0, name="semantic
 # is generous, we just want to break perfect uniformity.
 CROSSREF = RateLimiter(rate=5.0, burst=10, jitter=0.2, name="crossref")
 
+# OpenAlex polite pool: 10 req/s, 100k/day with a mailto. Documented headroom
+# is comfortably above what gap-scan verification needs, but we still cap
+# below their published limit to leave room for other concurrent callers.
+# Set OPENALEX_MAILTO in the env to enter the polite pool (faster + more
+# consistent latency); without it we run in the default pool which still
+# allows 10 req/s.
+OPENALEX = RateLimiter(rate=10.0, burst=10, jitter=0.2, name="openalex")
+
 # --- Web-search scrapers -------------------------------------------------------
 # Note: engine/tools/web_search.py has its own per-host `_PaceGate` that
 # handles DuckDuckGo and Bing. _PaceGate enforces the same ~2s interval AND
