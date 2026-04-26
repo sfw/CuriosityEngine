@@ -1546,6 +1546,7 @@ def settings_save(
     engine_gap_verification_hit_threshold: int = Form(5),
     engine_confidence_drop_on_downgrade: float = Form(0.10),
     engine_question_priority_floor: float = Form(0.70),
+    engine_register_admission_mode: str = Form("scalar"),
     engine_analog_probe_max_analogs: int = Form(3),
     engine_assumption_probe_max_assumptions: int = Form(3),
 ):
@@ -1604,6 +1605,10 @@ def settings_save(
     gap_scan_classify_role = engine_gap_scan_classify_role.strip().lower()
     if gap_scan_classify_role and gap_scan_classify_role not in known_roles:
         gap_scan_classify_role = ""
+
+    register_admission_mode = engine_register_admission_mode.strip().lower()
+    if register_admission_mode not in ("scalar", "pareto"):
+        register_admission_mode = "scalar"
 
     # Render any extra [models.<name>] profiles back out verbatim — we don't
     # expose them in the web form yet, but we mustn't erase them on save.
@@ -1667,6 +1672,7 @@ def settings_save(
             f"gap_verification_hit_threshold = {max(1, min(100, engine_gap_verification_hit_threshold))}\n"
             f"confidence_drop_on_downgrade = {max(0.0, min(0.5, engine_confidence_drop_on_downgrade))}\n"
             f"question_priority_floor = {max(0.0, min(1.0, engine_question_priority_floor))}\n"
+            f'register_admission_mode = "{register_admission_mode}"\n'
             f"analog_probe_max_analogs = {max(1, min(10, engine_analog_probe_max_analogs))}\n"
             f"assumption_probe_max_assumptions = {max(1, min(10, engine_assumption_probe_max_assumptions))}\n"
         )

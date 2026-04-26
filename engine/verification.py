@@ -304,6 +304,82 @@ class VerificationMixin:
             "scored_against": scored,
         }
 
+    # ── Pareto admission (Phase 4) ──────────────────────────────────────
+
+    # Default axis set for the Pareto admission gate. Excludes
+    # `known_prior_art_score` because it's degenerate (all-zero) on
+    # journals that have no human-curated known_prior_art anchors —
+    # which is the common case. When a journal does maintain anchors
+    # AND verifier evaluations produce differentiator lists, that
+    # axis can be re-enabled via config (future work; not exposed
+    # in Phase 4).
+    _PARETO_AXES = (
+        "verified_confidence",
+        "premises_supported_count",
+        "peer_differentiators_count",
+        "inverse_alias_gap",
+    )
+
+    @staticmethod
+    def _compute_pareto_axes(
+        *,
+        verified_confidence: float,
+        premises_support_citations: list,
+        closest_peer_system: dict,
+        known_prior_art_evaluations: list,
+        alias_gap: float,
+    ) -> dict:
+        """Single source of truth for an entry's pareto_axes dict.
+        Used by verify_insight (new candidates) and the backfill pass
+        (existing entries). The full 5-axis dict is stored on the entry,
+        even though the default Pareto check uses only 4 axes — keeps
+        future axis tuning possible without re-running verification."""
+        kpa = known_prior_art_evaluations or []
+        return {
+            "verified_confidence": float(verified_confidence),
+            "premises_supported_count": len(premises_support_citations or []),
+            "peer_differentiators_count": len(
+                (closest_peer_system or {}).get("differentiators") or []
+            ),
+            "known_prior_art_score": (
+                float(sum(1 for ev in kpa if ev.get("differentiators")))
+                / max(1.0, len(kpa))
+            ),
+            "inverse_alias_gap": float(alias_gap),
+        }
+
+    @classmethod
+    def _pareto_dominates(cls, existing_axes: dict, candidate_axes: dict) -> bool:
+        """True iff `existing` dominates `candidate` (>= on every axis,
+        AND > on at least one). Missing axes are treated as 0.0."""
+        if not existing_axes or not candidate_axes:
+            return False
+        strict_better = False
+        for axis in cls._PARETO_AXES:
+            e = float(existing_axes.get(axis, 0.0))
+            c = float(candidate_axes.get(axis, 0.0))
+            if e < c:
+                return False  # existing loses on this axis → cannot dominate
+            if e > c:
+                strict_better = True
+        return strict_better
+
+    def _check_pareto_admission(self, candidate_axes: dict) -> tuple[bool, list[str]]:
+        """Returns (admitted, dominating_entry_ids). admitted=True iff no
+        existing register entry dominates the candidate on the configured
+        axis set. Entries without `pareto_axes` populated do not
+        participate in the comparison (they predate Phase 1)."""
+        dominating: list[str] = []
+        for e in self.journal.register:
+            if e.get("status") != "active":
+                continue
+            ex = e.get("pareto_axes") or {}
+            if not ex:
+                continue
+            if self._pareto_dominates(ex, candidate_axes):
+                dominating.append(e.get("id", ""))
+        return (not dominating, dominating)
+
     # ── Component-resolved novelty (Phase 3) ────────────────────────────
 
     @staticmethod
@@ -936,11 +1012,43 @@ class VerificationMixin:
         peer_has_differentiators = bool(
             closest_peer_system.get("differentiators") or []
         )
+
+        # Phase 4: compute pareto_axes once and persist on every entry
+        # (regardless of admission mode). Even in scalar mode the values
+        # are stored so that flipping admission_mode → pareto later
+        # doesn't require backfilling.
+        pareto_axes = self._compute_pareto_axes(
+            verified_confidence=verified_confidence,
+            premises_support_citations=result.get("premises_support_citations", []) or [],
+            closest_peer_system=closest_peer_system,
+            known_prior_art_evaluations=known_prior_art_evaluations,
+            alias_gap=alias_signal.get("gap", 1.0),
+        )
+
         outcome, entry_status, gate_reasons = self._register_gate(
             verdict, verified_confidence, premises_supported, synthesis_findable,
             novelty_type=novelty_type,
             peer_has_differentiators=peer_has_differentiators,
         )
+
+        # Phase 4: Pareto admission check, applied AFTER the scalar gate
+        # approves. New entry is rejected if any existing active entry
+        # dominates it on the configured axis set. Scalar mode → no-op.
+        admission_mode = (
+            getattr(self.config, "register_admission_mode", "scalar") or "scalar"
+        ).strip().lower()
+        if outcome == "register" and admission_mode == "pareto":
+            admitted, dominating = self._check_pareto_admission(pareto_axes)
+            if not admitted:
+                ids = ", ".join(dominating[:3])
+                more = f" (+{len(dominating) - 3} more)" if len(dominating) > 3 else ""
+                print(
+                    f"  [pareto admission] candidate dominated by {ids}{more} "
+                    f"on axes {list(self._PARETO_AXES)} — rejecting."
+                )
+                outcome = "reject"
+                gate_reasons = list(gate_reasons) + [f"pareto_dominated_by={dominating[:3]}"]
+
         if outcome == "reject":
             print(f"  Not registered ({', '.join(gate_reasons)}).")
             return None
@@ -1009,20 +1117,7 @@ class VerificationMixin:
             known_prior_art_evaluations=list(known_prior_art_evaluations),
             canonical_form=dict(canonical_form),
             component_novelty=dict(component_novelty),
-            pareto_axes={
-                "verified_confidence": verified_confidence,
-                "premises_supported_count": len(
-                    result.get("premises_support_citations", []) or []
-                ),
-                "peer_differentiators_count": len(
-                    (closest_peer_system.get("differentiators") or [])
-                ),
-                "known_prior_art_score": float(sum(
-                    1 for ev in known_prior_art_evaluations
-                    if ev.get("differentiators")
-                )) / max(1.0, len(known_prior_art_evaluations)),
-                "inverse_alias_gap": alias_signal.get("gap", 1.0),
-            },
+            pareto_axes=pareto_axes,
         )
 
         self.journal.add_register_entry(register_entry)
@@ -1891,20 +1986,13 @@ class VerificationMixin:
                     )[:200]
                 )
             if not entry.get("pareto_axes") or force:
-                peer = entry.get("closest_peer_system") or {}
-                kpa = entry.get("known_prior_art_evaluations") or []
-                entry["pareto_axes"] = {
-                    "verified_confidence": float(entry.get("verified_confidence", 0.0)),
-                    "premises_supported_count": len(
-                        entry.get("premises_support_citations", []) or []
-                    ),
-                    "peer_differentiators_count": len(peer.get("differentiators") or []),
-                    "known_prior_art_score": (
-                        float(sum(1 for ev in kpa if ev.get("differentiators")))
-                        / max(1.0, len(kpa))
-                    ),
-                    "inverse_alias_gap": gap,
-                }
+                entry["pareto_axes"] = self._compute_pareto_axes(
+                    verified_confidence=float(entry.get("verified_confidence", 0.0)),
+                    premises_support_citations=entry.get("premises_support_citations", []) or [],
+                    closest_peer_system=entry.get("closest_peer_system") or {},
+                    known_prior_art_evaluations=entry.get("known_prior_art_evaluations") or [],
+                    alias_gap=gap,
+                )
             stats["canonicalized"] += 1
 
         # Persist once at the end — the journal save is atomic so we don't

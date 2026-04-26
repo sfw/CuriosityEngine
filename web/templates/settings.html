@@ -529,6 +529,29 @@
                  value="{{ connection.engine.question_priority_floor }}"
                  class="mt-1 w-32 px-3 py-2 rounded-lg border border-slate-700 bg-slate-900/60 text-sm mono" />
         </label>
+
+        <label class="block md:col-span-3">
+          <span class="text-xs uppercase tracking-wider text-slate-400">register_admission_mode</span>
+          <span class="block text-[11px] text-slate-500">
+            How the engine decides which validated insights enter the durable register.
+            <span class="mono">scalar</span> (default — backward compatible): single confidence floor +
+            status checks. <span class="mono">pareto</span>: ALSO require the new entry to be non-dominated
+            by any existing active entry across the 4-axis Pareto set
+            (<span class="mono">verified_confidence</span> × <span class="mono">premises_supported_count</span> ×
+            <span class="mono">peer_differentiators_count</span> × <span class="mono">inverse_alias_gap</span>).
+            Pareto rejects "just like X but slightly worse on every axis" admissions that the
+            scalar floor can't see. Phase 4 of the self-evolving verifier.
+          </span>
+          <select name="engine_register_admission_mode"
+                  class="mt-1 w-full md:w-64 px-3 py-2 rounded-lg border border-slate-700 bg-slate-900/60 text-sm mono">
+            <option value="scalar" {% if (connection.engine.register_admission_mode or 'scalar') == 'scalar' %}selected{% endif %}>
+              scalar (single confidence floor)
+            </option>
+            <option value="pareto" {% if connection.engine.register_admission_mode == 'pareto' %}selected{% endif %}>
+              pareto (4-axis non-dominated check)
+            </option>
+          </select>
+        </label>
       </div>
     </section>
 

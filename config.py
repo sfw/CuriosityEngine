@@ -149,6 +149,21 @@ class EngineSettings:
     # confidence on a verdict change is a hedge pattern. This floor keeps
     # stored confidence honest. Set to 0.0 to disable.
     confidence_drop_on_downgrade: float = 0.10
+    # Register admission policy. Two modes:
+    #   "scalar" (default — backward compatible): a candidate is admitted
+    #       iff verdict is validated AND verified_confidence >=
+    #       register_confidence_floor AND premises_supported AND novelty
+    #       isn't restatement/unsupported. Single-axis quality bar.
+    #   "pareto": ALL of the scalar mode's checks PLUS a Pareto-dominance
+    #       check against the existing register. A new candidate is rejected
+    #       if any existing active entry dominates it across the 4-axis
+    #       Pareto set: verified_confidence × premises_supported_count ×
+    #       peer_differentiators_count × inverse_alias_gap. Catches the
+    #       failure mode where a new entry is "just like X but slightly
+    #       worse on every axis" — an admission that the scalar floor
+    #       can't see.
+    # Phase 4 of the self-evolving verifier.
+    register_admission_mode: str = "scalar"
     # Questions below this priority are rejected at enqueue time (except
     # human-sourced questions, which always bypass). Default 0.0 = disabled.
     # An earlier default of 0.70 was found to starve new journals — early
@@ -312,6 +327,9 @@ class CuriosityEngineConfig:
             question_priority_floor=float(
                 eng_section.get("question_priority_floor", 0.70)
             ),
+            register_admission_mode=str(
+                eng_section.get("register_admission_mode", "scalar")
+            ).strip().lower() or "scalar",
             held_entries_enabled=bool(eng_section.get("held_entries_enabled", True)),
             held_confidence_floor=float(eng_section.get("held_confidence_floor", 0.7)),
             cross_ref_role=str(eng_section.get("cross_ref_role", "")).strip(),
@@ -671,6 +689,13 @@ confidence_drop_on_downgrade = {eng.confidence_drop_on_downgrade}
 # before the journal could build context). Set to a non-zero value only on
 # mature journals where you specifically want to prune low-priority noise.
 question_priority_floor = {eng.question_priority_floor}
+# Register admission mode. "scalar" = single confidence floor + status checks
+# (default; backward compatible). "pareto" = ALSO require the new entry to be
+# non-dominated by any existing active entry across the 4-axis Pareto set
+# (verified_confidence × premises_supported_count × peer_differentiators_count
+# × inverse_alias_gap). Pareto rejects "just like X but slightly worse on
+# every axis" admissions that the scalar floor can't see.
+register_admission_mode = "{eng.register_admission_mode}"
 # Held-state pipeline — when the verifier returns `inconclusive` (couldn't reach
 # the claim, not refuted it), insights become held register entries pending
 # settlement rather than being silently rejected. Held entries usually require
