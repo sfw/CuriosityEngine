@@ -877,3 +877,39 @@ Respond with EXACTLY this JSON structure (no other text):
   ],
   "risks_to_publication": ["1-3 specific risks that could stall the paper — e.g. data the team cannot obtain, a key measurement whose noise floor is too high, a confound the team must engineer around. Each risk in one short sentence."]
 }}"""
+
+
+CANONICAL_FORM_PROMPT = """You are extracting the CANONICAL STRUCTURED FORM of a research claim.
+
+Goal: render the claim's central architectural move as a stable structured tuple so two claims that are surface-different but structurally identical canonicalize to (approximately) the same tuple. Downstream code uses this canonical form to detect articulate restatements that surface-similarity alone misses.
+
+ENGINE DOMAIN: {engine_domain}
+CLAIM TITLE: {title}
+CLAIM DESCRIPTION:
+{description}
+
+CENTRAL ARCHITECTURAL MOVE (extracted by the verifier — your job is to structure it):
+{central_architectural_move}
+
+Fill these slots:
+- `move_predicate`: the verb or short verb-phrase the claim proposes. Lowercase, no hedging. Examples of shape (NOT for copy-paste): "replaces", "adds", "decomposes into", "gates on", "routes via". Pick the single verb that captures what the move actually does to the system.
+- `on_substrate`: the noun phrase naming what the move acts on — the system, component, signal, or representation being modified.
+- `with_mechanism`: the noun phrase naming the technique, algorithm, architecture, or data structure that delivers the move. Be specific — if the claim names a particular method (e.g. a specific aggregation rule, a specific gate, a specific representation), preserve it.
+- `target_domain`: short phrase naming the domain the claim operates in. Derive from the claim text, not from memorised defaults.
+- `key_constraints`: 2-4 short bullet phrases naming the load-bearing qualifiers — conditions or properties without which the claim collapses to a different (usually weaker or pre-existing) position.
+
+Rules:
+- Lowercase prose. No fluff. No hedging language ("may", "can", "potentially").
+- Slots must be derivable from the claim text. Do NOT invent constraints the claim does not assert.
+- Preserve specificity: if the claim names a specific algorithm, threshold, dimensionality, or topology, keep it.
+- If the claim has no clear central move (e.g. the description is purely motivational or the central move field is empty), return ALL slots empty. An empty canonical form is a valid output — fabrication is not.
+- Domain-neutral: do not import examples or assumptions from any specific research field. Stay grounded in the claim's own subject.
+
+Respond with EXACTLY this JSON (no other text):
+{{
+  "move_predicate": "...",
+  "on_substrate": "...",
+  "with_mechanism": "...",
+  "target_domain": "...",
+  "key_constraints": ["...", "..."]
+}}"""

@@ -174,6 +174,38 @@ class RegisterEntry:
     # the re-verify flow only appends here, preserving the audit trail.
     reverification_log: list[dict] = field(default_factory=list)
 
+    # ── Self-evolving verifier extensions (Tier 1 from ideation_on_ideation) ──
+
+    # Canonical structured form of the central architectural move, extracted
+    # by a deterministic prompt. Decouples surface lexical variation from
+    # underlying claim structure so alias detection and structural-delta
+    # scoring can run against a stable representation rather than free prose.
+    # Schema: {"move_predicate": str, "on_substrate": str, "with_mechanism": str,
+    #          "target_domain": str, "key_constraints": list[str]}
+    # Empty dict = entry predates the canonicalization layer (falls back to
+    # central_architectural_move free text). Populated going forward by
+    # verification + by the --backfill-canonical-forms admin pass.
+    canonical_form: dict = field(default_factory=dict)
+
+    # Per-component novelty status (Phase 3 — Phase 0 stub here).
+    # Tracks novelty independently for each architectural component
+    # (central_move, functional_decomposition rows, closest_peer_system),
+    # so reverification can flip a single component without forcing a
+    # binary entry-level verdict change. Schema:
+    #   {"central_move": "new_synthesis|extension|restatement|...",
+    #    "decomposition_<dimension_name>": "...",
+    #    "closest_peer_system": "..."}
+    component_novelty: dict = field(default_factory=dict)
+
+    # Pareto-axis values used by the multi-axis admission gate (Phase 4 —
+    # Phase 0 stub here). Single source of truth for the admission policy
+    # so we can swap scalar floor → Pareto check without re-deriving axis
+    # values at admission time. Schema (initial proposal):
+    #   {"verified_confidence": float, "premises_supported_count": int,
+    #    "peer_differentiators_count": int, "known_prior_art_score": float,
+    #    "inverse_alias_gap": float}
+    pareto_axes: dict = field(default_factory=dict)
+
 
 @dataclass
 class Prediction:

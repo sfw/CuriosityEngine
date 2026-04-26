@@ -8,8 +8,27 @@ from datetime import datetime, timezone
 from typing import Optional
 from uuid import uuid4
 
+from engine.embeddings import cosine
 from models import CrossReference, Insight, Prediction, RegisterEntry  # noqa: F401
-from prompts import PREDICTION_CHECK_PROMPT, VERIFY_PROMPT
+from prompts import CANONICAL_FORM_PROMPT, PREDICTION_CHECK_PROMPT, VERIFY_PROMPT
+
+# Alias-gap thresholds. The metric is `gap = 1 - similarity` where similarity
+# combines structured-slot match (predicate / substrate / mechanism) with
+# embedding cosine on the canonical-form text. Smaller gap = closer alias.
+#
+#   gap < ALIAS_GAP_STRICT  → near-identical canonical form. Treated as an
+#                              articulate restatement: novelty_type is
+#                              downgraded and the candidate's verdict is
+#                              flagged for register-gate scrutiny.
+#   gap < ALIAS_GAP_BAND    → in the disagreement-gating band. Logged as a
+#                              soft alias signal; does NOT mechanically
+#                              downgrade in Phase 1, but populates
+#                              `aliasing_against` on the canonical_form for
+#                              downstream review (Phase 2 will use this to
+#                              trigger structured-delta scoring).
+#   gap >= ALIAS_GAP_BAND   → comfortably distinct. No alias signal.
+ALIAS_GAP_STRICT = 0.15
+ALIAS_GAP_BAND = 0.30
 
 
 def _prompt_line(prompt: str) -> str:
@@ -118,6 +137,142 @@ class VerificationMixin:
         if novelty_type == "unsupported":
             reasons.append("unsupported_premises")
         return ("reject", "", reasons)
+
+    # ── Canonicalization layer (Phase 1 — feeds alias-gap detection) ──
+
+    @staticmethod
+    def _canonical_form_text(c: dict) -> str:
+        """Concatenated slot text used as the embedding input. Order-stable
+        so the same canonical form embeds to (approximately) the same vector
+        across calls."""
+        if not c:
+            return ""
+        parts = [
+            c.get("move_predicate") or "",
+            c.get("on_substrate") or "",
+            c.get("with_mechanism") or "",
+            c.get("target_domain") or "",
+        ]
+        for k in (c.get("key_constraints") or []):
+            parts.append(str(k))
+        return " | ".join(p.strip() for p in parts if p and str(p).strip())
+
+    def _canonicalize_central_move(
+        self,
+        title: str,
+        description: str,
+        central_architectural_move: str,
+    ) -> dict:
+        """Extract the canonical structured form of a claim. Returns an empty
+        dict if the verifier could not produce a clean canonical form (which
+        is itself a valid signal: claims with no clean canonical form are
+        usually motivational rather than load-bearing)."""
+        move = (central_architectural_move or "").strip()
+        if not move:
+            return {}
+        prompt = CANONICAL_FORM_PROMPT.format(
+            engine_domain=getattr(self.config, "domain", "") or "(unspecified)",
+            title=title,
+            description=description,
+            central_architectural_move=move,
+        )
+        try:
+            result = self._call_verifier(prompt, max_tokens=600)
+        except Exception as e:  # noqa: BLE001 — canonicalization is best-effort
+            print(f"  [canonicalize] failed: {type(e).__name__}: {e}")
+            return {}
+        canonical = {
+            "move_predicate": (result.get("move_predicate") or "").strip().lower(),
+            "on_substrate": (result.get("on_substrate") or "").strip().lower(),
+            "with_mechanism": (result.get("with_mechanism") or "").strip().lower(),
+            "target_domain": (result.get("target_domain") or "").strip().lower(),
+            "key_constraints": [
+                str(c).strip().lower() for c in (result.get("key_constraints") or [])
+                if str(c).strip()
+            ],
+        }
+        # An empty move_predicate means the model gave up on structuring —
+        # treat as no canonical form rather than a partial one (avoids
+        # downstream alias-gap math on a degenerate vector).
+        if not canonical["move_predicate"]:
+            return {}
+        return canonical
+
+    def _alias_gap(self, candidate: dict) -> dict:
+        """Compute the alias gap between `candidate` (a canonical form) and
+        every register entry that has a populated canonical_form. Returns:
+            {"gap": float in [0,1],
+             "nearest_ids": list[str],
+             "scored_against": int}
+        gap=0.0 means perfect alias of nearest entry; gap=1.0 means
+        orthogonal (or no comparable entries on file).
+
+        Scoring combines:
+          - structured-slot match: fraction of {predicate, substrate,
+            mechanism} that match exactly between candidate and existing
+            (lowercase string equality after canonicalization, not embedding)
+          - embedding cosine on the full canonical-form text, when an
+            embedding client is available
+
+        The combined score weights slots heavier (0.6) than embeddings (0.4)
+        because exact slot matches are a stronger restatement signal than
+        soft text similarity. If no embedding client is configured, falls
+        back to slot-only scoring."""
+        if not candidate or not candidate.get("move_predicate"):
+            return {"gap": 1.0, "nearest_ids": [], "scored_against": 0}
+
+        candidate_text = self._canonical_form_text(candidate)
+        candidate_emb: Optional[list[float]] = None
+        emb_client = getattr(self, "embedding_client", None)
+        if emb_client is not None and candidate_text:
+            try:
+                candidate_emb = emb_client.embed([candidate_text])[0]
+            except Exception as e:  # noqa: BLE001 — embedding is optional
+                print(f"  [alias-gap] embedding failed: {type(e).__name__}: {e}")
+                candidate_emb = None
+
+        best_score = 0.0
+        nearest_ids: list[str] = []
+        scored = 0
+        for e in self.journal.register:
+            if e.get("status") != "active":
+                continue
+            ec = e.get("canonical_form") or {}
+            if not ec.get("move_predicate"):
+                continue
+            scored += 1
+
+            # Structured-slot match
+            slot_hits = sum([
+                ec.get("move_predicate") == candidate.get("move_predicate"),
+                ec.get("on_substrate") == candidate.get("on_substrate"),
+                ec.get("with_mechanism") == candidate.get("with_mechanism"),
+            ])
+            slot_score = slot_hits / 3.0
+
+            # Embedding cosine (best-effort)
+            emb_score = 0.0
+            if candidate_emb is not None:
+                existing_text = self._canonical_form_text(ec)
+                if existing_text:
+                    try:
+                        existing_emb = emb_client.embed([existing_text])[0]
+                        emb_score = max(0.0, cosine(candidate_emb, existing_emb))
+                    except Exception:  # noqa: BLE001
+                        emb_score = 0.0
+
+            combined = (0.6 * slot_score) + (0.4 * emb_score) if candidate_emb is not None else slot_score
+            if combined > best_score:
+                best_score = combined
+                nearest_ids = [e.get("id")]
+            elif combined == best_score and best_score > 0:
+                nearest_ids.append(e.get("id"))
+
+        return {
+            "gap": max(0.0, 1.0 - best_score),
+            "nearest_ids": nearest_ids[:5],
+            "scored_against": scored,
+        }
 
     def verify_insight(
         self,
@@ -403,6 +558,65 @@ class VerificationMixin:
                 f"conf {_pre:.2f} → {verified_confidence:.2f} (penalty {_penalty:.2f})"
             )
 
+        # ── Canonicalization layer (Phase 1) ─────────────────────────────
+        # Extract the canonical structured form of the candidate's central
+        # move and compute the alias gap against existing register entries.
+        # The result is persisted on the RegisterEntry; an extra `aliasing_against`
+        # key carries the IDs of close-but-not-identical entries we want to
+        # flag for downstream review. Strict aliases (gap below the threshold)
+        # downgrade novelty_type new_synthesis → extension, mirroring the
+        # peer-system / phase-1 / known-prior-art guards above.
+        canonical_form = self._canonicalize_central_move(
+            insight.title, insight.description, central_architectural_move,
+        )
+        alias_signal: dict = {"gap": 1.0, "nearest_ids": [], "scored_against": 0}
+        if canonical_form:
+            alias_signal = self._alias_gap(canonical_form)
+            gap = alias_signal["gap"]
+            nearest = alias_signal["nearest_ids"]
+            scored = alias_signal["scored_against"]
+            if scored > 0:
+                if gap < ALIAS_GAP_STRICT and nearest:
+                    print(
+                        f"  [alias-gap] STRICT — gap={gap:.2f} (<{ALIAS_GAP_STRICT}) "
+                        f"vs {nearest} (canonicalized form is near-identical)."
+                    )
+                    canonical_form["aliasing_against"] = nearest
+                    if novelty_type == "new_synthesis":
+                        print(
+                            f"  [alias-gap guard] near-identical canonical form to "
+                            f"{nearest[0]} — downgrading new_synthesis → extension."
+                        )
+                        _penalty = float(getattr(
+                            self.config, "confidence_drop_on_downgrade", 0.10,
+                        ))
+                        _pre = verified_confidence
+                        verified_confidence = max(0.0, verified_confidence - _penalty)
+                        novelty_type = "extension"
+                        synthesis_findable = True
+                        print(
+                            f"  [confidence-drop] alias downgrade — "
+                            f"conf {_pre:.2f} → {verified_confidence:.2f} (penalty {_penalty:.2f})"
+                        )
+                elif gap < ALIAS_GAP_BAND and nearest:
+                    print(
+                        f"  [alias-gap] BAND — gap={gap:.2f} (<{ALIAS_GAP_BAND}) "
+                        f"vs {nearest} (soft alias signal; no mechanical downgrade)."
+                    )
+                    canonical_form["aliasing_against"] = nearest
+                else:
+                    print(
+                        f"  [alias-gap] CLEAR — gap={gap:.2f} vs nearest "
+                        f"of {scored} canonicalized entr{'y' if scored == 1 else 'ies'}."
+                    )
+            else:
+                print(
+                    "  [alias-gap] no canonicalized register entries on file yet — "
+                    "skipping comparison."
+                )
+        else:
+            print("  [canonicalize] empty canonical form — claim has no clean structural move.")
+
         print(f"  Verdict: {verdict} · novelty={novelty_type or '?'} "
               f"· premises={'✓' if premises_supported else '✗'} "
               f"· synthesis_findable={'✓' if synthesis_findable else '✗'}")
@@ -471,6 +685,21 @@ class VerificationMixin:
             skeptic_probe=dict(skeptic_probe),
             target_application_domain=target_application_domain,
             known_prior_art_evaluations=list(known_prior_art_evaluations),
+            canonical_form=dict(canonical_form),
+            pareto_axes={
+                "verified_confidence": verified_confidence,
+                "premises_supported_count": len(
+                    result.get("premises_support_citations", []) or []
+                ),
+                "peer_differentiators_count": len(
+                    (closest_peer_system.get("differentiators") or [])
+                ),
+                "known_prior_art_score": float(sum(
+                    1 for ev in known_prior_art_evaluations
+                    if ev.get("differentiators")
+                )) / max(1.0, len(known_prior_art_evaluations)),
+                "inverse_alias_gap": alias_signal.get("gap", 1.0),
+            },
         )
 
         self.journal.add_register_entry(register_entry)
@@ -1094,5 +1323,103 @@ class VerificationMixin:
         print(
             f"\nReverify complete: registered={stats['registered']}  held={stats['held']}  "
             f"rejected={stats['rejected']}  errors={stats['errors']}"
+        )
+        return stats
+
+    # ── Canonical-form backfill (Phase 1 maintenance pass) ──────────────
+
+    def backfill_canonical_forms(self) -> dict:
+        """One-shot maintenance pass — populate `canonical_form` on every
+        active register entry that lacks one. Safe to interrupt and re-run:
+        entries already canonicalized are skipped, so the operation is
+        idempotent and incremental.
+
+        Also fills `pareto_axes` if the entry is missing those (Phase 0
+        wrote them, so older entries lack them; backfilling them here lets
+        Phase 4's admission gate flip on cleanly when it ships).
+
+        Returns a stats dict for logging / programmatic callers.
+        """
+        register = self.journal.register
+        candidates = [
+            e for e in register
+            if e.get("status") == "active" and not (e.get("canonical_form") or {})
+        ]
+        print(
+            f"\n--- BACKFILL CANONICAL FORMS ---\n"
+            f"  register: {len(register)} total · {len(candidates)} need canonicalization"
+        )
+        if not candidates:
+            print("  nothing to do.")
+            return {"scanned": len(register), "canonicalized": 0, "skipped": 0, "errors": 0}
+
+        stats = {"scanned": len(register), "canonicalized": 0, "skipped": 0, "errors": 0}
+        for i, entry in enumerate(candidates, 1):
+            rid = entry.get("id", "?")
+            title = (entry.get("title") or "")[:90]
+            move = (entry.get("central_architectural_move") or "").strip()
+            print(f"\n  [{i}/{len(candidates)}] {rid}: {title}")
+            if not move:
+                print("    [skip] no central_architectural_move on this entry")
+                stats["skipped"] += 1
+                continue
+            try:
+                canonical = self._canonicalize_central_move(
+                    entry.get("title") or "",
+                    entry.get("description") or "",
+                    move,
+                )
+            except Exception as e:  # noqa: BLE001
+                print(f"    [error] {type(e).__name__}: {e}")
+                stats["errors"] += 1
+                continue
+            if not canonical:
+                print("    [skip] canonicalization produced empty form")
+                stats["skipped"] += 1
+                continue
+
+            # Compute alias signal against entries already canonicalized
+            # (i.e. processed earlier in this pass + any populated
+            # going-forward by verify_insight).
+            try:
+                alias_signal = self._alias_gap(canonical)
+            except Exception as e:  # noqa: BLE001
+                print(f"    [warn] alias_gap failed: {type(e).__name__}: {e}")
+                alias_signal = {"gap": 1.0, "nearest_ids": [], "scored_against": 0}
+
+            gap = alias_signal["gap"]
+            nearest = alias_signal["nearest_ids"]
+            if alias_signal["scored_against"] > 0 and gap < ALIAS_GAP_BAND and nearest:
+                canonical["aliasing_against"] = nearest
+                tier = "STRICT" if gap < ALIAS_GAP_STRICT else "BAND"
+                print(f"    [alias-gap] {tier} gap={gap:.2f} vs {nearest}")
+
+            # Persist directly on the entry dict (Journal.register is a list
+            # of dicts post-load). Backfill `pareto_axes` opportunistically
+            # too; the values come from already-stored fields, no LLM.
+            entry["canonical_form"] = canonical
+            if not entry.get("pareto_axes"):
+                peer = entry.get("closest_peer_system") or {}
+                kpa = entry.get("known_prior_art_evaluations") or []
+                entry["pareto_axes"] = {
+                    "verified_confidence": float(entry.get("verified_confidence", 0.0)),
+                    "premises_supported_count": len(
+                        entry.get("premises_support_citations", []) or []
+                    ),
+                    "peer_differentiators_count": len(peer.get("differentiators") or []),
+                    "known_prior_art_score": (
+                        float(sum(1 for ev in kpa if ev.get("differentiators")))
+                        / max(1.0, len(kpa))
+                    ),
+                    "inverse_alias_gap": gap,
+                }
+            stats["canonicalized"] += 1
+
+        # Persist once at the end — the journal save is atomic so we don't
+        # want N writes for N entries.
+        self.journal.save()
+        print(
+            f"\nBackfill complete: canonicalized={stats['canonicalized']}  "
+            f"skipped={stats['skipped']}  errors={stats['errors']}"
         )
         return stats
