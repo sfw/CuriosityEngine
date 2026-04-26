@@ -408,6 +408,92 @@ class VerificationMixin:
                 frontier.append(cand)
         return frontier
 
+    def test_pareto_admission(self, axes_csv: str) -> dict:
+        """Diagnostic: run the Pareto admission check against the current
+        register with caller-supplied synthetic axes. Lets us exercise
+        the admission logic directly without finding a real candidate
+        that passes the heavy verifier first.
+
+        `axes_csv` is a 4-value comma-separated string in fixed order:
+            verified_confidence, premises_supported_count,
+            peer_differentiators_count, inverse_alias_gap
+
+        Example: "0.75,8,4,0.30" → a candidate with confidence 0.75,
+        8 premise citations, 4 peer differentiators, alias gap 0.30.
+        """
+        parts = [p.strip() for p in (axes_csv or "").split(",")]
+        if len(parts) != 4:
+            print(
+                f"\n--- PARETO ADMISSION TEST ---\n"
+                f"  ERROR: expected 4 comma-separated values "
+                f"(verified_confidence, premises_supported_count, "
+                f"peer_differentiators_count, inverse_alias_gap); got "
+                f"{len(parts)}: {parts!r}"
+            )
+            return {"error": "wrong arity", "given": parts}
+
+        try:
+            candidate = {
+                "verified_confidence": float(parts[0]),
+                "premises_supported_count": float(parts[1]),
+                "peer_differentiators_count": float(parts[2]),
+                "inverse_alias_gap": float(parts[3]),
+            }
+        except ValueError as e:
+            print(f"\n--- PARETO ADMISSION TEST ---\n  ERROR: could not parse: {e}")
+            return {"error": str(e), "given": parts}
+
+        admission_mode = (
+            getattr(getattr(self.connection, "engine", None), "register_admission_mode", "scalar") or "scalar"
+        ).strip().lower()
+        admitted, dominating = self._check_pareto_admission(candidate)
+
+        print("\n--- PARETO ADMISSION TEST ---")
+        print(f"  current admission mode: {admission_mode}")
+        print(f"  axes used by check:     {list(self._PARETO_AXES)}")
+        print()
+        print("  candidate axes:")
+        for axis in self._PARETO_AXES:
+            print(f"    {axis:<30}: {candidate[axis]}")
+        print()
+        print(f"  admitted: {admitted}")
+        if not admitted:
+            print(f"  dominated by {len(dominating)} entr(ies):")
+            register_lookup = {e.get("id", ""): e for e in self.journal.register}
+            for rid in dominating[:8]:
+                e = register_lookup.get(rid, {})
+                p = e.get("pareto_axes") or {}
+                title = (e.get("title") or "")[:60]
+                print(
+                    f"    {rid}: "
+                    f"conf={p.get('verified_confidence', 0):.2f} "
+                    f"prem={int(p.get('premises_supported_count', 0))} "
+                    f"peer={int(p.get('peer_differentiators_count', 0))} "
+                    f"inv_g={p.get('inverse_alias_gap', 0):.3f}  {title}"
+                )
+            if len(dominating) > 8:
+                print(f"    … (+{len(dominating) - 8} more)")
+            if admission_mode != "pareto":
+                print(
+                    f"\n  note: admission_mode is currently {admission_mode!r} — "
+                    f"this candidate would NOT actually be rejected at registration "
+                    f"under the current config. Flip register_admission_mode to "
+                    f"'pareto' (Settings page or engine.toml) to enable enforcement."
+                )
+        else:
+            print("  → no existing register entry dominates the candidate.")
+            if admission_mode == "pareto":
+                print(
+                    "  → under current config, this candidate would be admitted "
+                    "(if it also passes the scalar gate)."
+                )
+        return {
+            "admitted": admitted,
+            "dominating_entry_ids": dominating,
+            "admission_mode": admission_mode,
+            "candidate_axes": candidate,
+        }
+
     def show_pareto_frontier(self) -> None:
         """CLI: print the current Pareto frontier with each entry's
         winning axis (the axis on which it dominates at least one other
@@ -422,7 +508,7 @@ class VerificationMixin:
             1 for e in self.journal.register if e.get("status") == "active"
         )
         admission_mode = (
-            getattr(self.config, "register_admission_mode", "scalar") or "scalar"
+            getattr(getattr(self.connection, "engine", None), "register_admission_mode", "scalar") or "scalar"
         ).strip().lower()
 
         print("\n--- PARETO FRONTIER ---")
@@ -1124,7 +1210,7 @@ class VerificationMixin:
         # approves. New entry is rejected if any existing active entry
         # dominates it on the configured axis set. Scalar mode → no-op.
         admission_mode = (
-            getattr(self.config, "register_admission_mode", "scalar") or "scalar"
+            getattr(getattr(self.connection, "engine", None), "register_admission_mode", "scalar") or "scalar"
         ).strip().lower()
         if outcome == "register" and admission_mode == "pareto":
             # Defensive: if the candidate's pareto_axes are all zero
