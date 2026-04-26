@@ -627,7 +627,11 @@ Respond with EXACTLY this JSON structure (no other text):
 }}"""
 
 
-DIRECTIVE_HYPOTHESIS_PROMPT = """You are composing one section of a RESEARCH DIRECTIVE — a structured plan to test a verified theory. This call writes the HYPOTHESIS section only. Keep it tight; other calls handle other sections.
+DIRECTIVE_HYPOTHESIS_PROMPT = """You are composing one section of a RESEARCH DIRECTIVE.
+
+A research directive is a plan a research team executes to take a verified concept from idea to a publishable result. The team runs experiments, gathers data, and produces measurements. The directive is NOT a literature-watch list waiting on other researchers to publish.
+
+This call writes the HYPOTHESIS section only — what the team's own experiments will show if the theory holds.
 
 ENGINE DOMAIN: {engine_domain}
 REGISTER ENTRY UNDER TRANSLATION:
@@ -635,40 +639,43 @@ REGISTER ENTRY UNDER TRANSLATION:
 ATTACHED OPEN PREDICTIONS (claims already tied to this entry):
 {predictions_json}
 
-Your job: state what would be OBSERVABLE in the world if the theory were correct. Two to three sentences. No preamble, no section header — just the prose.
+Your job: state what the EXECUTING TEAM would measure or observe FROM THEIR OWN EXPERIMENTS if the theory were correct. Two to three sentences. No preamble, no section header — just the prose.
 
 Rules:
+- The observable is something the team produces from work they do — a measurement on data they collect, a score from a model they train, a state transition they trigger, a comparison they run. NOT "by date X a published paper reports Y" or "the field's benchmark releases show Z" — those are predictions about other researchers, not statements about what the team observes.
+- If an attached prediction is phrased as a literature-watch ("by 2027 a paper reports …"), translate it into the equivalent thing the team would measure if they ran the experiment themselves.
 - Derive the observable from the claim itself. Do not invent domain-specific details the source entry does not support.
-- An observable is something a researcher could point at — a measurement, a reported outcome, a state change, a published result. Not an internal belief, not a philosophical stance.
-- If the attached predictions already name a specific observable, restate it precisely; do not weaken or broaden it.
 - No examples from any specific field. Shape, not content.
 
 Respond with EXACTLY this JSON structure (no other text):
 {{
-  "hypothesis": "2-3 sentence observable-in-the-world statement"
+  "hypothesis": "2-3 sentence statement of what the team measures from their own experiments if the theory holds"
 }}"""
 
 
-DIRECTIVE_TEST_PLAN_PROMPT = """You are composing one section of a RESEARCH DIRECTIVE — a structured plan to test a verified theory. This call writes the TEST PLAN section only.
+DIRECTIVE_TEST_PLAN_PROMPT = """You are composing the TEST PLAN section of a RESEARCH DIRECTIVE.
+
+The directive is a plan the research team executes to take a verified concept toward a publishable result. The test plan is the EXPERIMENTAL PROGRAM the team runs themselves — data collection, measurement, analysis, and comparison. It is NOT a list of literatures to watch for other groups' announcements.
 
 ENGINE DOMAIN: {engine_domain}
 REGISTER ENTRY UNDER TRANSLATION:
 {register_entry_json}
-ATTACHED OPEN PREDICTIONS (with their `check_method` fields — expand these into executable steps):
+ATTACHED OPEN PREDICTIONS (with their `check_method` fields — translate these into experiments the team runs themselves):
 {predictions_json}
 HYPOTHESIS FROM PRIOR SECTION (for coherence; do not restate):
 {hypothesis}
 
-Your job: write 3–6 numbered steps that together constitute an executable test plan. Each step must have:
-- A clear INPUT (what the researcher starts with — existing data, a source, a prior step's output)
-- A concrete ACTION (what they do)
-- An OBSERVABLE OUTPUT (what they end up with — a file, a score, a list, a measurement)
+Your job: write 3–6 numbered steps that together form the team's experimental program. Each step must have:
+- A clear INPUT (what the team starts with — existing data they have or can collect, a source they will fetch, a prior step's output)
+- A concrete ACTION (what the team does — collect, measure, compute, compare, train, run)
+- An OBSERVABLE OUTPUT (what the team ends up with — a dataset, a score, a measurement, a chart, a comparison table)
 
 Rules:
+- The team is the actor. Steps describe THE TEAM's experiments, NOT predictions about what other researchers may publish. If a prediction's `check_method` is phrased as a literature-watch ("search for papers on X by 2027"), translate it: write the experiment the TEAM would run that produces the same kind of evidence directly. Only fall back to a literature-monitoring sub-step if running the experiment in-house is genuinely out of reach (e.g. requires hardware the team cannot access) — and even then, the literature-watch is supplementary to the team's own work.
 - No hand-wave phrasing. Phrases like "figure out", "iterate until it works", "try various approaches", "check relevant sources", "use an appropriate method" are forbidden.
-- Every step must be concretely executable by a person or agent with access to standard research tools.
-- Expand each prediction's `check_method` into at least one step. Do not drop predictions silently.
-- Do NOT name specific tools in this section — the Agentic Prompt section handles tool binding. Here, describe actions at the level of "search the literature for X", "compute Y from the dataset described in source Z", etc.
+- Every step must be concretely executable by the team with access to standard research tools and ordinary research-lab capabilities.
+- Do NOT drop predictions silently. Each open prediction must have a corresponding step or sub-step.
+- Do NOT name specific tools in this section — the Agentic Prompt section handles tool binding. Here, describe actions at the level of "compute X from dataset Y", "fit model Z and report metric W", etc.
 - Do NOT reference citations by URL here — the References section aggregates those.
 - No examples from any specific field. Describe structure, not content.
 
@@ -681,7 +688,7 @@ Respond with EXACTLY this JSON structure (no other text):
 }}"""
 
 
-DIRECTIVE_AGENTIC_PROMPT_PROMPT = """You are composing the AGENTIC PROMPT section of a research directive. The output of this call is what a human pastes into an LLM-driven agent (e.g. Claude Code, an MCP orchestrator) to execute the test plan. Fabrication here sends a researcher chasing ghosts. Grounding is non-negotiable.
+DIRECTIVE_AGENTIC_PROMPT_PROMPT = """You are composing the AGENTIC PROMPT section of a research directive. The directive is a plan the team executes to take a verified concept toward a publishable result; this section AUTOMATES THE LEGWORK of the test plan — literature scans, data fetches, code execution, citation tracking — so the team can focus on the experimental and analytical parts a human must drive. The output of this call is what a human pastes into an LLM-driven agent (e.g. Claude Code, an MCP orchestrator). Fabrication here sends a researcher chasing ghosts. Grounding is non-negotiable.
 
 **Return STRUCTURED FIELDS — not free-form prose.** The system will render your structured output into the final agentic prompt deterministically. This keeps your response small and checkable.
 
@@ -726,7 +733,7 @@ Respond with EXACTLY this JSON structure (no other text):
     "inconclusive": "concrete condition under which the test did not resolve"
   }},
   "tool_names_used": ["exact allowlist names that appear in any step's tool_call"],
-  "citations_used": ["URLs/DOIs/IDs from the allowlist that appear in any field"],
+  "citations_used": ["ONLY citations that appear inside the agentic-prompt structured fields above (inputs, setup_preamble, steps[].action/tool_call/expected_output, output_spec, stop_conditions). Other directive sections may freely cite from the allowlist; do NOT enumerate those here."],
   "unresolved_dependencies": ["items marked UNRESOLVED: descriptions of what was needed but was not in the allowlists; empty if fully grounded"]
 }}
 
@@ -735,32 +742,35 @@ Keep each `action` under 25 words. Keep each `tool_call` under 200 characters. K
 
 DIRECTIVE_VERIFICATION_CRITERIA_PROMPT = """You are composing the VERIFICATION CRITERIA section of a research directive — a 3-row table mapping test outcomes to concrete observable signals.
 
+The directive is a plan the team executes to take a verified concept toward a publishable result. Verification criteria are signals the team MEASURES FROM THEIR OWN EXPERIMENTAL OUTPUTS — the artifacts produced by running the Test Plan. Criteria are NOT predictions about what other researchers will publish or what benchmarks the field will release.
+
 ENGINE DOMAIN: {engine_domain}
 REGISTER ENTRY UNDER TRANSLATION:
 {register_entry_json}
-ATTACHED OPEN PREDICTIONS (with falsifiable_condition fields — expand these into observable signals):
+ATTACHED OPEN PREDICTIONS (with falsifiable_condition fields — translate these into measurements of the team's own outputs):
 {predictions_json}
 HYPOTHESIS (from prior section):
 {hypothesis}
 
 Write three rows: Confirmed, Refuted, Inconclusive. Each row's signal must be:
-- OBJECTIVELY measurable — a numerical threshold, a specific output pattern, a citation count, a dataset match, a state transition. Not "the approach demonstrates utility" or "evidence supports the claim".
-- Directly derivable from the predictions' falsifiable_conditions OR the hypothesis. No invented criteria.
+- OBJECTIVELY measurable from the team's own experimental outputs — a numerical threshold computed on data the team produces, a specific pattern in the team's measurements, a comparison ratio between two configurations the team runs, a state transition the team triggers. Not "the approach demonstrates utility", not "evidence supports the claim", not "the field has converged on X".
+- FORBIDDEN: criteria that depend on external publications, third-party benchmarks, or other research groups' outputs appearing by some date. Phrases like "by [date], at least one publicly accessible benchmark paper or code release reports …", "a published study confirms …", "the literature shows …", "by the target date, a comparative analysis appears …" are LITERATURE-WATCH phrasings — they predict what other researchers do, not what the executing team measures. Translate any such prediction's `falsifiable_condition` into the equivalent measurement of the team's OWN experimental output. Only if the experiment is genuinely beyond the team's reach (specialised hardware unavailable, etc.) may a criterion fall back on external evidence — and even then it should reference a SPECIFIC named source the team will inspect, not a generic future publication.
+- Directly derivable from the predictions' falsifiable_conditions (after translation) OR the hypothesis. No invented criteria.
 - Field-agnostic in shape — do not use examples from any specific research domain.
 
 Rules:
-- Each signal stands alone. A reader should be able to say "that signal either is present in the data or it isn't" without interpretation.
-- Inconclusive describes the state where the test could not resolve — not a weak version of confirmed/refuted. E.g. "required data unavailable at the target date" or "search returned no results matching the query shape", not "mixed evidence".
+- Each signal stands alone. A reader should be able to say "that signal either is present in the team's measurements or it isn't" without interpretation.
+- Inconclusive describes the state where the team's experiment could not resolve — e.g. "required dataset cannot be obtained", "the team's compute budget did not permit running the full comparison", "the measurement noise floor exceeds the predicted effect size". NOT a weak version of confirmed/refuted ("mixed evidence") and NOT a "no paper appeared" outcome.
 
 Respond with EXACTLY this JSON structure (no other text):
 {{
-  "confirmed": "observable signal for confirmation",
-  "refuted": "observable signal for refutation",
-  "inconclusive": "condition under which the test did not resolve"
+  "confirmed": "measurement of the team's own experiment that confirms the hypothesis",
+  "refuted": "measurement of the team's own experiment that refutes the hypothesis",
+  "inconclusive": "condition under which the team's experiment did not resolve"
 }}"""
 
 
-DIRECTIVE_VERIFIER_PROMPT = """You are the VERIFIER reviewing a research directive composed by the primary model. Your job is to catch fabrication before a human researcher acts on a ghost.
+DIRECTIVE_VERIFIER_PROMPT = """You are the VERIFIER reviewing a research directive composed by the primary model. The directive is a plan a team executes to take a verified concept toward a publishable result. Your job is to catch fabrication and framing failures before a human researcher acts on a ghost.
 
 ORIGINAL REGISTER ENTRY:
 {register_entry_json}
@@ -774,32 +784,96 @@ AGENT TOOL ALLOWLIST (the primary was told it MUST reference only from this set)
 DIRECTIVE MARKDOWN UNDER REVIEW:
 {directive_markdown}
 
-DIRECTIVE FOOTER (primary's self-declaration of what it used):
+DIRECTIVE FOOTER (primary's self-declaration of what it used IN THE AGENTIC PROMPT BLOCK):
 {directive_footer_json}
 
 Check each of these grounding rules. Flag violations; do NOT rationalise past them.
 
 1. **Citation grounding**: Every URL / DOI / arXiv ID in the directive markdown must appear verbatim in the CITATIONS ALLOWLIST. Partial matches don't count — "arxiv.org/abs/2502.18864" and "arxiv.org/abs/2502.18864v1" are DIFFERENT strings. Any citation not in the allowlist is a fabrication.
 
+   Note: the `## References` section is a deterministic dump of the entire allowlist by design — do not flag those entries as "unlisted"; they are the allowlist.
+
 2. **Tool grounding**: Every tool name in the agentic prompt's code block must exact-match the AGENT TOOL ALLOWLIST. Case-sensitive. Generic phrasings like "search engine" / "an agent tool" / "a web crawler" that don't name a specific allowlist tool are fabrications by omission.
 
-3. **Hand-wave detection**: Scan the Test Plan and Agentic Prompt for vague steps — phrases like "figure out the right approach", "try various prompts", "iterate until it works", "check various sources", "use an appropriate tool", "determine the best". These are hand-waves that render the directive non-executable.
+3. **Hand-wave detection**: Scan the Test Plan, Agentic Prompt, and Research Path for vague steps — phrases like "figure out the right approach", "try various prompts", "iterate until it works", "check various sources", "use an appropriate tool", "determine the best". These are hand-waves that render the directive non-executable.
 
-4. **Measurable criteria**: The Verification Criteria table must have concrete observable signals for each row — numerical thresholds, specific output patterns, citation counts, dataset matches. Vague language like "the approach demonstrates utility" is not measurable.
+4. **Measurable criteria**: The Verification Criteria table must measure THE TEAM'S OWN EXPERIMENTAL OUTPUTS. Each row needs a concrete observable signal — a numerical threshold computed on the team's data, a specific pattern in the team's measurements, a comparison the team runs. Vague language like "the approach demonstrates utility" is not measurable.
 
-5. **Self-declaration integrity**: The directive footer's `tool_names_used` and `citations_used` lists should match what's actually in the markdown. If the primary claimed in the footer that it used only allowlist-approved tools but the markdown body uses a non-allowlist tool, that's a self-declaration integrity failure.
+5. **Literature-watch leakage**: A directive criterion that depends on EXTERNAL publications, third-party benchmark releases, or future field-wide outputs is a framing failure — it shifts the burden onto other researchers instead of the team executing this directive. Flag any criterion in the Verification Criteria, Test Plan, or Hypothesis that contains phrasing like "by [date], at least one publicly accessible benchmark paper or code release reports …", "a published study confirms …", "the literature shows …", "by the target date a comparative analysis appears …". The exception is a criterion that names a SPECIFIC source the team will inspect (e.g. a specific dataset release the team monitors as supplementary evidence) — those are allowed when the team's own experimental work is genuinely out of reach.
+
+6. **Self-declaration integrity**: The directive footer's `tool_names_used` and `citations_used` lists describe what the primary used INSIDE the Agentic Prompt code block ONLY. Compare the footer against ONLY the content inside the ```...``` fenced block under `## Agentic Prompt`. Citations or tool mentions appearing in Theory, Hypothesis, Prior Art Positioning, Test Plan, Verification Criteria, Research Path to Publication, or References do NOT need to be enumerated in the footer — those sections may freely reference any allowlist citation. A self-declaration mismatch is when the AGENTIC PROMPT BLOCK names a tool or citation that the footer omits, OR when the footer claims something the agentic prompt block does not actually contain.
 
 Respond with EXACTLY this JSON structure (no other text):
 
 {{
   "ok": true,
-  "unlisted_citations": ["every URL/DOI/arXiv ID found in the directive markdown that is NOT in the citations allowlist — empty if clean"],
+  "unlisted_citations": ["every URL/DOI/arXiv ID found in the directive markdown that is NOT in the citations allowlist — empty if clean. Excludes the References section's deterministic dump."],
   "unlisted_tools": ["every tool name found in the agentic prompt that is NOT in the tool allowlist — empty if clean"],
-  "handwave_steps": ["direct quotes of hand-wave language in the Test Plan or Agentic Prompt — empty if clean"],
+  "handwave_steps": ["direct quotes of hand-wave language in the Test Plan, Agentic Prompt, or Research Path — empty if clean"],
   "non_measurable_criteria": ["direct quotes of non-measurable entries in the Verification Criteria table — empty if clean"],
-  "self_declaration_mismatches": ["descriptions of discrepancies between the footer and markdown — empty if clean"],
+  "literature_watch_leakage": ["direct quotes of criteria/steps that depend on external publications or third-party benchmarks appearing — empty if clean"],
+  "self_declaration_mismatches": ["descriptions of discrepancies between the footer and the AGENTIC PROMPT BLOCK ONLY — empty if clean. Discrepancies between the footer and other sections are NOT mismatches; those sections may freely cite from the allowlist."],
   "overall_assessment": "one paragraph stating whether the directive is executable as-is or what must be fixed",
   "severity": "clean|needs_fixes|fatal"
 }}
 
-`ok` is true iff all five checks pass (all arrays empty AND severity=clean). The retry loop depends on this boolean."""
+`ok` is true iff all six checks pass (all arrays empty AND severity=clean). The retry loop depends on this boolean."""
+
+
+DIRECTIVE_ELI5_PROMPT = """You are composing the IN-PLAIN-LANGUAGE section of a research directive. This section explains the verified concept to a curious non-specialist — someone smart and motivated but with no domain training in this area. The reader should walk away with an accurate, honest mental model of what is being claimed and why it matters.
+
+ENGINE DOMAIN: {engine_domain}
+REGISTER ENTRY UNDER TRANSLATION:
+{register_entry_json}
+HYPOTHESIS (from prior section):
+{hypothesis}
+
+Your job: write 3–5 sentences that a layperson can understand without losing the substance.
+
+Rules:
+- Avoid jargon. If a domain term is unavoidable, define it in-line in five words or fewer.
+- Do not water down the claim. The plain-language version should be a faithful translation, not a vague gesture.
+- Concrete > abstract. Where the original entry has a measurable quantity or a specific mechanism, name it in everyday terms.
+- No metaphors that misrepresent the mechanism. A metaphor is fine if it makes the structure clearer; a metaphor is wrong if a reader could draw incorrect inferences from it.
+- No examples from any specific field. Stay grounded in the entry's own subject.
+- No citations, no URLs, no jargon-laden references — those belong elsewhere.
+
+Respond with EXACTLY this JSON structure (no other text):
+{{
+  "eli5": "3-5 sentences explaining the concept and why it matters, accessible to a smart non-specialist"
+}}"""
+
+
+DIRECTIVE_RESEARCH_PATH_PROMPT = """You are composing the RESEARCH PATH TO PUBLICATION section of a research directive. This section is the human-facing strategic narrative — what a research team would do to take this concept from a verified idea to a published result. It is HIGHER LEVEL than the Test Plan or Agentic Prompt; those handle execution. This section answers: "if my team picked this up tomorrow, what study would we run, what would the paper look like, and how would we get there?"
+
+ENGINE DOMAIN: {engine_domain}
+REGISTER ENTRY UNDER TRANSLATION:
+{register_entry_json}
+HYPOTHESIS (from prior section):
+{hypothesis}
+TEST PLAN STEPS (from prior section, for coherence):
+{test_plan_json}
+
+Your job: write a structured research-program sketch. Each field is short — two or three sentences max. Do not duplicate the Test Plan; the Test Plan is the per-step experimental program, this section is the strategic envelope around it (study design, data, paper shape, venue class, phasing).
+
+Rules:
+- The team is the actor. Speak about what the team does, not about what the field will produce.
+- No literature-watch framing. "By target date X a paper appears" is forbidden — describe what the team's paper itself would contribute.
+- The paper's primary contribution should be derivable from the hypothesis and the Test Plan's measurements.
+- Phases are short — name the phase, what it focuses on, and what concrete artifact transitions the team to the next phase. 3 to 5 phases.
+- Target venue class is a CLASS not a specific journal/conference (e.g. "peer-reviewed venue in [the entry's primary field], emphasising methodological contributions"). The team will pick the specific venue based on what they produce.
+- No examples from any specific field. Speak in shape, not content.
+- No citations, no URLs.
+
+Respond with EXACTLY this JSON structure (no other text):
+{{
+  "study_design": "what kind of study is this — observational, experimental, methods-paper, replication, theoretical, etc. — and the high-level shape of the work the team will perform",
+  "data_and_instrumentation": "what data the team needs, where they get it, and what instruments / pipelines / models they need to build or assemble",
+  "experiments_summary": "one short paragraph summarising the experiments the team runs (the Test Plan elaborates the steps; this is the elevator pitch of the experimental program)",
+  "paper_structure": "the shape of the resulting paper — what sections it would have, what its primary contribution is, and what the central figures or tables would show",
+  "target_venue_class": "class of venue the work fits, in shape not specific name",
+  "phases": [
+    {{"phase": "phase name", "focus": "what the team does in this phase", "exit_criterion": "concrete artifact or measurement that signals the team can move to the next phase"}}
+  ],
+  "risks_to_publication": ["1-3 specific risks that could stall the paper — e.g. data the team cannot obtain, a key measurement whose noise floor is too high, a confound the team must engineer around. Each risk in one short sentence."]
+}}"""

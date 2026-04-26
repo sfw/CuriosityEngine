@@ -42,7 +42,9 @@ from typing import Optional
 
 from prompts import (
     DIRECTIVE_AGENTIC_PROMPT_PROMPT,
+    DIRECTIVE_ELI5_PROMPT,
     DIRECTIVE_HYPOTHESIS_PROMPT,
+    DIRECTIVE_RESEARCH_PATH_PROMPT,
     DIRECTIVE_TEST_PLAN_PROMPT,
     DIRECTIVE_VERIFICATION_CRITERIA_PROMPT,
     DIRECTIVE_VERIFIER_PROMPT,
@@ -160,8 +162,40 @@ class DirectivesMixin:
             register_entry_json=json.dumps(entry_for_prompt, indent=2),
             predictions_json=json.dumps(predictions, indent=2),
         )
-        result = self._call_directive_primary(prompt, max_tokens=_SECTION_MAX_TOKENS)
+        result = self._call_directive_primary_fast(prompt, max_tokens=_SECTION_MAX_TOKENS)
         return (result.get("hypothesis") or "").strip()
+
+    def _section_eli5(
+        self, entry_for_prompt: dict, engine_domain: str, hypothesis: str,
+    ) -> str:
+        prompt = DIRECTIVE_ELI5_PROMPT.format(
+            engine_domain=engine_domain,
+            register_entry_json=json.dumps(entry_for_prompt, indent=2),
+            hypothesis=hypothesis or "(none generated)",
+        )
+        result = self._call_directive_primary_fast(prompt, max_tokens=_SECTION_MAX_TOKENS)
+        return (result.get("eli5") or "").strip()
+
+    def _section_research_path(
+        self, entry_for_prompt: dict, engine_domain: str,
+        hypothesis: str, test_plan: list[dict],
+    ) -> dict:
+        prompt = DIRECTIVE_RESEARCH_PATH_PROMPT.format(
+            engine_domain=engine_domain,
+            register_entry_json=json.dumps(entry_for_prompt, indent=2),
+            hypothesis=hypothesis or "(none generated)",
+            test_plan_json=json.dumps(test_plan, indent=2),
+        )
+        result = self._call_directive_primary_fast(prompt, max_tokens=_SECTION_MAX_TOKENS)
+        return {
+            "study_design": (result.get("study_design") or "").strip(),
+            "data_and_instrumentation": (result.get("data_and_instrumentation") or "").strip(),
+            "experiments_summary": (result.get("experiments_summary") or "").strip(),
+            "paper_structure": (result.get("paper_structure") or "").strip(),
+            "target_venue_class": (result.get("target_venue_class") or "").strip(),
+            "phases": list(result.get("phases") or []),
+            "risks_to_publication": list(result.get("risks_to_publication") or []),
+        }
 
     def _section_test_plan(
         self, entry_for_prompt: dict, engine_domain: str,
@@ -292,6 +326,8 @@ class DirectivesMixin:
         agentic: dict,
         criteria: dict,
         citations: list[str],
+        eli5: str = "",
+        research_path: Optional[dict] = None,
         flags: Optional[list[str]] = None,
     ) -> str:
         rid = entry.get("id", "unknown")
@@ -320,6 +356,10 @@ class DirectivesMixin:
             f"**Verdict**: {verdict} · **Novelty**: {novelty} · "
             f"**Confidence**: {conf:.2f}"
         )
+        parts.append("")
+
+        parts.append("## In plain language")
+        parts.append(eli5 or "_(generator returned no plain-language summary)_")
         parts.append("")
 
         parts.append("## Theory")
@@ -369,11 +409,52 @@ class DirectivesMixin:
         parts.append(f"| Inconclusive | {(criteria.get('inconclusive') or '—').replace(chr(124), chr(92) + chr(124))} |")
         parts.append("")
 
+        parts.append("## Research Path to Publication")
+        parts.append(self._research_path_section(research_path or {}))
+        parts.append("")
+
         parts.append("## References")
         parts.append(self._references_section(citations))
         parts.append("")
 
         return "\n".join(parts)
+
+    def _research_path_section(self, rp: dict) -> str:
+        if not rp:
+            return "_(generator returned no research path)_"
+        lines: list[str] = []
+        for key, label in [
+            ("study_design", "Study design"),
+            ("data_and_instrumentation", "Data & instrumentation"),
+            ("experiments_summary", "Experiments"),
+            ("paper_structure", "Paper structure"),
+            ("target_venue_class", "Target venue class"),
+        ]:
+            val = (rp.get(key) or "").strip()
+            if val:
+                lines.append(f"**{label}.** {val}")
+                lines.append("")
+        phases = rp.get("phases") or []
+        if phases:
+            lines.append("**Phases.**")
+            lines.append("")
+            lines.append("| Phase | Focus | Exit criterion |")
+            lines.append("| --- | --- | --- |")
+            for p in phases:
+                ph = (p.get("phase") or "?").strip().replace("|", "\\|")
+                fc = (p.get("focus") or "—").strip().replace("|", "\\|")
+                ec = (p.get("exit_criterion") or "—").strip().replace("|", "\\|")
+                lines.append(f"| {ph} | {fc} | {ec} |")
+            lines.append("")
+        risks = rp.get("risks_to_publication") or []
+        if risks:
+            lines.append("**Risks to publication.**")
+            for r in risks:
+                lines.append(f"- {str(r).strip()}")
+            lines.append("")
+        if not lines:
+            return "_(generator returned no research path)_"
+        return "\n".join(lines).rstrip()
 
     # ── Pipeline orchestration ──────────────────────────────────────
 
@@ -401,15 +482,23 @@ class DirectivesMixin:
         predictions = entry.get("_attached_predictions", []) or []
 
         # Section 1: hypothesis
-        self._heartbeat("generating hypothesis (1/4)", t0)
+        self._heartbeat("generating hypothesis (1/6)", t0)
         try:
             hypothesis = self._section_hypothesis(entry_for_prompt, engine_domain, predictions)
         except Exception as e:  # noqa: BLE001
             print(f"  [error] hypothesis generation failed: {type(e).__name__}: {e}")
             hypothesis = ""
 
-        # Section 2: test plan (conditioned on hypothesis)
-        self._heartbeat("generating test plan (2/4)", t0)
+        # Section 2: ELI5 (depends on entry + hypothesis only — fast, small)
+        self._heartbeat("generating plain-language summary (2/6)", t0)
+        try:
+            eli5 = self._section_eli5(entry_for_prompt, engine_domain, hypothesis)
+        except Exception as e:  # noqa: BLE001
+            print(f"  [error] ELI5 generation failed: {type(e).__name__}: {e}")
+            eli5 = ""
+
+        # Section 3: test plan (conditioned on hypothesis)
+        self._heartbeat("generating test plan (3/6)", t0)
         try:
             test_plan = self._section_test_plan(
                 entry_for_prompt, engine_domain, predictions, hypothesis,
@@ -418,8 +507,8 @@ class DirectivesMixin:
             print(f"  [error] test plan generation failed: {type(e).__name__}: {e}")
             test_plan = []
 
-        # Section 3: agentic prompt (conditioned on hypothesis + test plan)
-        self._heartbeat("generating agentic prompt (3/4)", t0)
+        # Section 4: agentic prompt (conditioned on hypothesis + test plan)
+        self._heartbeat("generating agentic prompt (4/6)", t0)
         try:
             agentic = self._section_agentic_prompt(
                 entry_for_prompt, engine_domain, hypothesis, test_plan,
@@ -434,8 +523,8 @@ class DirectivesMixin:
                 "unresolved_dependencies": [f"generation failed: {type(e).__name__}"],
             }
 
-        # Section 4: verification criteria
-        self._heartbeat("generating verification criteria (4/4)", t0)
+        # Section 5: verification criteria
+        self._heartbeat("generating verification criteria (5/6)", t0)
         try:
             criteria = self._section_verification_criteria(
                 entry_for_prompt, engine_domain, predictions, hypothesis,
@@ -444,10 +533,21 @@ class DirectivesMixin:
             print(f"  [error] verification criteria generation failed: {type(e).__name__}: {e}")
             criteria = {"confirmed": "", "refuted": "", "inconclusive": ""}
 
+        # Section 6: research path to publication (strategic narrative)
+        self._heartbeat("generating research path (6/6)", t0)
+        try:
+            research_path = self._section_research_path(
+                entry_for_prompt, engine_domain, hypothesis, test_plan,
+            )
+        except Exception as e:  # noqa: BLE001
+            print(f"  [error] research path generation failed: {type(e).__name__}: {e}")
+            research_path = {}
+
         # Assemble markdown (deterministic)
         self._heartbeat("assembling markdown", t0)
         markdown = self._assemble_markdown(
             entry, hypothesis, test_plan, agentic, criteria, citations,
+            eli5=eli5, research_path=research_path,
         )
 
         # Verifier review pass
@@ -556,6 +656,7 @@ class DirectivesMixin:
             # Re-verify the regenerated output.
             current_markdown = self._assemble_markdown(
                 entry, hypothesis, test_plan, current_agentic, criteria, citations,
+                eli5=eli5, research_path=research_path,
             )
             footer = {
                 "title": (entry.get("title") or "").strip(),
@@ -602,6 +703,7 @@ class DirectivesMixin:
         )
         annotated = self._assemble_markdown(
             entry, hypothesis, test_plan, current_agentic, criteria, citations,
+            eli5=eli5, research_path=research_path,
             flags=current_flags,
         )
         return {
