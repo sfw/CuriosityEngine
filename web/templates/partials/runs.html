@@ -53,14 +53,16 @@
           <div class="flex items-center gap-2">
             {% if is_active %}
               {# Stop button — only present for actively-streaming runs.
-                 Click stops propagation so the <details> doesn't toggle when
-                 the user just wanted to terminate. JS handler attached
-                 globally via [data-kill-run]. #}
+                 Handler is attached globally via [data-kill-run] in
+                 base.html and calls preventDefault, which also suppresses
+                 the parent <summary>'s toggle. Do NOT add an inline
+                 `onclick="event.stopPropagation()"` — it fires in the
+                 target phase and stops the event from bubbling to the
+                 document-level delegated handler, so the click is lost. #}
               <button type="button"
                       data-kill-run
                       data-kill-run-url="/journals/{{ name }}/runs/{{ r.run_id }}/kill"
                       data-kill-run-id="{{ r.run_id }}"
-                      onclick="event.stopPropagation();"
                       title="Stop this run — sends SIGTERM, then SIGKILL after 3s if needed"
                       class="px-2 py-0.5 rounded-md bg-rose-600/80 hover:bg-rose-500 text-white text-[10px] font-medium shadow whitespace-nowrap disabled:opacity-50">
                 ⏹ Stop
