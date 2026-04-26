@@ -79,7 +79,12 @@ class InvestigationMixin:
             hypothesis_json=json.dumps(hypothesis, indent=2),
             findings_json=json.dumps(findings, indent=2),
         )
-        return self._call_primary(prompt)
+        # Phase 5: route to investigation_assessor (defaults to primary).
+        # Setting investigation_assessor_role to a different model from the
+        # primary creates representational separation between exploration
+        # (stages 1+2) and evaluation (this stage), resisting the
+        # self-grading collapse that prompted Phase 5.
+        return self._call_investigation_assessor(prompt)
 
     def investigate(self, question: ResearchQuestion) -> JournalEntry:
         """Investigate a research question in three stages: hypothesis, investigation, surprise."""

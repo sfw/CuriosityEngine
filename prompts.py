@@ -56,11 +56,11 @@ Respond with EXACTLY this JSON structure (no other text):
 Generate {n_questions} questions, ranked by priority_score."""
 
 
-HYPOTHESIS_PROMPT = """You are a research engine about to investigate a question in {domain}. Before investigating, commit to a specific hypothesis.
+HYPOTHESIS_PROMPT = """You are the EXPLORER persona of a research engine in {domain}. Your role is exploration: open, divergent, committal — pick the most specific answer you can defend and stake out a position. The ASSESSOR (a separate downstream stage) will do the evaluation; right now you are NOT evaluating, you are committing.
 
 QUESTION: {question}
 
-This step exists SOLELY so we can measure surprise later. Do not hedge. Do not say "it depends". Pick the most specific answer you can defend from what you currently believe, and commit to it.
+This step exists SOLELY so we can measure surprise later. The downstream assessor compares investigation findings against the hypothesis you commit to here. If you hedge, the surprise signal degenerates. So: do not hedge, do not say "it depends", do not pre-anticipate the assessor's review. Pick the most specific answer you can defend from what you currently believe, and commit to it. Even if the answer feels uncertain, name your single best guess and assign your honest pre-evidence confidence to it.
 
 Respond with EXACTLY this JSON structure (no other text):
 {{
@@ -99,17 +99,19 @@ After investigating, respond with EXACTLY this JSON structure (no other text):
 }}"""
 
 
-SURPRISE_PROMPT = """You are a research engine assessing how much an investigation surprised you relative to your pre-committed hypothesis.
+SURPRISE_PROMPT = """You are the ASSESSOR persona of a research engine. Your role is evaluation: closed, evidence-grounded, third-party. The EXPLORER (a separate prior stage) committed to a hypothesis BEFORE the investigation ran. Your job is to compare what the investigation found against what the explorer predicted, and assign an honest surprise score.
+
+You are NOT the explorer. You did not write the hypothesis. Treat it as an external claim you are reviewing — a prediction made by someone else that you now have evidence for or against. This separation is structural: when the explorer and assessor are the same persona, surprise scores systematically inflate to flatter the prior. Resist that.
 
 QUESTION: {question}
 
-YOUR PRE-INVESTIGATION HYPOTHESIS:
+PRE-INVESTIGATION HYPOTHESIS (committed by the explorer, BEFORE evidence arrived):
 {hypothesis_json}
 
-INVESTIGATION FINDINGS:
+INVESTIGATION FINDINGS (evidence the investigation phase actually surfaced):
 {findings_json}
 
-Your task: compare the findings to the hypothesis and produce an honest surprise assessment. A high surprise_delta means the findings diverged significantly from what you expected. A low surprise_delta means the investigation confirmed your prior. Be honest — the value of this system depends on calibrated surprise signals, not flattering ones.
+Your task: compare the findings to the hypothesis and produce an honest surprise assessment. A high surprise_delta means the findings diverged significantly from what the explorer predicted. A low surprise_delta means the investigation confirmed the prior. Be honest — the value of this system depends on calibrated surprise signals, not flattering ones. If the explorer's hypothesis was substantially right, say so plainly; if it missed in important ways, say that too.
 
 **CONFIDENCE CALIBRATION RULES (follow these — the system uses confidence_after downstream to weight insights):**
 

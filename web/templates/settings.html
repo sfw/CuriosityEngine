@@ -371,6 +371,37 @@
           </select>
         </label>
 
+        <label class="block md:col-span-3">
+          <span class="text-xs uppercase tracking-wider text-slate-400">investigation_assessor_role</span>
+          <span class="block text-[11px] text-slate-500">
+            Phase 5 of the self-evolving verifier. The investigation loop runs hypothesis (pre-search) →
+            investigate (with tools) → assess (post-search). Stages 1+2 are exploration; stage 3 is
+            evaluation. Routing the assessor to a different model from the primary creates a
+            <strong>representational separation</strong> between exploration and evaluation that resists
+            self-grading collapse — when the same model writes the hypothesis AND scores its own surprise,
+            scores systematically inflate to flatter the prior. Empty / <span class="mono">primary</span> = use
+            primary (default, backward-compatible). <span class="mono">verifier</span> recommended for
+            cross-family separation.
+          </span>
+          <select name="engine_investigation_assessor_role"
+                  class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-700 bg-slate-900/60 text-sm mono">
+            <option value="" {% if not connection.engine.investigation_assessor_role %}selected{% endif %}>
+              (default — use primary)
+            </option>
+            <option value="primary" {% if connection.engine.investigation_assessor_role == 'primary' %}selected{% endif %}>
+              primary · {{ connection.primary.name }}
+            </option>
+            <option value="verifier" {% if connection.engine.investigation_assessor_role == 'verifier' %}selected{% endif %}>
+              verifier · {{ connection.verifier.name }}
+            </option>
+            {% for extra_role, extra_profile in (connection.extras or {}).items() %}
+              <option value="{{ extra_role }}" {% if connection.engine.investigation_assessor_role == extra_role %}selected{% endif %}>
+                {{ extra_role }} · {{ extra_profile.name }}
+              </option>
+            {% endfor %}
+          </select>
+        </label>
+
         <label class="flex items-center gap-2 md:col-span-3">
           <input type="checkbox" name="engine_verify_insights"
                  {% if connection.engine.verify_insights %}checked{% endif %}

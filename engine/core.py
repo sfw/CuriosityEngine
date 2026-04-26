@@ -114,6 +114,19 @@ class CuriosityEngine(
         else:
             self.gap_scan_classify_client = build_client(gap_classify_profile)
 
+        # Phase 5: investigation_assessor — post-search assess (SURPRISE_PROMPT).
+        # Defaults to primary (backward-compat). Splitting to a different model
+        # from the primary (e.g. verifier) creates a representational separation
+        # between exploration (stages 1+2) and evaluation (stage 3) that
+        # resists self-grading per source insight r-9a35e387.
+        assessor_profile = getattr(self.connection, "investigation_assessor", None)
+        if assessor_profile is None or assessor_profile is self.connection.primary:
+            self.investigation_assessor_client: ModelClient = self.primary
+        elif assessor_profile is self.connection.verifier:
+            self.investigation_assessor_client = self.verifier
+        else:
+            self.investigation_assessor_client = build_client(assessor_profile)
+
         self.journal = Journal(
             config.journal_path,
             register_markdown_path=config.register_markdown_path,
@@ -153,6 +166,10 @@ class CuriosityEngine(
             gc_profile = getattr(self.connection, "gap_scan_classify", None)
             if gc_profile is not None:
                 print(f"  gap_scan_classify: {gc_profile.provider} / {gc_profile.name}")
+        if self.investigation_assessor_client is not self.primary:
+            ia_profile = getattr(self.connection, "investigation_assessor", None)
+            if ia_profile is not None:
+                print(f"  investigation_assessor: {ia_profile.provider} / {ia_profile.name}")
         tool_names = self.tool_registry.names()
         if tool_names:
             print(f"  tools:    {', '.join(tool_names)}")
@@ -251,6 +268,25 @@ class CuriosityEngine(
         to the configured directive_primary_fast client. Defaults to the
         same client as directive_primary, which itself defaults to primary."""
         return self.directive_primary_fast_client.complete_json(
+            prompt,
+            tools=None,
+            max_tokens=max_tokens,
+            policy=self.connection.retry,
+            on_retry=self._on_retry,
+        )
+
+    def _call_investigation_assessor(
+        self,
+        prompt: str,
+        *,
+        max_tokens: Optional[int] = None,
+    ) -> dict:
+        """Phase 5: route the post-search assess step (SURPRISE_PROMPT) to
+        the configured investigation_assessor client. Defaults to the
+        same client as `primary`. Splitting to verifier (or another
+        cross-family profile) creates representational separation between
+        exploration (stages 1+2) and evaluation (stage 3)."""
+        return self.investigation_assessor_client.complete_json(
             prompt,
             tools=None,
             max_tokens=max_tokens,

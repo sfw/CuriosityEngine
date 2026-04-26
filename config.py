@@ -121,6 +121,22 @@ class EngineSettings:
     # categorization that benefits from inference — REASONING MODEL is the
     # right fit here. Empty / "primary" = use primary (default).
     gap_scan_extract_role: str = ""
+    # investigation_assessor_role — Phase 5 of the self-evolving verifier.
+    # The investigation loop runs in three stages:
+    #   1. form_hypothesis (HYPOTHESIS_PROMPT, pre-search) — exploration
+    #   2. run_investigation (INVESTIGATE_PROMPT + tools) — exploration
+    #   3. assess_surprise (SURPRISE_PROMPT, post-search) — EVALUATION
+    # Stages 1+2 are open/divergent; stage 3 is closed/evaluative. Routing
+    # the assessor to a different model from the primary creates a
+    # representational separation that resists the "same token space"
+    # collapse the source insight (r-9a35e387) prescribes against:
+    # "Current LLMs collapse the generation of ideas and their evaluation
+    # into the same token space, which invites self-grading, articulate
+    # restatement of prior art, and premature optimization for
+    # judge-pleasing." Empty / "primary" = use primary (default,
+    # backward-compatible). "verifier" = cross-family separation
+    # (recommended). Any other name = look up under [models.<name>].
+    investigation_assessor_role: str = ""
     # gap_scan_classify_role — runs cell classification (step 2) and
     # investigable-question generation (step 4). Step 2 has large outputs
     # (5,000-10,000 tokens for ~100 empty cells); on reasoning models in
@@ -235,6 +251,8 @@ class CuriosityEngineConfig:
     # non-reasoning preferred due to large output sizes.
     gap_scan_extract: "ModelProfile | None" = None
     gap_scan_classify: "ModelProfile | None" = None
+    # Phase 5: post-search investigation assessor. None = use primary.
+    investigation_assessor: "ModelProfile | None" = None
 
     def resolve_profile(self, role: str) -> "ModelProfile | None":
         """Look up a configured profile by role name."""
@@ -343,6 +361,7 @@ class CuriosityEngineConfig:
             ),
             gap_scan_extract_role=str(eng_section.get("gap_scan_extract_role", "")).strip(),
             gap_scan_classify_role=str(eng_section.get("gap_scan_classify_role", "")).strip(),
+            investigation_assessor_role=str(eng_section.get("investigation_assessor_role", "")).strip(),
             parallel_investigations=int(eng_section.get("parallel_investigations", 1)),
             parallel_xref_pipeline=int(eng_section.get("parallel_xref_pipeline", 1)),
         )
@@ -413,6 +432,12 @@ class CuriosityEngineConfig:
         if gap_scan_classify_profile is None and "gap_scan_classify" in extras:
             gap_scan_classify_profile = extras["gap_scan_classify"]
 
+        investigation_assessor_profile = _resolve_role(
+            engine.investigation_assessor_role, "investigation_assessor_role",
+        )
+        if investigation_assessor_profile is None and "investigation_assessor" in extras:
+            investigation_assessor_profile = extras["investigation_assessor"]
+
         return cls(
             primary=primary, verifier=verifier,
             retry=retry, engine=engine,
@@ -422,6 +447,7 @@ class CuriosityEngineConfig:
             directive_verifier=directive_verifier_profile,
             gap_scan_extract=gap_scan_extract_profile,
             gap_scan_classify=gap_scan_classify_profile,
+            investigation_assessor=investigation_assessor_profile,
         )
 
 
@@ -744,6 +770,15 @@ gap_scan_extract_role = "{eng.gap_scan_extract_role}"
 # is world-knowledge heavy, not chain-of-thought heavy.
 # Empty / "verifier" = use verifier.
 gap_scan_classify_role = "{eng.gap_scan_classify_role}"
+# Investigation explore/verify split (Phase 5). The investigation loop
+# runs hypothesis (pre-search) → investigate (with tools) → assess
+# (post-search). Stages 1+2 are exploration; stage 3 is evaluation.
+# Routing the assessor to a different model from the primary creates
+# representational separation that resists self-grading. Empty /
+# "primary" = use primary (default). "verifier" = cross-family
+# separation (recommended). Any other name must match a [models.<name>]
+# section.
+investigation_assessor_role = "{eng.investigation_assessor_role}"
 # Parallel fan-out. 1 = fully serial (default, preserves prior behavior).
 # Higher values run multiple investigations / xref-synth+verify pipelines
 # concurrently within a single cycle. Rate limiters are shared process-wide
