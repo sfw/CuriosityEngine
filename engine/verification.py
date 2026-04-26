@@ -1541,6 +1541,89 @@ class VerificationMixin:
         )
         return stats
 
+    # ── Three-stage diagnostic (Phase 2 verification harness) ──────────
+
+    def test_three_stage(self, title: str, description: str) -> dict:
+        """Run Stages 1+2 of the three-stage verifier on a hypothetical
+        claim — without invoking Stage 3 (the heavy phased prior-art
+        search) or persisting anything. Used to verify that the
+        canonicalization layer extracts cleanly and that alias-gap
+        thresholds are tuned correctly against the current register.
+
+        Prints diagnostic output and returns a dict for programmatic
+        callers / tests.
+        """
+        print("\n--- THREE-STAGE TEST (Stages 1+2 only) ---")
+        print(f"  Title:       {title}")
+        print(f"  Description: {description[:200]}{'…' if len(description) > 200 else ''}")
+        print()
+
+        # Stage 1
+        print("  [stage 1] canonicalize from raw description…")
+        canonical = self._canonicalize_central_move(title, description)
+        if not canonical or not canonical.get("move_predicate"):
+            print("    [warn] Stage 1 produced an empty canonical form — claim has no clean structural move.")
+            return {
+                "canonical_form": {},
+                "alias_signal": {"gap": 1.0, "nearest_ids": [], "scored_against": 0},
+                "tier": "NONE",
+            }
+        print(f"    move_predicate:  {canonical.get('move_predicate')!r}")
+        print(f"    on_substrate:    {canonical.get('on_substrate')!r}")
+        print(f"    with_mechanism:  {canonical.get('with_mechanism')!r}")
+        print(f"    target_domain:   {canonical.get('target_domain')!r}")
+        kc = canonical.get("key_constraints") or []
+        if kc:
+            print(f"    key_constraints: {kc}")
+        print()
+
+        # Stage 2
+        print("  [stage 2] alias-gap detection vs canonicalized register…")
+        alias_signal = self._alias_gap(canonical)
+        gap = alias_signal["gap"]
+        scored = alias_signal["scored_against"]
+        nearest = alias_signal["nearest_ids"]
+
+        if scored == 0:
+            print("    No canonicalized register entries on file — no comparison possible.")
+            tier = "CLEAR"
+        elif gap < ALIAS_GAP_STRICT and nearest:
+            tier = "STRICT"
+        elif gap < ALIAS_GAP_BAND and nearest:
+            tier = "BAND"
+        else:
+            tier = "CLEAR"
+        print(f"    scored_against: {scored} canonicalized register entr{'y' if scored == 1 else 'ies'}")
+        print(f"    gap:            {gap:.3f}")
+        print(f"    tier:           {tier}  (STRICT < {ALIAS_GAP_STRICT}, BAND < {ALIAS_GAP_BAND})")
+        if nearest:
+            register_lookup = {e.get("id", ""): e for e in self.journal.register}
+            print(f"    nearest_ids:    {nearest}")
+            for rid in nearest[:3]:
+                peer = register_lookup.get(rid, {})
+                pcanonical = peer.get("canonical_form") or {}
+                ptext = " ".join(filter(None, [
+                    pcanonical.get("move_predicate"),
+                    pcanonical.get("on_substrate"),
+                    pcanonical.get("with_mechanism"),
+                ]))
+                ptitle = (peer.get("title") or "")[:80]
+                print(f"      {rid}: '{ptext}' — {ptitle}")
+
+        print()
+        if tier == "STRICT":
+            print("  → Stage 3 would be SKIPPED. Synthetic restatement result emitted.")
+        elif tier == "BAND":
+            print("  → Stage 3 would run with differentiator-seeking context primed for the named peers.")
+        else:
+            print("  → Stage 3 would run normally (no alias context; only the pre-extracted canonical form).")
+
+        return {
+            "canonical_form": canonical,
+            "alias_signal": alias_signal,
+            "tier": tier,
+        }
+
     # ── Canonical-form backfill (Phase 1 maintenance pass) ──────────────
 
     def backfill_canonical_forms(self, force: bool = False) -> dict:

@@ -119,6 +119,10 @@ def main():
                         help="Populate canonical_form on existing register entries that lack one. One-shot maintenance pass — safe to interrupt and re-run.")
     parser.add_argument("--backfill-force", action="store_true",
                         help="When used with --backfill-canonical-forms, re-canonicalize every active register entry, overwriting existing canonical_form values. Use after canonicalization-prompt revisions.")
+    parser.add_argument("--three-stage-test", type=str, default=None, metavar="DESCRIPTION",
+                        help="Diagnostic: run Stages 1+2 of the three-stage verifier on DESCRIPTION (no heavy verifier, no persistence). Prints canonical form, alias-gap signal, and which tier (STRICT/BAND/CLEAR) Stage 2 would fire.")
+    parser.add_argument("--three-stage-test-title", type=str, default="",
+                        help="Optional title for --three-stage-test. Defaults to the first 80 chars of DESCRIPTION.")
     parser.add_argument("--export-directive", type=str, default=None, metavar="REGISTER_ID",
                         help="Generate a research directive (markdown) for ONE register entry. Runs the primary+verifier pipeline scoped to that entry. Output: data/{journal}_directives/{id}.md")
     parser.add_argument("--export-directives-bundle", action="store_true",
@@ -365,6 +369,10 @@ def main():
         engine.synthesize_orphaned_xrefs()
     elif args.backfill_canonical_forms:
         engine.backfill_canonical_forms(force=args.backfill_force)
+    elif args.three_stage_test:
+        desc = args.three_stage_test.strip()
+        title = args.three_stage_test_title.strip() or desc[:80]
+        engine.test_three_stage(title, desc)
     elif args.scan_gaps:
         engine.scan_gaps()
     elif args.export_directive:
