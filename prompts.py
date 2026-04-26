@@ -197,6 +197,9 @@ If the candidate insight has the same weakness as any of these prior rejections,
 KNOWN PRIOR ART anchors for this journal's domain (human-curated — peers the verifier MUST evaluate explicitly, not hope to surface via search):
 {known_prior_art_json}
 
+CANONICALIZATION CONTEXT (Stage 1 of the three-stage verifier already extracted a structured form of the central architectural move; if Stage 2's alias-gap detector flagged a soft-aliased peer in the existing register, it appears here too):
+{canonical_form_context}
+
 For EACH known prior art anchor listed above:
 1. Determine whether it is a peer to THIS specific claim (the claim's target_application_domain may be narrower than the journal's domain).
 2. If it IS a peer, evaluate whether it substantively overlaps with the insight. If it does, the claim is at most an extension (or refuted, if the overlap is total).
@@ -879,7 +882,7 @@ Respond with EXACTLY this JSON structure (no other text):
 }}"""
 
 
-CANONICAL_FORM_PROMPT = """You are extracting the CANONICAL STRUCTURED FORM of a research claim.
+CANONICAL_FORM_PROMPT = """You are extracting the CANONICAL STRUCTURED FORM of a research claim. This runs as Stage 1 of the three-stage verifier — BEFORE the heavy phased prior-art search. Stage 2 will use your output to detect whether the claim is a structural duplicate of an existing register entry; if so, the heavy verifier is skipped entirely.
 
 Goal: render the claim's central architectural move as a stable structured tuple so two claims that are surface-different but structurally identical canonicalize to (approximately) the same tuple. Downstream code uses this canonical form to detect articulate restatements that surface-similarity alone misses.
 
@@ -888,7 +891,7 @@ CLAIM TITLE: {title}
 CLAIM DESCRIPTION:
 {description}
 
-CENTRAL ARCHITECTURAL MOVE (extracted by the verifier — your job is to structure it):
+CENTRAL ARCHITECTURAL MOVE (optional pre-extraction — empty string if you should derive it yourself from the description):
 {central_architectural_move}
 
 Fill these slots — each is an ATOMIC, SHORT canonical phrase. Two structurally identical claims must produce the same slots, so prefer short common-form phrasings over verbose specific descriptions. Specificity goes in `key_constraints`, not in the main slots.

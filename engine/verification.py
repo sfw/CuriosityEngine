@@ -173,20 +173,28 @@ class VerificationMixin:
         self,
         title: str,
         description: str,
-        central_architectural_move: str,
+        central_architectural_move: str = "",
     ) -> dict:
         """Extract the canonical structured form of a claim. Returns an empty
-        dict if the verifier could not produce a clean canonical form (which
+        dict if the model could not produce a clean canonical form (which
         is itself a valid signal: claims with no clean canonical form are
-        usually motivational rather than load-bearing)."""
-        move = (central_architectural_move or "").strip()
-        if not move:
+        usually motivational rather than load-bearing).
+
+        `central_architectural_move` is OPTIONAL. When empty, the model
+        derives the move from `description` directly — this is the path
+        used by Stage 1 of the three-stage verifier (canonicalization
+        runs before the heavy verifier extracts central_architectural_move).
+        When non-empty, it serves as a pre-extraction hint for the
+        canonicalizer to structure.
+        """
+        if not (description or "").strip():
+            # Nothing to extract from. Empty input → empty output (not an error).
             return {}
         prompt = CANONICAL_FORM_PROMPT.format(
             engine_domain=getattr(self.config, "domain", "") or "(unspecified)",
             title=title,
             description=description,
-            central_architectural_move=move,
+            central_architectural_move=(central_architectural_move or "").strip(),
         )
         try:
             result = self._call_verifier(prompt, max_tokens=600)
@@ -296,12 +304,167 @@ class VerificationMixin:
             "scored_against": scored,
         }
 
+    @staticmethod
+    def _build_canonical_form_context(
+        canonical_form: dict,
+        alias_tier: str,
+        alias_signal: dict,
+        register_lookup: dict,
+    ) -> str:
+        """Format the canonical-form + alias context block injected into
+        VERIFY_PROMPT (Stage 3). Empty string when there's nothing to say.
+        Contains:
+          - the pre-extracted canonical form (so the verifier doesn't need
+            to re-derive central_architectural_move from scratch — it can
+            still override the slot values, but starts from a structured
+            anchor instead of free description prose)
+          - if Stage 2 flagged BAND, an explicit instruction to look for
+            differentiators against the named soft-aliased peer entries"""
+        if not canonical_form:
+            return "(no canonical form extracted — Stage 1 found no clean structural move)"
+        lines: list[str] = []
+        lines.append("Stage 1 canonical form (pre-extracted from the insight):")
+        lines.append(f'  move_predicate:  "{canonical_form.get("move_predicate", "")}"')
+        lines.append(f'  on_substrate:    "{canonical_form.get("on_substrate", "")}"')
+        lines.append(f'  with_mechanism:  "{canonical_form.get("with_mechanism", "")}"')
+        lines.append(f'  target_domain:   "{canonical_form.get("target_domain", "")}"')
+        kc = canonical_form.get("key_constraints") or []
+        if kc:
+            lines.append(f"  key_constraints: {kc}")
+        lines.append(
+            "Use this as a structural anchor when extracting "
+            "central_architectural_move. You may refine it, but do NOT drop "
+            "specificity already captured here."
+        )
+        if alias_tier == "BAND" and alias_signal.get("nearest_ids"):
+            nearest_ids = alias_signal["nearest_ids"]
+            lines.append("")
+            lines.append(
+                f"Stage 2 flagged this candidate as soft-aliased "
+                f"(gap={alias_signal['gap']:.2f}) to existing register "
+                f"entries: {nearest_ids}."
+            )
+            for rid in nearest_ids[:3]:
+                peer = register_lookup.get(rid, {})
+                peer_title = (peer.get("title") or "").strip()
+                peer_canonical = peer.get("canonical_form") or {}
+                if peer_canonical:
+                    pc_text = " ".join(filter(None, [
+                        peer_canonical.get("move_predicate"),
+                        peer_canonical.get("on_substrate"),
+                        peer_canonical.get("with_mechanism"),
+                    ]))
+                    lines.append(f"  {rid}: '{pc_text}' — {peer_title[:80]}")
+            lines.append(
+                "In your Phase 3a functional decomposition and Phase 3b "
+                "closest_peer_system analysis, EXPLICITLY evaluate whether "
+                "this candidate has concrete differentiators against these "
+                "soft-aliased peers. If no differentiators surface, the "
+                "claim is at most an extension; if the architectural move "
+                "is identical, it is a restatement."
+            )
+        return "\n".join(lines)
+
+    # ── STRICT-alias short-circuit (Phase 2 — Stage 2 reject path) ──
+
+    @staticmethod
+    def _build_strict_alias_result(
+        insight: Insight,
+        canonical_form: dict,
+        nearest_ids: list[str],
+        gap: float,
+        register_lookup: dict,
+    ) -> dict:
+        """Build a synthetic verifier result that mirrors the schema
+        produced by VERIFY_PROMPT, used when Stage 2 detects a STRICT
+        alias and we want to skip the heavy phased prior-art search.
+
+        The synthetic result threads through the existing post-stage-3
+        guards and register_gate as if the heavy verifier had returned
+        it — so all the established machinery (peer-system guard,
+        confidence-drop, gate rejection on novelty=restatement) fires
+        normally. No code branching needed downstream."""
+        nearest = nearest_ids[0] if nearest_ids else ""
+        peer = register_lookup.get(nearest, {}) if nearest else {}
+        peer_title = (peer.get("title") or "").strip()
+        peer_summary = (peer.get("verification_summary") or "").strip()[:280]
+        canonical_text = " ".join(filter(None, [
+            canonical_form.get("move_predicate"),
+            canonical_form.get("on_substrate"),
+            canonical_form.get("with_mechanism"),
+        ]))
+        summary_lines = [
+            f"Stage 2 alias detection: this candidate's canonical form "
+            f"({canonical_text}) is structurally identical (gap={gap:.2f}) "
+            f"to existing register entry {nearest}"
+            + (f" ({peer_title})" if peer_title else "")
+            + ".",
+        ]
+        if peer_summary:
+            summary_lines.append(f"Existing entry's summary: {peer_summary}")
+        summary_lines.append(
+            "Heavy phased prior-art search skipped — structural match is "
+            "unambiguous from the canonical form alone."
+        )
+        return {
+            "verdict": "challenged",
+            "verified_confidence": 0.30,
+            "premises_supported": True,
+            "premises_support_citations": [],
+            "synthesis_findable": True,
+            "synthesis_prior_art": [
+                f"register:{rid}" for rid in nearest_ids
+            ],
+            "novelty_type": "restatement",
+            "central_architectural_move": canonical_text or insight.title,
+            "central_move_prior_art": [
+                f"register:{rid}" for rid in nearest_ids
+            ],
+            "functional_decomposition": [],
+            "closest_peer_system": {
+                "name": peer_title,
+                "url": "",
+                "overlap_summary": peer_summary,
+                "differentiators": [],
+            } if peer_title else {},
+            "skeptic_probe": {
+                "candidate_queries": [],
+                "query": "stage-2 alias detection",
+                "top_result_summary": (
+                    f"Identical canonical form to register entry {nearest}"
+                ) if nearest else "Identical canonical form to existing register entry",
+                "followup_query": "",
+                "followup_summary": "",
+                "disqualifies": True,
+            },
+            "target_application_domain": canonical_form.get("target_domain", ""),
+            "known_prior_art_evaluations": [],
+            "contradicting_findings": [],
+            "reasoning_flaws": [],
+            "verification_summary": " ".join(summary_lines),
+            "motivation": (insight.description or "")[:500],
+            "predictions": [],
+        }
+
     def verify_insight(
         self,
         insight: Insight,
         xref: CrossReference,
     ) -> Optional[RegisterEntry]:
-        """Adversarially verify an insight. Return a RegisterEntry only if it passes."""
+        """Adversarially verify an insight. Return a RegisterEntry only if it passes.
+
+        Three-stage architecture (Phase 2):
+          Stage 1 — canonicalize the central move from the raw insight
+                    (one focused LLM call, ~5s).
+          Stage 2 — deterministic alias-gap detection vs the register's
+                    existing canonical_forms. STRICT alias short-circuits
+                    to a synthetic verifier result; BAND alias adds
+                    differentiator-seeking context to Stage 3's prompt;
+                    CLEAR proceeds normally.
+          Stage 3 — existing phased prior-art search (the heavy
+                    VERIFY_PROMPT call), augmented with Stage 1's
+                    canonical_form as pre-extracted context.
+        """
         print("\n--- VERIFYING INSIGHT ---")
         print(f"  Target: {insight.title}")
 
@@ -309,35 +472,89 @@ class VerificationMixin:
         slim_supporting = [self._slim_entry_for_register(e) for e in supporting]
 
         engine_domain = getattr(self.config, "domain", "") or "(unspecified)"
-        # Known prior art matching this journal's domain — injected so the
-        # verifier MUST explicitly evaluate each anchor rather than hope
-        # search surfaces them. See journal.match_known_prior_art.
-        known_prior_art = self.journal.match_known_prior_art([engine_domain])
-        prompt = VERIFY_PROMPT.format(
-            insight_json=json.dumps(asdict(insight), indent=2),
-            xref_json=json.dumps(asdict(xref), indent=2),
-            supporting_entries_json=json.dumps(slim_supporting, indent=2),
-            tool_list=self._tool_list_block(for_client=self.verifier),
-            prior_human_rejections_json=json.dumps(
-                self.journal.human_rejection_feedback(), indent=2,
-            ),
-            engine_domain=engine_domain,
-            known_prior_art_json=json.dumps(known_prior_art, indent=2),
+
+        # ── Stage 1: canonicalize from raw insight ──────────────────────
+        print("  [stage 1] canonicalizing central architectural move…")
+        canonical_form = self._canonicalize_central_move(
+            insight.title, insight.description,
         )
-        server_tools = [
-            {"type": "web_search_20250305", "name": "web_search"},
-            {"type": "code_execution_20250825", "name": "code_execution"},
-        ]
-        # Capture the full tool-call trace so we can persist it on the register
-        # entry — makes after-the-fact audits of verifier misses ("why didn't
-        # this search find X?") possible without re-running the whole pass.
+        if canonical_form and canonical_form.get("move_predicate"):
+            print(
+                f"    canonical: '{canonical_form.get('move_predicate')}' "
+                f"'{canonical_form.get('on_substrate')}' via "
+                f"'{canonical_form.get('with_mechanism')}'"
+            )
+        else:
+            print("    [warn] no canonical form extracted — claim has no clean structural move")
+
+        # ── Stage 2: alias-gap detection ────────────────────────────────
+        alias_signal: dict = {"gap": 1.0, "nearest_ids": [], "scored_against": 0}
+        alias_tier: str = "CLEAR"  # CLEAR | BAND | STRICT
+        if canonical_form:
+            alias_signal = self._alias_gap(canonical_form)
+            gap = alias_signal["gap"]
+            scored = alias_signal["scored_against"]
+            nearest = alias_signal["nearest_ids"]
+            if scored == 0:
+                print("  [stage 2] no canonicalized register entries on file — skipping comparison")
+            elif gap < ALIAS_GAP_STRICT and nearest:
+                alias_tier = "STRICT"
+                print(
+                    f"  [stage 2] STRICT alias — gap={gap:.2f} (<{ALIAS_GAP_STRICT}) "
+                    f"vs {nearest}. Skipping heavy verifier; emitting restatement."
+                )
+            elif gap < ALIAS_GAP_BAND and nearest:
+                alias_tier = "BAND"
+                print(
+                    f"  [stage 2] BAND alias — gap={gap:.2f} (<{ALIAS_GAP_BAND}) "
+                    f"vs {nearest}. Stage 3 will be primed for differentiator search."
+                )
+            else:
+                print(
+                    f"  [stage 2] CLEAR — gap={gap:.2f} vs nearest of "
+                    f"{scored} canonicalized entr{'y' if scored == 1 else 'ies'}"
+                )
+
+        # ── STRICT short-circuit: skip Stage 3 entirely ─────────────────
+        register_lookup = {e.get("id", ""): e for e in self.journal.register}
         tool_trace: list[dict] = []
-        result = self._call_verifier_with_tools(
-            prompt,
-            server_tools=server_tools,
-            max_tokens=self.connection.verifier.investigation_max_tokens,
-            trace=tool_trace,
-        )
+        if alias_tier == "STRICT":
+            result = self._build_strict_alias_result(
+                insight, canonical_form, alias_signal["nearest_ids"],
+                alias_signal["gap"], register_lookup,
+            )
+        else:
+            # ── Stage 3: heavy phased prior-art search ──────────────────
+            known_prior_art = self.journal.match_known_prior_art([engine_domain])
+            canonical_form_context = self._build_canonical_form_context(
+                canonical_form, alias_tier, alias_signal, register_lookup,
+            )
+            prompt = VERIFY_PROMPT.format(
+                insight_json=json.dumps(asdict(insight), indent=2),
+                xref_json=json.dumps(asdict(xref), indent=2),
+                supporting_entries_json=json.dumps(slim_supporting, indent=2),
+                tool_list=self._tool_list_block(for_client=self.verifier),
+                prior_human_rejections_json=json.dumps(
+                    self.journal.human_rejection_feedback(), indent=2,
+                ),
+                engine_domain=engine_domain,
+                known_prior_art_json=json.dumps(known_prior_art, indent=2),
+                canonical_form_context=canonical_form_context,
+            )
+            server_tools = [
+                {"type": "web_search_20250305", "name": "web_search"},
+                {"type": "code_execution_20250825", "name": "code_execution"},
+            ]
+            # Capture the full tool-call trace so we can persist it on the register
+            # entry — makes after-the-fact audits of verifier misses ("why didn't
+            # this search find X?") possible without re-running the whole pass.
+            print("  [stage 3] running phased prior-art search with canonical-form context…")
+            result = self._call_verifier_with_tools(
+                prompt,
+                server_tools=server_tools,
+                max_tokens=self.connection.verifier.investigation_max_tokens,
+                trace=tool_trace,
+            )
 
         verdict = (result.get("verdict") or "refuted").strip().lower()
         # Preserve the LLM's original verdict for the confidence-drop audit:
@@ -580,64 +797,17 @@ class VerificationMixin:
                 f"conf {_pre:.2f} → {verified_confidence:.2f} (penalty {_penalty:.2f})"
             )
 
-        # ── Canonicalization layer (Phase 1) ─────────────────────────────
-        # Extract the canonical structured form of the candidate's central
-        # move and compute the alias gap against existing register entries.
-        # The result is persisted on the RegisterEntry; an extra `aliasing_against`
-        # key carries the IDs of close-but-not-identical entries we want to
-        # flag for downstream review. Strict aliases (gap below the threshold)
-        # downgrade novelty_type new_synthesis → extension, mirroring the
-        # peer-system / phase-1 / known-prior-art guards above.
-        canonical_form = self._canonicalize_central_move(
-            insight.title, insight.description, central_architectural_move,
-        )
-        alias_signal: dict = {"gap": 1.0, "nearest_ids": [], "scored_against": 0}
-        if canonical_form:
-            alias_signal = self._alias_gap(canonical_form)
-            gap = alias_signal["gap"]
-            nearest = alias_signal["nearest_ids"]
-            scored = alias_signal["scored_against"]
-            if scored > 0:
-                if gap < ALIAS_GAP_STRICT and nearest:
-                    print(
-                        f"  [alias-gap] STRICT — gap={gap:.2f} (<{ALIAS_GAP_STRICT}) "
-                        f"vs {nearest} (canonicalized form is near-identical)."
-                    )
-                    canonical_form["aliasing_against"] = nearest
-                    if novelty_type == "new_synthesis":
-                        print(
-                            f"  [alias-gap guard] near-identical canonical form to "
-                            f"{nearest[0]} — downgrading new_synthesis → extension."
-                        )
-                        _penalty = float(getattr(
-                            self.config, "confidence_drop_on_downgrade", 0.10,
-                        ))
-                        _pre = verified_confidence
-                        verified_confidence = max(0.0, verified_confidence - _penalty)
-                        novelty_type = "extension"
-                        synthesis_findable = True
-                        print(
-                            f"  [confidence-drop] alias downgrade — "
-                            f"conf {_pre:.2f} → {verified_confidence:.2f} (penalty {_penalty:.2f})"
-                        )
-                elif gap < ALIAS_GAP_BAND and nearest:
-                    print(
-                        f"  [alias-gap] BAND — gap={gap:.2f} (<{ALIAS_GAP_BAND}) "
-                        f"vs {nearest} (soft alias signal; no mechanical downgrade)."
-                    )
-                    canonical_form["aliasing_against"] = nearest
-                else:
-                    print(
-                        f"  [alias-gap] CLEAR — gap={gap:.2f} vs nearest "
-                        f"of {scored} canonicalized entr{'y' if scored == 1 else 'ies'}."
-                    )
-            else:
-                print(
-                    "  [alias-gap] no canonicalized register entries on file yet — "
-                    "skipping comparison."
-                )
-        else:
-            print("  [canonicalize] empty canonical form — claim has no clean structural move.")
+        # Canonicalization + alias-gap detection happened up front in
+        # Stages 1 and 2 (before this Stage-3 result was generated).
+        # The canonical_form is already populated; aliasing_against is
+        # already attached when applicable. No work to do here.
+        if canonical_form and alias_tier == "STRICT":
+            # The result we're processing is the synthetic STRICT-alias
+            # output; tag the canonical_form with the nearest_ids so the
+            # downstream RegisterEntry surfaces them in the UI.
+            canonical_form["aliasing_against"] = alias_signal["nearest_ids"]
+        elif canonical_form and alias_tier == "BAND":
+            canonical_form["aliasing_against"] = alias_signal["nearest_ids"]
 
         print(f"  Verdict: {verdict} · novelty={novelty_type or '?'} "
               f"· premises={'✓' if premises_supported else '✗'} "
@@ -1205,6 +1375,28 @@ class VerificationMixin:
             from prompts import VERIFY_PROMPT
             reverify_engine_domain = getattr(self.config, "domain", "") or "(unspecified)"
             reverify_known_prior_art = self.journal.match_known_prior_art([reverify_engine_domain])
+            # Reverification reuses any pre-computed canonical_form on the
+            # register entry as the Stage-1 anchor instead of re-running the
+            # canonicalizer (saves an LLM call). If the entry has no
+            # canonical_form yet, the context block self-narrates that.
+            reverify_canonical_form = e.get("canonical_form") or {}
+            reverify_alias_signal = (
+                self._alias_gap(reverify_canonical_form, exclude_id=eid)
+                if reverify_canonical_form else
+                {"gap": 1.0, "nearest_ids": [], "scored_against": 0}
+            )
+            reverify_alias_tier = "CLEAR"
+            if reverify_canonical_form and reverify_alias_signal["scored_against"] > 0:
+                gap = reverify_alias_signal["gap"]
+                if gap < ALIAS_GAP_STRICT:
+                    reverify_alias_tier = "STRICT"
+                elif gap < ALIAS_GAP_BAND:
+                    reverify_alias_tier = "BAND"
+            reverify_register_lookup = {e.get("id", ""): e for e in self.journal.register}
+            reverify_canonical_context = self._build_canonical_form_context(
+                reverify_canonical_form, reverify_alias_tier, reverify_alias_signal,
+                reverify_register_lookup,
+            )
             prompt = VERIFY_PROMPT.format(
                 insight_json=json.dumps(asdict(insight), indent=2),
                 xref_json=json.dumps(asdict(xref), indent=2),
@@ -1215,6 +1407,7 @@ class VerificationMixin:
                 ),
                 engine_domain=reverify_engine_domain,
                 known_prior_art_json=json.dumps(reverify_known_prior_art, indent=2),
+                canonical_form_context=reverify_canonical_context,
             )
             server_tools = [
                 {"type": "web_search_20250305", "name": "web_search"},
