@@ -176,32 +176,39 @@ Two modes:
 - **Per-record** (daily use) — "Export directive →" button on any active validated register card. Runs the full pipeline scoped to ONE entry in ~2-3 min. Output: `data/{journal_stem}_directives/r-{id}.md` + `.verification.json` sidecar.
 - **Bundle** (periodic snapshot) — Admin tab button. Runs per-record on every qualifying entry (validated × at least one open prediction). Output: `bundle-{timestamp}.md`.
 
-**Architecture: multi-call harness.** Each section is either deterministic restructuring (Theory, Prior Art Positioning, References — pure template from existing fields) or produced by a focused LLM call bounded at ≤1500-2500 output tokens:
+**Architecture: multi-call harness.** Each section is either deterministic restructuring (Theory, Prior Art Positioning, References — pure template from existing fields) or produced by a focused LLM call bounded at ≤1500-1800 output tokens:
 
-1. **Hypothesis** (LLM) — what would be observable if the theory is true
-2. **Test plan** (LLM, conditioned on hypothesis) — 3-6 executable steps
-3. **Agentic prompt** (LLM, conditioned on everything prior + allowlists) — self-contained instruction block for an LLM-driven agent
-4. **Verification criteria** (LLM) — Confirmed / Refuted / Inconclusive observable signals
+1. **Hypothesis** (LLM, fast) — what the team measures from their own experiments if the theory holds
+2. **In plain language / ELI5** (LLM, fast) — 3-5 sentence faithful translation for a non-specialist
+3. **Test plan** (LLM, reasoning) — 3-6 executable steps the team runs themselves; literature-watch predictions are translated into in-house experiments
+4. **Agentic prompt** (LLM, reasoning, conditioned on everything prior + allowlists) — self-contained structured fields rendered into an instruction block for an LLM-driven agent that automates the legwork
+5. **Verification criteria** (LLM, reasoning) — Confirmed / Refuted / Inconclusive signals measured from THE TEAM'S OWN experimental outputs
+6. **Research Path to Publication** (LLM, fast) — strategic narrative: study design, data, paper structure, target venue class, phases, risks
 
-Then deterministic assembly + one verifier review pass for grounding. If flagged, *selective retry* of only the agentic-prompt section (the riskiest). If still flagged, output ships with a prominent `⚠ FLAGGED ISSUES` block prepended.
+Then deterministic assembly + verifier review. The verifier loop runs up to `directive_max_verification_passes` (default 3) — if flagged, the agentic-prompt section is regenerated with the prior round's flags appended (other sections kept). If the loop exhausts without a clean pass, output ships with a prominent `⚠ FLAGGED ISSUES` block prepended.
+
+The harness uses two model dials: `directive_primary` (reasoning recommended — runs steps 3, 4, 5) and `directive_primary_fast` (non-reasoning recommended — runs steps 1, 2, 6). The verifier is its own dial (`directive_verifier`, reasoning recommended). Steps marked "fast" are restatement/style tasks where reasoning over-elaborates without quality gain; steps marked "reasoning" do translation/grounding work that genuinely benefits from CoT.
 
 **Grounding discipline** (non-negotiable):
 
-- Every URL/DOI/arXiv ID referenced must appear verbatim in a citations allowlist built from the source register entry's existing citations. No novel URL generation.
+- Every URL/DOI/arXiv ID referenced must appear verbatim in a citations allowlist built from the source register entry's existing citations. No novel URL generation. The References section is a deterministic dump of the full allowlist by design and is excluded from fabrication checks.
 - Every tool named in the agentic prompt must exact-string-match a tool allowlist. No generic "use a search engine" phrasing — only `web_search(query=...)`, `academic_search(query=..., sources=[...])`, etc.
 - Every step must be concretely executable. Hand-wave patterns (`figure out`, `iterate until`, `try various`, `use an appropriate tool`) are detected by the verifier and flagged.
-- Verification criteria must be objectively measurable — numerical threshold, specific output pattern, citation count, dataset match. Vague language is flagged.
+- Verification criteria must measure the team's own experimental outputs — numerical threshold computed on data the team produces, specific pattern in their measurements, comparison ratio between configurations they run. Literature-watch framings ("by [date], at least one publicly accessible benchmark paper reports …", "a published study confirms …") are explicitly forbidden by a dedicated `literature_watch_leakage` check; they shift the burden onto other researchers instead of the team executing the directive.
+- The footer's `citations_used` / `tool_names_used` enumerate what the primary used INSIDE the Agentic Prompt block ONLY. Other sections may freely cite from the allowlist; the verifier's `self_declaration_mismatches` check is scoped to the fenced agentic-prompt block, not the whole markdown.
 
 **Per-section progress visibility** — heartbeat log lines between sections so you can see exactly where the pipeline is:
 
 ```
-[  0.0s] generating hypothesis (1/4)
-[ 23.1s] generating test plan (2/4)
-[ 54.8s] generating agentic prompt (3/4)
-[ 92.4s] generating verification criteria (4/4)
-[112.1s] assembling markdown
-[112.1s] running verifier review
-[148.9s] verifier: ✓ clean
+[  0.0s] generating hypothesis (1/6)
+[ 14.2s] generating plain-language summary (2/6)
+[ 26.5s] generating test plan (3/6)
+[ 58.1s] generating agentic prompt (4/6)
+[ 96.4s] generating verification criteria (5/6)
+[124.0s] generating research path (6/6)
+[145.3s] assembling markdown
+[145.3s] running verifier review
+[182.7s] verifier: ✓ clean
 ```
 
 A hang in any one section is visible within 30-60s, not buried in a 15-minute silence. Failures localise.
@@ -471,10 +478,10 @@ engine/                      orchestrator package (mixin composition)
   embeddings.py                OpenAI embeddings + cosine similarity + find_similar
   tools/                       pluggable tools (auto-discovered)
     base.py                      Tool ABC + RateLimiter + HostRateLimiter + ToolRegistry
-    _rate_limits.py              Named limiters (ARXIV, CROSSREF, SEMANTIC_SCHOLAR, …)
+    _rate_limits.py              Named limiters (ARXIV, CROSSREF, OPENALEX, SEMANTIC_SCHOLAR, …)
     web_fetch.py                 HTTP GET + plaintext extraction (SSRF-safe)
     web_search.py                DuckDuckGo + Bing HTML (keyless)
-    academic_search.py           Crossref + arXiv + Semantic Scholar (+ count_results_structured)
+    academic_search.py           Crossref + arXiv + OpenAlex (+ Semantic Scholar opt-in via key)
     archive_access.py            Internet Archive + Wikimedia + Openverse
     calculator.py                AST-based safe math
     citation_manager.py          Local bibliography + BibTeX/APA
@@ -503,7 +510,7 @@ Investigator AND verifier see the full tool set:
 | `web_search` (Anthropic server) | Anthropic | n/a | Native server-side |
 | `web_search` (client) | All | ✅ | DuckDuckGo + Bing HTML fallback |
 | `web_fetch` | All | ✅ | HTTP GET + trafilatura extraction |
-| `academic_search` | All | ✅ | Crossref + arXiv + Semantic Scholar |
+| `academic_search` | All | ✅ | Crossref + arXiv + OpenAlex (+ Semantic Scholar opt-in) |
 | `archive_access` | All | ✅ | Internet Archive + Wikimedia + Openverse |
 | `calculator` | All | ✅ | AST math; npv/cagr/wacc/pmt |
 | `citation_manager` | All | ✅ | Local bibliography → BibTeX/APA |
@@ -513,11 +520,14 @@ Investigator AND verifier see the full tool set:
 
 **Rate limiters** (shared process-wide; fire before every network call):
 
-- arXiv: 1 req/3s + 1.0s jitter (hard per user manual)
-- Semantic Scholar: 1/3s + 1.0s jitter (unauthenticated quota)
+- arXiv: 1 req/5s + 2.0s jitter (documented limit is 1/3s, but burst-detection on sustained workloads triggers 429s well below the published rate; slowed pacing + cooldown-on-429 is belt-and-suspenders)
+- Semantic Scholar: 1/5s + 2.0s jitter — opt-in via `SEMANTIC_SCHOLAR_API_KEY`. Without a key the public tier shares a global bucket across all unauthenticated callers and exhaustion is routine, so SS is silently dropped from the default source list. With a key it gets a private 1 req/s bucket. Apply at https://www.semanticscholar.org/product/api#api-key-form.
 - Crossref: 5 req/s + 0.2s jitter (polite-pool generous)
+- OpenAlex: 10 req/s + 0.2s jitter (under the 100k/day polite-pool budget). Set `OPENALEX_MAILTO` to enter the polite pool (faster + more consistent latency).
 - `web_fetch`: per-host 3 req/s + 0.3s jitter
 - Archive / Wikimedia / Openverse: 2-3 req/s + modest jitter
+
+429 responses on academic endpoints engage a staged cooldown (2s → 4s → 8s → 16s → 30s, cycling back) so transient throttles back off briefly without 60-second overcorrections.
 
 Jitter is uniform-random added *after* token acquisition so we don't look like a fixed-interval bot to upstream throttlers.
 
