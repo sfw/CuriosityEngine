@@ -1904,6 +1904,58 @@ class VerificationMixin:
                 "verdict_changed": changed,
             }
             self.journal.append_register_reverification(eid, log_entry)
+
+            # Additive structural-field population: lift dark legacy entries
+            # into Phase 1+ coverage when the reverify produces fresh
+            # central_move material. ONLY writes fields that are currently
+            # empty — never overwrites a populated structural field. This
+            # is consistent with the audit-trail discipline: log preserves
+            # old verdicts, and structural fields that didn't exist when
+            # the entry was created can be filled in once without violating
+            # the no-mutate rule. (To re-canonicalize an already-populated
+            # entry, use --backfill-canonical-forms --backfill-force.)
+            new_central_move = (result.get("central_architectural_move") or "").strip()
+            populated_structural: list[str] = []
+            if new_central_move and not (e.get("canonical_form") or {}).get("move_predicate"):
+                try:
+                    canonical = self._canonicalize_central_move(
+                        e.get("title") or "",
+                        e.get("description") or "",
+                        new_central_move,
+                    )
+                except Exception as ex:  # noqa: BLE001
+                    print(f"  [warn] canonicalization failed during reverify: {type(ex).__name__}: {ex}")
+                    canonical = {}
+                if canonical:
+                    e["canonical_form"] = canonical
+                    populated_structural.append("canonical_form")
+            if not e.get("component_novelty"):
+                e["component_novelty"] = new_component_novelty
+                populated_structural.append("component_novelty")
+            if not e.get("pareto_axes"):
+                # alias_gap for the new canonical_form (if any) computed
+                # against the rest of the register, mirroring verify_insight.
+                pareto_alias_gap = 1.0
+                if e.get("canonical_form", {}).get("move_predicate"):
+                    try:
+                        ag = self._alias_gap(e["canonical_form"], exclude_id=eid)
+                        pareto_alias_gap = ag.get("gap", 1.0)
+                    except Exception:  # noqa: BLE001
+                        pareto_alias_gap = 1.0
+                e["pareto_axes"] = self._compute_pareto_axes(
+                    verified_confidence=new_conf,
+                    premises_support_citations=result.get("premises_support_citations", []) or [],
+                    closest_peer_system=dict(result.get("closest_peer_system") or {}),
+                    known_prior_art_evaluations=list(
+                        result.get("known_prior_art_evaluations", []) or []
+                    ),
+                    alias_gap=pareto_alias_gap,
+                )
+                populated_structural.append("pareto_axes")
+            if populated_structural:
+                self.journal.save()
+                print(f"  [structural] populated: {', '.join(populated_structural)}")
+
             if component_delta:
                 print(
                     "  [component-novelty delta] "
