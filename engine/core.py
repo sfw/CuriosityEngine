@@ -64,19 +64,34 @@ class CuriosityEngine(
         else:
             self.cross_ref_client = build_client(cross_ref_profile)
 
-        # Directive-pipeline clients: route directive section generation
-        # ([primary]) and the directive grounding-review pass ([verifier]) to
-        # whichever profiles the user configured via [engine].directive_*_role.
-        # Defaults: directive_primary → primary, directive_verifier → verifier.
-        # The point is to let the user keep a reasoning model on investigation
-        # while routing directive synthesis to a fast non-reasoning model
-        # (directive synthesis is constrained schema-filling — reasoning is
-        # latency overhead with no quality gain).
+        # Directive-pipeline clients: per-section routing.
+        #   directive_primary       → heavy sections (test_plan, agentic_prompt,
+        #                             verification_criteria). Reasoning helps.
+        #   directive_primary_fast  → light sections (hypothesis, eli5,
+        #                             research_path). Restatement / style; non-
+        #                             reasoning preferred. Falls back to
+        #                             directive_primary when the user has not
+        #                             configured a separate fast profile.
+        #   directive_verifier      → directive grounding-review pass.
+        # Defaults all the way down: each unconfigured slot inherits from the
+        # next level, ultimately landing on `primary` / `verifier`.
         directive_primary_profile = getattr(self.connection, "directive_primary", None)
         if directive_primary_profile is None or directive_primary_profile is self.connection.primary:
             self.directive_primary_client: ModelClient = self.primary
         else:
             self.directive_primary_client = build_client(directive_primary_profile)
+        directive_primary_fast_profile = getattr(self.connection, "directive_primary_fast", None)
+        if directive_primary_fast_profile is None:
+            # Inherit whatever directive_primary resolved to (may be the same
+            # ModelClient as primary). Sharing the client is a no-op cost and
+            # keeps the call site identical when the user hasn't split.
+            self.directive_primary_fast_client: ModelClient = self.directive_primary_client
+        elif directive_primary_fast_profile is self.connection.primary:
+            self.directive_primary_fast_client = self.primary
+        elif directive_primary_fast_profile is directive_primary_profile:
+            self.directive_primary_fast_client = self.directive_primary_client
+        else:
+            self.directive_primary_fast_client = build_client(directive_primary_fast_profile)
         directive_verifier_profile = getattr(self.connection, "directive_verifier", None)
         if directive_verifier_profile is None or directive_verifier_profile is self.connection.verifier:
             self.directive_verifier_client: ModelClient = self.verifier
@@ -119,6 +134,13 @@ class CuriosityEngine(
             dp_profile = getattr(self.connection, "directive_primary", None)
             if dp_profile is not None:
                 print(f"  directive_primary: {dp_profile.provider} / {dp_profile.name}")
+        if (
+            self.directive_primary_fast_client is not self.primary
+            and self.directive_primary_fast_client is not self.directive_primary_client
+        ):
+            dpf_profile = getattr(self.connection, "directive_primary_fast", None)
+            if dpf_profile is not None:
+                print(f"  directive_primary_fast: {dpf_profile.provider} / {dpf_profile.name}")
         if self.directive_verifier_client is not self.verifier:
             dv_profile = getattr(self.connection, "directive_verifier", None)
             if dv_profile is not None:
@@ -208,10 +230,27 @@ class CuriosityEngine(
         *,
         max_tokens: Optional[int] = None,
     ) -> dict:
-        """Route directive section generation (hypothesis / test plan / agentic
-        fields / verification criteria) to the configured directive_primary
-        client. Defaults to the same client as `primary`."""
+        """Route HEAVY directive sections (test_plan, agentic_prompt,
+        verification_criteria) to the configured directive_primary client.
+        Defaults to the same client as `primary`."""
         return self.directive_primary_client.complete_json(
+            prompt,
+            tools=None,
+            max_tokens=max_tokens,
+            policy=self.connection.retry,
+            on_retry=self._on_retry,
+        )
+
+    def _call_directive_primary_fast(
+        self,
+        prompt: str,
+        *,
+        max_tokens: Optional[int] = None,
+    ) -> dict:
+        """Route LIGHT directive sections (hypothesis, eli5, research_path)
+        to the configured directive_primary_fast client. Defaults to the
+        same client as directive_primary, which itself defaults to primary."""
+        return self.directive_primary_fast_client.complete_json(
             prompt,
             tools=None,
             max_tokens=max_tokens,

@@ -1535,6 +1535,7 @@ def settings_save(
     engine_held_confidence_floor: float = Form(0.7),
     engine_cross_ref_role: str = Form(""),
     engine_directive_primary_role: str = Form(""),
+    engine_directive_primary_fast_role: str = Form(""),
     engine_directive_verifier_role: str = Form(""),
     engine_directive_max_verification_passes: int = Form(3),
     engine_gap_scan_extract_role: str = Form(""),
@@ -1591,6 +1592,9 @@ def settings_save(
     directive_primary_role = engine_directive_primary_role.strip().lower()
     if directive_primary_role and directive_primary_role not in known_roles:
         directive_primary_role = ""
+    directive_primary_fast_role = engine_directive_primary_fast_role.strip().lower()
+    if directive_primary_fast_role and directive_primary_fast_role not in known_roles:
+        directive_primary_fast_role = ""
     directive_verifier_role = engine_directive_verifier_role.strip().lower()
     if directive_verifier_role and directive_verifier_role not in known_roles:
         directive_verifier_role = ""
@@ -1652,6 +1656,7 @@ def settings_save(
             f"held_confidence_floor = {max(0.0, min(1.0, engine_held_confidence_floor))}\n"
             f'cross_ref_role = "{cross_ref_role}"\n'
             f'directive_primary_role = "{directive_primary_role}"\n'
+            f'directive_primary_fast_role = "{directive_primary_fast_role}"\n'
             f'directive_verifier_role = "{directive_verifier_role}"\n'
             f"directive_max_verification_passes = {max(1, min(10, engine_directive_max_verification_passes))}\n"
             f'gap_scan_extract_role = "{gap_scan_extract_role}"\n'

@@ -87,7 +87,20 @@ class EngineSettings:
     # keeping the primary as a reasoning model for investigation. Same
     # resolution rules as cross_ref_role: empty / "primary" = use primary;
     # "verifier" = use verifier; any other name = look up under [models.<name>].
+    # directive_primary handles the HEAVY sections of the directive pipeline:
+    # test_plan, agentic_prompt, verification_criteria. These translate
+    # literature-watch predictions into in-house experiments and enforce
+    # strict citation/tool grounding — reasoning helps materially. Empty /
+    # "primary" = use primary; "verifier" = use verifier; any other name =
+    # look up under [models.<name>].
     directive_primary_role: str = ""
+    # directive_primary_fast handles the LIGHT sections: hypothesis, ELI5,
+    # research_path. These are restatement / style / strategic-prose tasks
+    # where reasoning models over-elaborate without improving quality.
+    # Empty = fall back to directive_primary (which itself falls back to
+    # primary). Set this to a fast non-reasoning profile to cut directive
+    # generation time by ~30-40% with no quality loss on these sections.
+    directive_primary_fast_role: str = ""
     # Same idea for the directive grounding-review pass. Empty = use the
     # journal's `verifier` profile (the cross-family verifier already configured).
     directive_verifier_role: str = ""
@@ -189,8 +202,17 @@ class CuriosityEngineConfig:
     cross_ref: "ModelProfile | None" = None
     # Resolved directive-pipeline profiles (None = use primary / verifier).
     # Computed at load time from [engine].directive_primary_role /
-    # directive_verifier_role or [models.directive_primary] / directive_verifier.
+    # directive_primary_fast_role / directive_verifier_role or matching
+    # [models.<role>] sections.
+    #   - directive_primary: heavy sections (test_plan, agentic_prompt,
+    #     verification_criteria). Reasoning recommended.
+    #   - directive_primary_fast: light sections (hypothesis, eli5,
+    #     research_path). Non-reasoning recommended; falls back to
+    #     directive_primary if unset.
+    #   - directive_verifier: directive grounding-review pass. Reasoning
+    #     recommended.
     directive_primary: "ModelProfile | None" = None
+    directive_primary_fast: "ModelProfile | None" = None
     directive_verifier: "ModelProfile | None" = None
     # Resolved negative-space gap-scan profiles (None = use primary / verifier).
     # gap_scan_extract handles step 1 (matrix extraction) — reasoning helps;
@@ -294,6 +316,9 @@ class CuriosityEngineConfig:
             held_confidence_floor=float(eng_section.get("held_confidence_floor", 0.7)),
             cross_ref_role=str(eng_section.get("cross_ref_role", "")).strip(),
             directive_primary_role=str(eng_section.get("directive_primary_role", "")).strip(),
+            directive_primary_fast_role=str(
+                eng_section.get("directive_primary_fast_role", "")
+            ).strip(),
             directive_verifier_role=str(eng_section.get("directive_verifier_role", "")).strip(),
             directive_max_verification_passes=int(
                 eng_section.get("directive_max_verification_passes", 3)
@@ -346,6 +371,12 @@ class CuriosityEngineConfig:
         if directive_primary_profile is None and "directive_primary" in extras:
             directive_primary_profile = extras["directive_primary"]
 
+        directive_primary_fast_profile = _resolve_role(
+            engine.directive_primary_fast_role, "directive_primary_fast_role",
+        )
+        if directive_primary_fast_profile is None and "directive_primary_fast" in extras:
+            directive_primary_fast_profile = extras["directive_primary_fast"]
+
         directive_verifier_profile = _resolve_role(
             engine.directive_verifier_role, "directive_verifier_role",
         )
@@ -369,6 +400,7 @@ class CuriosityEngineConfig:
             retry=retry, engine=engine,
             extras=extras, cross_ref=cross_ref_profile,
             directive_primary=directive_primary_profile,
+            directive_primary_fast=directive_primary_fast_profile,
             directive_verifier=directive_verifier_profile,
             gap_scan_extract=gap_scan_extract_profile,
             gap_scan_classify=gap_scan_classify_profile,
@@ -652,15 +684,20 @@ held_confidence_floor = {eng.held_confidence_floor}
 # keeping reasoning for investigation. Empty / "primary" = use primary.
 cross_ref_role = "{eng.cross_ref_role}"
 # Per-phase model routing for the research-directive export pipeline.
-# Directive synthesis is constrained schema-filling — it does NOT benefit
-# from reasoning-mode thinking (which adds 60-180s of latency per call
-# without improving output). Route directive section generation to a fast
-# non-reasoning model while keeping the primary as a reasoning model for
-# investigation. Same resolution rules as cross_ref_role.
-# Empty / "primary" = use primary; "verifier" = use verifier; any other
-# name must match a [models.<name>] section.
+# directive_primary handles HEAVY sections (test_plan, agentic_prompt,
+# verification_criteria) — translating literature-watch predictions into
+# in-house experiments and enforcing strict citation/tool grounding.
+# REASONING MODEL recommended.
+# directive_primary_fast handles LIGHT sections (hypothesis, eli5,
+# research_path) — restatement / style / strategic prose. NON-REASONING
+# MODEL recommended; falls back to directive_primary if unset.
+# directive_verifier — directive grounding-review pass. REASONING
+# recommended.
+# Same resolution rules as cross_ref_role: empty / "primary" = use
+# primary; "verifier" = use verifier; any other name must match a
+# [models.<name>] section.
 directive_primary_role = "{eng.directive_primary_role}"
-# Directive grounding-review pass. Empty = use the cross-family verifier.
+directive_primary_fast_role = "{eng.directive_primary_fast_role}"
 directive_verifier_role = "{eng.directive_verifier_role}"
 # Total verifier passes the directive pipeline will run trying to land a
 # clean output (initial + retries). Each retry regenerates the agentic
