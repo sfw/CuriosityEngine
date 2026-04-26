@@ -96,6 +96,92 @@ State persists to `research_journal.json` after every cycle. The human-readable 
 
 ---
 
+## Data model — what flows through the pipeline
+
+Six kinds of records flow through the engine, each gated against the next. Each level represents progressively *more vetted* knowledge — the gates are where the engine refuses to promote material that doesn't survive scrutiny.
+
+```
+Question  →  JournalEntry  →  CrossReference  →  Insight  →  RegisterEntry  →  Prediction
+                                                                       └→ Directive (export)
+```
+
+### Question
+
+A research prompt waiting to be investigated. Tagged by where it came from.
+
+- **Sources**: `human` (you added it) · `entry:<id>` (a prior investigation produced a follow-up) · `xref:<id>` (a cross-reference suggested it) · `gap:<id>` (negative-space scan found an unexplored cell) · `analog:<id>` (cross-domain analog probe) · `assumption:<id>` (within-domain assumption probe).
+- **Gate to investigation**: priority must clear `question_priority_floor` (default 0.0 — disabled). Human-sourced questions always bypass. The queue dequeues round-robin across sources so one source can't starve another.
+- **Lives in**: `journal.question_queue`.
+
+### JournalEntry
+
+The record of one investigation cycle. Captures everything: the question that drove it, the hypothesis the engine *committed to before searching*, the tools it used, the findings it produced, and how surprised it was relative to its prior.
+
+- **Key fields**: `question`, `hypothesis`, `confidence_before`, `raw_findings`, `sources` (URLs + DOIs cited), `surprise_delta`, `confidence_after`, `key_takeaways`, `domain_tags`, `hypothesis_verdict` (confirmed/partially_confirmed/contradicted/unresolved).
+- **Gate to cross-referencing**: none directly. Every entry is eligible. Cross-referencing fires periodically (every `cross_ref_frequency` cycles, default 3) and considers the most recent `cross_ref_window` entries (default 20). The graph selector biases toward cross-domain pairings.
+- **Lives in**: `journal.entries`.
+
+### CrossReference
+
+A non-obvious connection found between two or more JournalEntries. Identified by an LLM scanning the journal for patterns/contradictions/convergences/implications.
+
+- **Key fields**: `source_entries` (the entries being connected), `connection_type`, `novelty_score`, `description`, `implications`.
+- **Gate to synthesis**: `novelty_score >= novelty_threshold` (default 0.7). **Anti-attractor**: candidates with ≥50% participant overlap with an existing xref are rejected unless their score is ≥0.85, preventing the same entries from being re-cross-referenced into near-duplicate insights.
+- **Lives in**: `journal.cross_references`.
+
+### Insight
+
+A candidate synthesis derived from a high-novelty CrossReference. **Pre-verification** — this is the candidate the verifier will adversarially scrutinize.
+
+- **Key fields**: `description`, `novelty_assessment` (the synthesizer's self-rationale), `confidence`, `prior_art_check` (cheap structural pre-check before the expensive verifier), `implications`, `open_questions`, `counter_arguments`.
+- **Gate to register**: full **three-stage adversarial verifier** (Stage 1 canonicalize → Stage 2 alias-gap → Stage 3 phased prior-art search) → engine-side guards → register gate. See [How novelty is verified](#how-novelty-is-verified--the-technical-detail) for the full machinery.
+- **Lives in**: `journal.insights`.
+
+### RegisterEntry
+
+A verified insight that survived adversarial review. The durable artifact of the system. Every claim in the register can trace its provenance back to the JournalEntries that triggered it, the verifier's tool-call audit trail, and the predictions attached at registration.
+
+- **Key fields**: `verdict` (validated/challenged/refuted/inconclusive), `verified_confidence`, `novelty_type` (new_synthesis/extension/restatement/correction/unsupported), `central_architectural_move`, `central_move_prior_art`, `functional_decomposition`, `closest_peer_system`, `skeptic_probe`, `canonical_form` (Phase 1 structured tuple), `component_novelty` (per-architectural-component status, Phase 3), `pareto_axes` (4-axis admission scores, Phase 4), `verification_tool_calls` (full per-call audit trail), `reverification_log` (append-only history of audit re-runs), attached `predictions`.
+- **Lifecycle status**:
+  - `active` — validated and in the register.
+  - `held` — verifier returned `inconclusive` (couldn't reach a verdict, but didn't refute either). Held with a settlement plan; converts to `active` if a settlement trigger resolves.
+  - `validated_by_prediction` — promoted from `held` after an attached prediction confirmed.
+  - `challenged_by_prediction` — at least one attached prediction refuted.
+- **Gate from insight**: see [Register gate](#register-gate). Two admission modes: `scalar` (single confidence floor + status checks) or `pareto` (4-axis Pareto-dominance check on top of scalar).
+- **Gate to directive export**: `status=active` AND effective verdict (latest in `reverification_log`, or original) = `validated` AND at least one open prediction.
+- **Lives in**: `journal.register`. Human-readable mirror at `register.md`.
+
+### Prediction
+
+A falsifiable claim attached to a RegisterEntry, with a target date for resolution. Predictions are how the engine commits to *future* checkability — without them, the register would just be a snapshot of what the verifier currently believes.
+
+- **Key fields**: `claim`, `falsifiable_condition` (the exact observation that would confirm or refute), `check_method` (how to verify), `target_date`, `status`, `resolution_notes`, `freshness_check` (web-search probe at creation time).
+- **Gate at creation**: a freshness probe runs targeted web search on the falsifiable condition. If results already instantiate the claim, the prediction stores as `already_fulfilled` (not `pending`) — closes the dead-on-arrival case where a "prediction" was already true at creation time.
+- **Lifecycle status**: `pending` | `confirmed` | `refuted` | `already_fulfilled` | `expired`.
+- **Lives in**: `journal.predictions`.
+
+### Directive (export artifact, not a journal record)
+
+A research plan generated from a qualifying RegisterEntry — six structured sections culminating in an agentic-prompt block ready to paste into an LLM-driven agent (Claude Code, an MCP orchestrator, etc.). See [Research directives](#research-directives--turning-verified-claims-into-executable-plans).
+
+- **Lives in**: `data/{journal_stem}_directives/r-<id>.md` plus `.verification.json` sidecar.
+
+### Where each gate lives in code
+
+For readers diving into the source:
+
+| Gate | File / function |
+|---|---|
+| Question priority floor + source round-robin | `journal.py:pop_queued_questions` |
+| Hypothesis confidence calibration | `engine/investigation.py:_calibrate_confidence_after` |
+| Cross-reference novelty + anti-attractor | `engine/cross_reference.py` + `engine/graph.py` selector |
+| Three-stage verifier | `engine/verification.py:verify_insight` |
+| Register gate (scalar + Pareto) | `engine/verification.py:_register_gate` + `_check_pareto_admission` |
+| Freshness check at prediction creation | `engine/verification.py:_check_prediction_freshness` |
+| Directive admission | `engine/directives.py:qualifying_register_entries` |
+
+---
+
 ## Self-evolving verifier
 
 This is the meta-layer that distinguishes the current architecture. The engine ran a journal on the topic *"how should LLM-driven research loops verify novelty?"*. Five of the highest-confidence validated insights from that journal were then *applied to the verifier itself*. Each of those insights is now a phase of the verification pipeline.
