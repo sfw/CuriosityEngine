@@ -119,6 +119,8 @@ def main():
                         help="Populate canonical_form on existing register entries that lack one. One-shot maintenance pass — safe to interrupt and re-run.")
     parser.add_argument("--backfill-force", action="store_true",
                         help="When used with --backfill-canonical-forms, re-canonicalize every active register entry, overwriting existing canonical_form values. Use after canonicalization-prompt revisions.")
+    parser.add_argument("--pareto-frontier", action="store_true",
+                        help="Show the current Pareto admission frontier — the active register entries that set the bar a new candidate must beat to be admitted under register_admission_mode=pareto. Diagnostic only; no journal mutation.")
     parser.add_argument("--three-stage-test", type=str, default=None, metavar="DESCRIPTION",
                         help="Diagnostic: run Stages 1+2 of the three-stage verifier on DESCRIPTION (no heavy verifier, no persistence). Prints canonical form, alias-gap signal, and which tier (STRICT/BAND/CLEAR) Stage 2 would fire.")
     parser.add_argument("--three-stage-test-title", type=str, default="",
@@ -373,6 +375,8 @@ def main():
         desc = args.three_stage_test.strip()
         title = args.three_stage_test_title.strip() or desc[:80]
         engine.test_three_stage(title, desc)
+    elif args.pareto_frontier:
+        engine.show_pareto_frontier()
     elif args.scan_gaps:
         engine.scan_gaps()
     elif args.export_directive:

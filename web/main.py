@@ -810,6 +810,36 @@ def journal_admin(request: Request, name: str):
                     effective_cr_role = role
                     break
 
+    # Pareto frontier — the active register entries actually setting
+    # the admission bar under register_admission_mode=pareto. Computed
+    # here so the admin panel can show diagnostic visibility.
+    from engine.verification import VerificationMixin as _VM
+    pareto_axes_set = list(_VM._PARETO_AXES)
+    populated = [
+        e for e in journal.register
+        if e.get("status") == "active" and (e.get("pareto_axes") or {})
+    ]
+    pareto_frontier: list[dict] = []
+    for cand in populated:
+        cand_axes = cand["pareto_axes"]
+        dominated = any(
+            _VM._pareto_dominates(other.get("pareto_axes") or {}, cand_axes)
+            for other in populated
+            if other.get("id") != cand.get("id")
+        )
+        if not dominated:
+            # Compute which axes this frontier entry strictly leads on
+            wins: list[str] = []
+            for axis in pareto_axes_set:
+                others = [
+                    other["pareto_axes"].get(axis, 0)
+                    for other in populated
+                    if other.get("id") != cand.get("id") and other.get("pareto_axes")
+                ]
+                if others and float(cand_axes.get(axis, 0)) > max(float(o) for o in others):
+                    wins.append(axis)
+            pareto_frontier.append({**cand, "_pareto_wins": wins})
+
     return templates.TemplateResponse(request, "partials/admin.html", {
         "name": name,
         "orphan_xref_count": len(orphan_xrefs),
@@ -829,6 +859,12 @@ def journal_admin(request: Request, name: str):
         "engine_domain": journal.last_domain or "",
         "directive_bundle_count": _count_directive_bundles(name),
         "latest_directives": _list_directive_files(name),
+        "admission_mode": (
+            getattr(conn.engine, "register_admission_mode", "scalar") or "scalar"
+        ),
+        "pareto_axes_set": pareto_axes_set,
+        "pareto_populated_count": len(populated),
+        "pareto_frontier": pareto_frontier,
     })
 
 

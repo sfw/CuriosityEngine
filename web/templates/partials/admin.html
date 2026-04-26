@@ -17,6 +17,82 @@
     </p>
   </div>
 
+  {# Pareto admission — diagnostic readout of the entries currently setting
+     the admission bar. Only meaningful when register_admission_mode=pareto;
+     under scalar mode this is read-only context for "what bar would I face
+     if I flipped to pareto?" #}
+  {% if pareto_frontier or pareto_populated_count %}
+    <details class="rounded-xl border border-slate-700/60 bg-slate-900/40">
+      <summary class="px-4 py-3 cursor-pointer flex items-center gap-2 flex-wrap">
+        <svg class="w-4 h-4 text-violet-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M3 17l6-6 4 4 8-8" />
+        </svg>
+        <h4 class="text-sm font-semibold text-slate-200">Pareto admission frontier</h4>
+        <span class="mono text-[10px] px-1.5 py-0.5 rounded
+                     {% if admission_mode == 'pareto' %}bg-violet-500/20 text-violet-300{% else %}bg-slate-800 text-slate-500{% endif %}">
+          mode = {{ admission_mode }}
+        </span>
+        <span class="mono text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">
+          {{ pareto_frontier|length }} on frontier · {{ pareto_populated_count }} eligible
+        </span>
+      </summary>
+      <div class="p-4 border-t border-slate-700/50 text-xs space-y-3">
+        <p class="text-slate-500 leading-relaxed">
+          Active register entries that aren't dominated by any other entry across the configured
+          Pareto axis set. Under <span class="mono">register_admission_mode=pareto</span>, a new
+          candidate must beat at least one of these entries on at least one axis to be admitted.
+          Each entry's "wins on" column shows the axes where it strictly leads — those are the
+          dimensions blocking duplicate admissions.
+          {% if admission_mode != 'pareto' %}
+            <span class="text-amber-300">Pareto admission is currently disabled
+            (mode={{ admission_mode }}); this readout is preview-only.</span>
+          {% endif %}
+        </p>
+        {% if pareto_frontier %}
+          <div class="overflow-x-auto rounded-lg border border-slate-700/40">
+            <table class="w-full text-[11px]">
+              <thead class="text-slate-500 uppercase tracking-wider text-[10px]">
+                <tr class="border-b border-slate-700/40">
+                  <th class="text-left px-2 py-1.5 mono">id</th>
+                  <th class="text-right px-2 py-1.5">conf</th>
+                  <th class="text-right px-2 py-1.5">prem</th>
+                  <th class="text-right px-2 py-1.5">peer Δ</th>
+                  <th class="text-right px-2 py-1.5">inv_g</th>
+                  <th class="text-left px-2 py-1.5">wins on</th>
+                  <th class="text-left px-2 py-1.5">title</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for e in pareto_frontier|sort(attribute='pareto_axes.verified_confidence', reverse=True) %}
+                  {% set p = e.pareto_axes %}
+                  <tr class="border-b border-slate-700/30 last:border-0 hover:bg-slate-800/30">
+                    <td class="px-2 py-1.5 mono text-slate-400">{{ e.id }}</td>
+                    <td class="px-2 py-1.5 mono text-right text-slate-300">{{ "%.2f"|format(p.verified_confidence) }}</td>
+                    <td class="px-2 py-1.5 mono text-right text-slate-300">{{ p.premises_supported_count|int }}</td>
+                    <td class="px-2 py-1.5 mono text-right text-slate-300">{{ p.peer_differentiators_count|int }}</td>
+                    <td class="px-2 py-1.5 mono text-right text-slate-300">{{ "%.3f"|format(p.inverse_alias_gap) }}</td>
+                    <td class="px-2 py-1.5">
+                      {% for w in e._pareto_wins %}
+                        <span class="mono text-[10px] px-1 py-0.5 rounded bg-violet-500/20 text-violet-300">
+                          {{ w|replace('verified_', '')|replace('_count','')|replace('_',' ') }}
+                        </span>
+                      {% else %}
+                        <span class="text-slate-600">—</span>
+                      {% endfor %}
+                    </td>
+                    <td class="px-2 py-1.5 text-slate-400">{{ (e.title or '')[:80] }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% else %}
+          <p class="text-slate-500">No entries on frontier (register has no entries with pareto_axes populated yet).</p>
+        {% endif %}
+      </div>
+    </details>
+  {% endif %}
+
   {# State overview — counters show what work each action would do right now. #}
   <div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
     <div class="card rounded-lg px-3 py-2">

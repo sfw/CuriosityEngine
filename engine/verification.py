@@ -380,6 +380,95 @@ class VerificationMixin:
                 dominating.append(e.get("id", ""))
         return (not dominating, dominating)
 
+    def compute_pareto_frontier(self) -> list[dict]:
+        """Active register entries on the current Pareto frontier — the
+        entries that are not dominated by any other entry on the
+        configured axis set. These are the entries actually setting the
+        admission bar: a new candidate must beat at least one of them on
+        at least one axis to be admitted under pareto mode.
+
+        Returns a list of register-entry dicts (not RegisterEntry
+        instances). Entries without `pareto_axes` are excluded.
+        """
+        candidates = [
+            e for e in self.journal.register
+            if e.get("status") == "active" and (e.get("pareto_axes") or {})
+        ]
+        frontier: list[dict] = []
+        for cand in candidates:
+            cand_axes = cand["pareto_axes"]
+            dominated = False
+            for other in candidates:
+                if other.get("id") == cand.get("id"):
+                    continue
+                if self._pareto_dominates(other.get("pareto_axes") or {}, cand_axes):
+                    dominated = True
+                    break
+            if not dominated:
+                frontier.append(cand)
+        return frontier
+
+    def show_pareto_frontier(self) -> None:
+        """CLI: print the current Pareto frontier with each entry's
+        winning axis (the axis on which it dominates at least one other
+        active entry). Useful for understanding what bar new candidates
+        face under pareto admission mode."""
+        frontier = self.compute_pareto_frontier()
+        active_with_axes = sum(
+            1 for e in self.journal.register
+            if e.get("status") == "active" and (e.get("pareto_axes") or {})
+        )
+        active_total = sum(
+            1 for e in self.journal.register if e.get("status") == "active"
+        )
+        admission_mode = (
+            getattr(self.config, "register_admission_mode", "scalar") or "scalar"
+        ).strip().lower()
+
+        print("\n--- PARETO FRONTIER ---")
+        print(f"  axes:                            {list(self._PARETO_AXES)}")
+        print(f"  admission mode:                  {admission_mode}")
+        print(f"  active entries (total):          {active_total}")
+        print(f"  active entries with pareto_axes: {active_with_axes}")
+        print(f"  on frontier:                     {len(frontier)}")
+        if active_with_axes < active_total:
+            print(
+                f"  note: {active_total - active_with_axes} active entr(ies) lack pareto_axes "
+                "(predate Phase 1) and do not participate in the Pareto frontier."
+            )
+        print()
+        if not frontier:
+            print("  (frontier empty — no entries with pareto_axes populated)")
+            return
+
+        print(
+            f"  {'id':<14} {'conf':>5} {'prem':>5} {'peer':>5} {'inv_g':>6}  "
+            "wins on              title"
+        )
+        print("  " + "-" * 110)
+        for e in sorted(
+            frontier, key=lambda x: -x["pareto_axes"].get("verified_confidence", 0),
+        ):
+            p = e["pareto_axes"]
+            wins: list[str] = []
+            for axis in self._PARETO_AXES:
+                others = [
+                    other["pareto_axes"].get(axis, 0)
+                    for other in frontier
+                    if other.get("id") != e.get("id")
+                ]
+                if others and float(p.get(axis, 0)) > max(float(o) for o in others):
+                    wins.append(axis.replace("_count", "").replace("verified_", ""))
+            title = (e.get("title") or "")[:60]
+            print(
+                f"  {e['id']:<14} "
+                f"{p['verified_confidence']:>5.2f} "
+                f"{int(p['premises_supported_count']):>5} "
+                f"{int(p['peer_differentiators_count']):>5} "
+                f"{p['inverse_alias_gap']:>6.3f}  "
+                f"{','.join(wins) or '(tied)':<20} {title}"
+            )
+
     # ── Component-resolved novelty (Phase 3) ────────────────────────────
 
     @staticmethod
@@ -1038,16 +1127,33 @@ class VerificationMixin:
             getattr(self.config, "register_admission_mode", "scalar") or "scalar"
         ).strip().lower()
         if outcome == "register" and admission_mode == "pareto":
-            admitted, dominating = self._check_pareto_admission(pareto_axes)
-            if not admitted:
-                ids = ", ".join(dominating[:3])
-                more = f" (+{len(dominating) - 3} more)" if len(dominating) > 3 else ""
+            # Defensive: if the candidate's pareto_axes are all zero
+            # (or empty), something upstream produced no useful signal.
+            # Most likely a regression in _compute_pareto_axes or a
+            # broken verifier output. Log a clear warning so this can't
+            # silently slip through; skip the admission check to avoid
+            # rejecting on degenerate data alone.
+            all_zero = not pareto_axes or all(
+                float(pareto_axes.get(axis, 0.0)) == 0.0
+                for axis in self._PARETO_AXES
+            )
+            if all_zero:
                 print(
-                    f"  [pareto admission] candidate dominated by {ids}{more} "
-                    f"on axes {list(self._PARETO_AXES)} — rejecting."
+                    "  [pareto admission] WARNING: candidate has all-zero pareto_axes — "
+                    "indicates a regression in _compute_pareto_axes or empty verifier "
+                    "output. Skipping Pareto check; falling back to scalar gate decision."
                 )
-                outcome = "reject"
-                gate_reasons = list(gate_reasons) + [f"pareto_dominated_by={dominating[:3]}"]
+            else:
+                admitted, dominating = self._check_pareto_admission(pareto_axes)
+                if not admitted:
+                    ids = ", ".join(dominating[:3])
+                    more = f" (+{len(dominating) - 3} more)" if len(dominating) > 3 else ""
+                    print(
+                        f"  [pareto admission] candidate dominated by {ids}{more} "
+                        f"on axes {list(self._PARETO_AXES)} — rejecting."
+                    )
+                    outcome = "reject"
+                    gate_reasons = list(gate_reasons) + [f"pareto_dominated_by={dominating[:3]}"]
 
         if outcome == "reject":
             print(f"  Not registered ({', '.join(gate_reasons)}).")
