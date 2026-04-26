@@ -277,6 +277,41 @@
             </summary>
             <div class="p-3 border-t border-slate-300 dark:border-slate-700/50 space-y-3 text-xs">
 
+              {% if r.component_novelty %}
+                {# Phase 3: per-component novelty status. Shows the architectural
+                   components and how each was assessed independently — so a
+                   "central_move=restatement" doesn't hide a still-novel
+                   functional decomposition along a specific dimension. #}
+                <div>
+                  <div class="text-[10px] uppercase tracking-wider text-slate-500 mb-1">Component-resolved novelty</div>
+                  <div class="flex flex-wrap gap-1.5">
+                    {% for ck, cv in r.component_novelty.items() %}
+                      {% set color = (
+                        'rose'    if cv == 'restatement' or cv == 'unsupported' else
+                        'amber'   if cv == 'extension' or cv == 'correction' else
+                        'emerald' if cv == 'new_synthesis' else
+                        'slate'
+                      ) %}
+                      {% set label = ck|replace('decomposition_', 'dim: ')|replace('_', ' ') %}
+                      <span class="px-1.5 py-0.5 rounded mono text-[10px] border"
+                            style="border-color: var(--color-{{ color }}-500, currentColor);"
+                            title="{{ ck }} = {{ cv }}">
+                        <span class="text-slate-500">{{ label }}:</span>
+                        <span class="text-{{ color }}-600 dark:text-{{ color }}-400 font-semibold">{{ cv }}</span>
+                      </span>
+                    {% endfor %}
+                  </div>
+                  {% if r.canonical_form and r.canonical_form.get('aliasing_against') %}
+                    <div class="mt-1.5 text-[10px] text-rose-600 dark:text-rose-400">
+                      ⚠ Canonical form aliases register entries:
+                      {% for aid in r.canonical_form.get('aliasing_against') %}
+                        <span class="mono">{{ aid }}</span>{% if not loop.last %}, {% endif %}
+                      {% endfor %}
+                    </div>
+                  {% endif %}
+                </div>
+              {% endif %}
+
               {% if r.central_architectural_move %}
                 <div>
                   <div class="text-[10px] uppercase tracking-wider text-slate-500 mb-1">Central architectural move</div>

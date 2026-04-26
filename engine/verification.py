@@ -304,6 +304,123 @@ class VerificationMixin:
             "scored_against": scored,
         }
 
+    # ── Component-resolved novelty (Phase 3) ────────────────────────────
+
+    @staticmethod
+    def _slug(s: str) -> str:
+        """Slug a free-text dimension name into a stable component-novelty key.
+        Lowercase, alnum-only with single underscores."""
+        out = "".join((c if c.isalnum() else "_") for c in (s or "").lower())
+        while "__" in out:
+            out = out.replace("__", "_")
+        return out.strip("_") or "unnamed"
+
+    @staticmethod
+    def _decompose_novelty(
+        *,
+        novelty_type: str,
+        premises_supported: bool,
+        alias_tier: str,
+        central_move_prior_art: list,
+        functional_decomposition: list,
+        closest_peer_system: dict,
+    ) -> dict:
+        """Compute per-component novelty status from the verifier's outputs.
+
+        Phase 3 stores novelty per architectural component instead of (only)
+        as a single entry-level rollup. Reverification can then flip a
+        single component's status — e.g. "central move now has prior art
+        but the dimension-3 differentiator is still novel" — without
+        forcing a binary entry-level verdict change.
+
+        Rules (deterministic, no LLM):
+          • central_move:
+              - "unsupported"   if premises are not supported
+              - "restatement"   if Stage 2 alias-gap fired STRICT
+              - "extension"     if central_move_prior_art has substantive entries
+              - "correction"    if the LLM verdict named correction explicitly
+              - "new_synthesis" otherwise
+          • decomposition_<dim_slug>: one per functional_decomposition row
+              - "new_synthesis" if no nearest_exemplar named
+              - "restatement"   if how_ours_differs is empty / hand-wavy
+              - "extension"     otherwise (substantive differentiator named)
+          • closest_peer_system:
+              - "new_synthesis" if no peer named
+              - "restatement"   if peer named but no differentiators
+              - "extension"     otherwise
+        """
+        components: dict[str, str] = {}
+
+        # central_move
+        substantive_pa = [
+            c for c in (central_move_prior_art or [])
+            if isinstance(c, str) and len(c.strip()) > 20
+            and not c.lower().startswith(("no ", "none", "empty", "searched"))
+        ]
+        if not premises_supported:
+            components["central_move"] = "unsupported"
+        elif alias_tier == "STRICT":
+            components["central_move"] = "restatement"
+        elif substantive_pa:
+            components["central_move"] = "extension"
+        elif (novelty_type or "").lower() == "correction":
+            components["central_move"] = "correction"
+        else:
+            components["central_move"] = "new_synthesis"
+
+        # functional_decomposition rows — one component per dimension
+        handwave_markers = (
+            "figure out", "iterate until", "try various", "various approaches",
+            "appropriate", "as needed", "tbd", "to be determined",
+        )
+        for d in (functional_decomposition or []):
+            if not isinstance(d, dict):
+                continue
+            dim = (d.get("dimension") or "").strip()
+            if not dim:
+                continue
+            key = "decomposition_" + VerificationMixin._slug(dim)
+            nearest = (d.get("nearest_exemplar") or "").strip()
+            diff = (d.get("how_ours_differs") or "").strip()
+            if not nearest or nearest.lower() in ("none", "n/a", "unknown", "—", "-"):
+                components[key] = "new_synthesis"
+            elif (
+                not diff or len(diff) < 15
+                or any(m in diff.lower() for m in handwave_markers)
+            ):
+                components[key] = "restatement"
+            else:
+                components[key] = "extension"
+
+        # closest_peer_system
+        peer = closest_peer_system or {}
+        peer_name = (peer.get("name") or "").strip()
+        peer_diffs = peer.get("differentiators") or []
+        peer_diffs = [d for d in peer_diffs if isinstance(d, str) and len(d.strip()) > 5]
+        if not peer_name:
+            components["closest_peer_system"] = "new_synthesis"
+        elif not peer_diffs:
+            components["closest_peer_system"] = "restatement"
+        else:
+            components["closest_peer_system"] = "extension"
+
+        return components
+
+    @staticmethod
+    def _component_novelty_delta(old: dict, new: dict) -> dict:
+        """Return only the keys whose status changed between old and new.
+        Format: {key: {"from": old_status, "to": new_status}}.
+        Used by reverification to surface what flipped, instead of
+        overwriting the entry's stored component_novelty wholesale."""
+        delta: dict = {}
+        for k, v in (new or {}).items():
+            if (old or {}).get(k) != v:
+                delta[k] = {"from": (old or {}).get(k, "(absent)"), "to": v}
+        for k in (old or {}):
+            if k not in (new or {}):
+                delta[k] = {"from": old[k], "to": "(absent)"}
+        return delta
+
     @staticmethod
     def _build_canonical_form_context(
         canonical_form: dict,
@@ -837,6 +954,19 @@ class VerificationMixin:
                     seen.add(src)
 
         synthesis_prior_art = result.get("synthesis_prior_art", []) or []
+        component_novelty = self._decompose_novelty(
+            novelty_type=novelty_type,
+            premises_supported=premises_supported,
+            alias_tier=alias_tier,
+            central_move_prior_art=central_move_prior_art,
+            functional_decomposition=functional_decomposition,
+            closest_peer_system=closest_peer_system,
+        )
+        if component_novelty:
+            print(
+                "  [component-novelty] "
+                + " · ".join(f"{k}={v}" for k, v in component_novelty.items())
+            )
         register_entry = RegisterEntry(
             id=f"r-{uuid4().hex[:8]}",
             timestamp=datetime.now(timezone.utc).isoformat(),
@@ -878,6 +1008,7 @@ class VerificationMixin:
             target_application_domain=target_application_domain,
             known_prior_art_evaluations=list(known_prior_art_evaluations),
             canonical_form=dict(canonical_form),
+            component_novelty=dict(component_novelty),
             pareto_axes={
                 "verified_confidence": verified_confidence,
                 "premises_supported_count": len(
@@ -1432,6 +1563,22 @@ class VerificationMixin:
             old_verdict = (e.get("verdict") or "").strip().lower()
             old_novelty = (e.get("novelty_type") or "").strip()
 
+            # Phase 3: per-component novelty + delta vs the entry's prior
+            # component_novelty (if any). Surfaces which architectural
+            # components changed status during reverification — finer-grained
+            # than just the entry-level verdict flip.
+            new_component_novelty = self._decompose_novelty(
+                novelty_type=new_novelty,
+                premises_supported=bool(result.get("premises_supported", True)),
+                alias_tier=reverify_alias_tier,
+                central_move_prior_art=list(result.get("central_move_prior_art", []) or []),
+                functional_decomposition=list(result.get("functional_decomposition") or []),
+                closest_peer_system=dict(result.get("closest_peer_system") or {}),
+            )
+            component_delta = self._component_novelty_delta(
+                e.get("component_novelty") or {}, new_component_novelty,
+            )
+
             changed = (new_verdict != old_verdict) or (new_novelty != old_novelty)
             log_entry = {
                 "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -1455,10 +1602,20 @@ class VerificationMixin:
                 "new_contradicting_findings": list(result.get("contradicting_findings") or []),
                 "new_reasoning_flaws": list(result.get("reasoning_flaws") or []),
                 "new_verification_summary": (result.get("verification_summary") or "").strip(),
+                "new_component_novelty": new_component_novelty,
+                "component_novelty_delta": component_delta,
                 "tool_calls": list(tool_trace),
                 "verdict_changed": changed,
             }
             self.journal.append_register_reverification(eid, log_entry)
+            if component_delta:
+                print(
+                    "  [component-novelty delta] "
+                    + " · ".join(
+                        f"{k}: {v['from']}→{v['to']}"
+                        for k, v in component_delta.items()
+                    )
+                )
 
             if changed:
                 stats["verdict_changed"] += 1
@@ -1706,6 +1863,33 @@ class VerificationMixin:
             # of dicts post-load). Backfill `pareto_axes` opportunistically
             # too; the values come from already-stored fields, no LLM.
             entry["canonical_form"] = canonical
+            # Phase 3: populate component_novelty deterministically from
+            # already-stored verifier outputs. No LLM call needed; backfill
+            # always overwrites because the rule logic itself may have
+            # evolved between commits.
+            entry["component_novelty"] = self._decompose_novelty(
+                novelty_type=(entry.get("novelty_type") or "").strip(),
+                premises_supported=bool(entry.get("premises_supported", True)),
+                alias_tier=(
+                    "STRICT" if (gap < ALIAS_GAP_STRICT and nearest)
+                    else "BAND" if (gap < ALIAS_GAP_BAND and nearest)
+                    else "CLEAR"
+                ),
+                central_move_prior_art=list(
+                    entry.get("central_move_prior_art", []) or []
+                ),
+                functional_decomposition=list(
+                    entry.get("functional_decomposition") or []
+                ),
+                closest_peer_system=dict(entry.get("closest_peer_system") or {}),
+            )
+            if entry["component_novelty"]:
+                print(
+                    "    component_novelty: "
+                    + " · ".join(
+                        f"{k}={v}" for k, v in entry["component_novelty"].items()
+                    )[:200]
+                )
             if not entry.get("pareto_axes") or force:
                 peer = entry.get("closest_peer_system") or {}
                 kpa = entry.get("known_prior_art_evaluations") or []
