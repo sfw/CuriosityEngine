@@ -891,17 +891,18 @@ CLAIM DESCRIPTION:
 CENTRAL ARCHITECTURAL MOVE (extracted by the verifier — your job is to structure it):
 {central_architectural_move}
 
-Fill these slots:
-- `move_predicate`: the verb or short verb-phrase the claim proposes. Lowercase, no hedging. Examples of shape (NOT for copy-paste): "replaces", "adds", "decomposes into", "gates on", "routes via". Pick the single verb that captures what the move actually does to the system.
-- `on_substrate`: the noun phrase naming what the move acts on — the system, component, signal, or representation being modified.
-- `with_mechanism`: the noun phrase naming the technique, algorithm, architecture, or data structure that delivers the move. Be specific — if the claim names a particular method (e.g. a specific aggregation rule, a specific gate, a specific representation), preserve it.
-- `target_domain`: short phrase naming the domain the claim operates in. Derive from the claim text, not from memorised defaults.
-- `key_constraints`: 2-4 short bullet phrases naming the load-bearing qualifiers — conditions or properties without which the claim collapses to a different (usually weaker or pre-existing) position.
+Fill these slots — each is an ATOMIC, SHORT canonical phrase. Two structurally identical claims must produce the same slots, so prefer short common-form phrasings over verbose specific descriptions. Specificity goes in `key_constraints`, not in the main slots.
+
+- `move_predicate`: ONE VERB or two-word verb-phrase. Lowercase. Examples of shape (NOT for copy-paste): "replaces", "adds", "decomposes", "gates", "routes", "aggregates". Pick the single verb that captures what the move actually does to the system.
+- `on_substrate`: 2-5 WORDS naming what the move acts on. Strip qualifiers, scopes, and field-specific decorations. Examples of shape: "novelty scoring", "verifier panel", "expansion gate". If the claim says "novelty verification in pre-formal LLM research loops" → `on_substrate` is just "novelty verification". The "pre-formal LLM research loops" framing belongs in `target_domain`.
+- `with_mechanism`: 2-5 WORDS naming the technique class, NOT a full method description. Reduce to its canonical category. Examples of shape: "pairwise tournament", "rejection-option classification", "ensemble disagreement", "symbolic unification", "band-pass control". If the claim describes a "selective triage pipeline with canonicalization-stage reject option, explicit alias-gap band, and disagreement-sensitive heterogeneous committee escalation" → `with_mechanism` is "rejection-option classification" (the dominant technique class) and the rest goes in `key_constraints`.
+- `target_domain`: 2-6 words naming the domain context. "llm research loops", "iterative search agents", etc.
+- `key_constraints`: 2-4 short bullet phrases (≤8 words each) naming the load-bearing qualifiers — conditions or properties without which the claim collapses to a different (usually weaker or pre-existing) position. THIS is where the specific algorithm, threshold, dimensionality, or topology details belong.
 
 Rules:
 - Lowercase prose. No fluff. No hedging language ("may", "can", "potentially").
+- Length caps are hard. `on_substrate` and `with_mechanism` exceeding 5 words means you're putting too much in those slots — move detail to `key_constraints`.
 - Slots must be derivable from the claim text. Do NOT invent constraints the claim does not assert.
-- Preserve specificity: if the claim names a specific algorithm, threshold, dimensionality, or topology, keep it.
 - If the claim has no clear central move (e.g. the description is purely motivational or the central move field is empty), return ALL slots empty. An empty canonical form is a valid output — fabrication is not.
 - Domain-neutral: do not import examples or assumptions from any specific research field. Stay grounded in the claim's own subject.
 

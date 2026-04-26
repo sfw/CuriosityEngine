@@ -117,6 +117,8 @@ def main():
                         help="Run a negative-space scan: build (method × problem) matrix from journal entries, classify empty cells, verify underexplored gaps via academic_search, enqueue questions for verified gaps. Gated by [engine].negative_space_min_entries.")
     parser.add_argument("--backfill-canonical-forms", action="store_true",
                         help="Populate canonical_form on existing register entries that lack one. One-shot maintenance pass — safe to interrupt and re-run.")
+    parser.add_argument("--backfill-force", action="store_true",
+                        help="When used with --backfill-canonical-forms, re-canonicalize every active register entry, overwriting existing canonical_form values. Use after canonicalization-prompt revisions.")
     parser.add_argument("--export-directive", type=str, default=None, metavar="REGISTER_ID",
                         help="Generate a research directive (markdown) for ONE register entry. Runs the primary+verifier pipeline scoped to that entry. Output: data/{journal}_directives/{id}.md")
     parser.add_argument("--export-directives-bundle", action="store_true",
@@ -362,7 +364,7 @@ def main():
     elif args.synth_orphaned_xrefs:
         engine.synthesize_orphaned_xrefs()
     elif args.backfill_canonical_forms:
-        engine.backfill_canonical_forms()
+        engine.backfill_canonical_forms(force=args.backfill_force)
     elif args.scan_gaps:
         engine.scan_gaps()
     elif args.export_directive:

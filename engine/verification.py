@@ -12,9 +12,19 @@ from engine.embeddings import cosine
 from models import CrossReference, Insight, Prediction, RegisterEntry  # noqa: F401
 from prompts import CANONICAL_FORM_PROMPT, PREDICTION_CHECK_PROMPT, VERIFY_PROMPT
 
-# Alias-gap thresholds. The metric is `gap = 1 - similarity` where similarity
-# combines structured-slot match (predicate / substrate / mechanism) with
-# embedding cosine on the canonical-form text. Smaller gap = closer alias.
+# Alias-gap thresholds. The metric is `gap = 1 - similarity` where
+#   similarity = 0.3 * slot_match + 0.7 * cosine(canonical_form_text)
+# Smaller gap = closer alias.
+#
+# Weighting: embedding cosine carries more weight than exact slot match
+# because canonicalization tends to produce specific mechanism strings
+# that rarely string-match across structurally identical claims. Cosine
+# captures structural similarity that surface variation hides; slot match
+# is a confirmation signal when it does fire.
+#
+# Thresholds were calibrated on the ideation_on_ideation register
+# (39 entries, 21 canonicalized): genuine aliases sit at gap 0.30-0.40
+# under this formula; clearly-distinct claims sit above 0.50.
 #
 #   gap < ALIAS_GAP_STRICT  → near-identical canonical form. Treated as an
 #                              articulate restatement: novelty_type is
@@ -27,8 +37,10 @@ from prompts import CANONICAL_FORM_PROMPT, PREDICTION_CHECK_PROMPT, VERIFY_PROMP
 #                              downstream review (Phase 2 will use this to
 #                              trigger structured-delta scoring).
 #   gap >= ALIAS_GAP_BAND   → comfortably distinct. No alias signal.
-ALIAS_GAP_STRICT = 0.15
-ALIAS_GAP_BAND = 0.30
+ALIAS_GAP_STRICT = 0.30
+ALIAS_GAP_BAND = 0.45
+_ALIAS_SLOT_WEIGHT = 0.3
+_ALIAS_COSINE_WEIGHT = 0.7
 
 
 def _prompt_line(prompt: str) -> str:
@@ -198,7 +210,7 @@ class VerificationMixin:
             return {}
         return canonical
 
-    def _alias_gap(self, candidate: dict) -> dict:
+    def _alias_gap(self, candidate: dict, *, exclude_id: str = "") -> dict:
         """Compute the alias gap between `candidate` (a canonical form) and
         every register entry that has a populated canonical_form. Returns:
             {"gap": float in [0,1],
@@ -206,6 +218,10 @@ class VerificationMixin:
              "scored_against": int}
         gap=0.0 means perfect alias of nearest entry; gap=1.0 means
         orthogonal (or no comparable entries on file).
+
+        `exclude_id` skips that register entry from the comparison set —
+        used by the force-reverse-canonicalization path so an entry doesn't
+        match against its own previous canonical form.
 
         Scoring combines:
           - structured-slot match: fraction of {predicate, substrate,
@@ -237,6 +253,8 @@ class VerificationMixin:
         for e in self.journal.register:
             if e.get("status") != "active":
                 continue
+            if exclude_id and e.get("id") == exclude_id:
+                continue
             ec = e.get("canonical_form") or {}
             if not ec.get("move_predicate"):
                 continue
@@ -261,7 +279,11 @@ class VerificationMixin:
                     except Exception:  # noqa: BLE001
                         emb_score = 0.0
 
-            combined = (0.6 * slot_score) + (0.4 * emb_score) if candidate_emb is not None else slot_score
+            combined = (
+                (_ALIAS_SLOT_WEIGHT * slot_score) + (_ALIAS_COSINE_WEIGHT * emb_score)
+                if candidate_emb is not None
+                else slot_score
+            )
             if combined > best_score:
                 best_score = combined
                 nearest_ids = [e.get("id")]
@@ -1328,23 +1350,33 @@ class VerificationMixin:
 
     # ── Canonical-form backfill (Phase 1 maintenance pass) ──────────────
 
-    def backfill_canonical_forms(self) -> dict:
+    def backfill_canonical_forms(self, force: bool = False) -> dict:
         """One-shot maintenance pass — populate `canonical_form` on every
         active register entry that lacks one. Safe to interrupt and re-run:
-        entries already canonicalized are skipped, so the operation is
-        idempotent and incremental.
+        entries already canonicalized are skipped (unless `force=True`),
+        so the operation is idempotent and incremental.
 
         Also fills `pareto_axes` if the entry is missing those (Phase 0
         wrote them, so older entries lack them; backfilling them here lets
         Phase 4's admission gate flip on cleanly when it ships).
 
+        `force=True` re-canonicalizes EVERY active entry, overwriting
+        existing canonical_form values. Use after the canonicalization
+        prompt has been revised — the old form was generated under a
+        prior prompt and may no longer match the new prompt's slot
+        conventions, so re-canonicalizing is the only way to keep
+        cross-entry comparisons honest.
+
         Returns a stats dict for logging / programmatic callers.
         """
         register = self.journal.register
-        candidates = [
-            e for e in register
-            if e.get("status") == "active" and not (e.get("canonical_form") or {})
-        ]
+        if force:
+            candidates = [e for e in register if e.get("status") == "active"]
+        else:
+            candidates = [
+                e for e in register
+                if e.get("status") == "active" and not (e.get("canonical_form") or {})
+            ]
         print(
             f"\n--- BACKFILL CANONICAL FORMS ---\n"
             f"  register: {len(register)} total · {len(candidates)} need canonicalization"
@@ -1382,7 +1414,7 @@ class VerificationMixin:
             # (i.e. processed earlier in this pass + any populated
             # going-forward by verify_insight).
             try:
-                alias_signal = self._alias_gap(canonical)
+                alias_signal = self._alias_gap(canonical, exclude_id=rid)
             except Exception as e:  # noqa: BLE001
                 print(f"    [warn] alias_gap failed: {type(e).__name__}: {e}")
                 alias_signal = {"gap": 1.0, "nearest_ids": [], "scored_against": 0}
@@ -1398,7 +1430,7 @@ class VerificationMixin:
             # of dicts post-load). Backfill `pareto_axes` opportunistically
             # too; the values come from already-stored fields, no LLM.
             entry["canonical_form"] = canonical
-            if not entry.get("pareto_axes"):
+            if not entry.get("pareto_axes") or force:
                 peer = entry.get("closest_peer_system") or {}
                 kpa = entry.get("known_prior_art_evaluations") or []
                 entry["pareto_axes"] = {
