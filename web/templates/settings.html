@@ -583,6 +583,22 @@
             </option>
           </select>
         </label>
+
+        <label class="block md:col-span-3">
+          <span class="text-xs uppercase tracking-wider text-slate-400">synthesis_candidate_count</span>
+          <span class="block text-[11px] text-slate-500">
+            Phase 6 of the self-evolving verifier. When a high-novelty cross-reference is promoted
+            to an Insight, generate this many <strong>divergent</strong> candidate insights, canonicalize each,
+            and select the candidate with the largest <span class="mono">alias-gap</span> to the existing
+            register (ties broken by self-reported confidence). Pushes the generator toward structurally
+            distinct candidates instead of converging on the local attractor. <span class="mono">1</span> =
+            disabled (single-candidate, pre-Phase-6 behavior). <span class="mono">3</span> = default. Cost
+            scales linearly with candidate_count × synthesis call.
+          </span>
+          <input name="engine_synthesis_candidate_count" type="number" min="1" max="10"
+                 value="{{ connection.engine.synthesis_candidate_count }}"
+                 class="mt-1 w-32 px-3 py-2 rounded-lg border border-slate-700 bg-slate-900/60 text-sm mono" />
+        </label>
       </div>
     </section>
 

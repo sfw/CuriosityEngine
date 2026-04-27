@@ -180,6 +180,17 @@ class EngineSettings:
     #       can't see.
     # Phase 4 of the self-evolving verifier.
     register_admission_mode: str = "scalar"
+    # Phase 6 of the self-evolving verifier: tournament-ranked Best-of-N
+    # synthesis. When a high-novelty xref is promoted to an Insight, the
+    # synthesize step generates this many candidate insights, canonicalizes
+    # each, and selects the candidate with the largest alias-gap to the
+    # existing register (ties broken by self-reported confidence).
+    # Default 3; minimum effective value is 2 (1 means single-candidate, no
+    # tournament). Higher values trade more LLM cost for more divergent
+    # selection. Cost scales linearly: candidate_count × synthesis call.
+    # Borrows from Co-Scientist's Ranking agent + standard agentic
+    # best-of-N selection patterns.
+    synthesis_candidate_count: int = 3
     # Questions below this priority are rejected at enqueue time (except
     # human-sourced questions, which always bypass). Default 0.0 = disabled.
     # An earlier default of 0.70 was found to starve new journals — early
@@ -348,6 +359,9 @@ class CuriosityEngineConfig:
             register_admission_mode=str(
                 eng_section.get("register_admission_mode", "scalar")
             ).strip().lower() or "scalar",
+            synthesis_candidate_count=max(
+                1, int(eng_section.get("synthesis_candidate_count", 3))
+            ),
             held_entries_enabled=bool(eng_section.get("held_entries_enabled", True)),
             held_confidence_floor=float(eng_section.get("held_confidence_floor", 0.7)),
             cross_ref_role=str(eng_section.get("cross_ref_role", "")).strip(),
@@ -722,6 +736,12 @@ question_priority_floor = {eng.question_priority_floor}
 # × inverse_alias_gap). Pareto rejects "just like X but slightly worse on
 # every axis" admissions that the scalar floor can't see.
 register_admission_mode = "{eng.register_admission_mode}"
+# Phase 6 — Best-of-N synthesis tournament. When a high-novelty xref is
+# promoted to an Insight, generate this many candidates and select the one
+# with the largest alias-gap to the existing register (ties broken by
+# self-reported confidence). 1 = single-candidate (Phase-6-disabled,
+# matches pre-Phase-6 behavior). 3 = default. Linear LLM cost scaling.
+synthesis_candidate_count = {eng.synthesis_candidate_count}
 # Held-state pipeline — when the verifier returns `inconclusive` (couldn't reach
 # the claim, not refuted it), insights become held register entries pending
 # settlement rather than being silently rejected. Held entries usually require

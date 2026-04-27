@@ -220,6 +220,59 @@ python curiosity_engine.py --backfill-canonical-forms
 
 ---
 
+## Inspirations and prior work
+
+Two distinct sources have shaped CE's architecture, and they're worth distinguishing.
+
+### Phases 1-5 came from CE's own validated register
+
+The five phases of self-evolution we shipped are not borrowed from external systems — they were derived from validated insights *in the engine's own ideation_on_ideation journal*. Each phase has a source register entry:
+
+- **Phase 1** (canonicalization + alias-gap) ← `r-c67457` (conf 0.82)
+- **Phase 2** (three-stage verifier) ← `r-fcbba1` (conf 0.81)
+- **Phase 3** (component-resolved novelty) ← `r-bedce5b1` (conf 0.79)
+- **Phase 4** (Pareto admission) ← `r-46988c97` (conf 0.78)
+- **Phase 5** (explore/verify space split) ← `r-9a35e387` (conf 0.77)
+
+That is the literal self-evolution claim: the engine identified architectural patterns its own verifier should adopt, and we applied those patterns to the verifier.
+
+### Phases 6+ borrow from comparable public systems
+
+Once the verifier side stabilized, we audited public research-agent systems for ideas the engine could borrow on the *generator* side. Each subsequent phase credits its inspiration:
+
+- **Phase 6** (Best-of-N synthesis with alias-gap ranking) — borrows the **tournament-ranking** pattern from **[Google's AI Co-Scientist](https://research.google/blog/accelerating-scientific-breakthroughs-with-an-ai-co-scientist/)** (Generation / Reflection / Ranking / Evolution agents) plus standard agentic best-of-N selection. Internally aligns with `r-bd1386df` ("cascading structured pairwise tournaments") and `r-c2ee5c80` ("two-player adversarial game over a library") from CE's own register.
+- **Phase 7** (persona-conditioned introspection, planned) — borrows multi-perspective question generation from **[Stanford STORM / Co-STORM](https://github.com/stanford-oval/storm)**. Each persona (skeptic / outsider / historian / contrarian / practitioner) surfaces blind spots the single-voice introspection misses.
+- **Phase 8** (idea evolution from downgraded extensions, planned) — borrows the mutation loop from **[Sakana AI's "AI Scientist"](https://github.com/SakanaAI/AI-Scientist)** and the Evolution agent from Co-Scientist. Internally aligns with `r-3c792e21` ("typed supervision from false positives via retrospective unification") — we treat verifier downgrades as typed supervision signal for generator-side mutation.
+- **Phase 9** (hypothesis variants in investigation, planned) — borrows branching exploration from **[Tree of Thoughts](https://arxiv.org/abs/2305.10601)**. The explorer persona generates N divergent priors; the most-distant-from-majority-literature variant drives the investigation.
+
+### General agentic patterns CE builds on
+
+- **[Claude Code](https://claude.com/claude-code) and the Claude API** — the directive's `Agentic Prompt` block is structured to be pasted directly into Claude Code, MCP orchestrators, or similar LLM-driven agents. The grounding allowlists + tool-call discipline borrow from established agentic patterns.
+- **Cross-family adversarial verification** — the principle that a model evaluating its own output produces no signal is broadly understood; using a different-family model as verifier is standard practice in multi-agent systems. CE's contribution is the *append-only audit trail* + *mechanical guards* on top of cross-family verification, not the cross-family idea itself.
+- **Retrieval-augmented generation patterns** — `academic_search` + `web_fetch` + `archive_access` are standard RAG plumbing.
+
+### Academic / methodological lineage
+
+- **Hypothesis-first investigation** is broadly Popperian / falsificationist epistemology applied to LLM tool use. The mechanical surprise comparison is standard Bayesian-update structure.
+- **Pareto-dominance admission** (Phase 4) is multi-objective optimization theory applied to a register-admission gate.
+- **Negative-space mapping** (the `(method × problem)` matrix) is a long-standing literature-review discipline; CE just instruments it.
+- **Falsifiable predictions with target dates** is descended from prediction-market and forecasting-literature practice (Tetlock, Good Judgement Project, Metaculus).
+
+### Where CE is genuinely novel
+
+Some specific combinations don't appear (to my knowledge) in any public system:
+
+- **Append-only audit trails** with `reverification_log` — most systems mutate state on re-evaluation.
+- **Self-evolving verifier where the engine's own validated insights have been applied to its own architecture** — Phases 1-5 above.
+- **Canonical-form alias-gap detection over a research register** — Phase 1's structural similarity check on `(predicate, substrate, mechanism, target_domain, key_constraints)` tuples is not a pattern I've seen in published agentic systems.
+- **Pareto admission gate over multi-axis register entries** — Phase 4's tournament between *existing* register entries and incoming candidates.
+- **Literature-watch leakage check on directive verification criteria** — preventing the directive from outsourcing its evidence to "by date X a paper appears."
+- **Freshness probe at prediction creation time** — closing the dead-on-arrival case where a "prediction" was already true at creation.
+
+If you're aware of a system that does any of those, please open an issue — I'd want to learn from how they handled it.
+
+---
+
 ## How novelty is verified — the technical detail
 
 ### The problem the verifier is built around

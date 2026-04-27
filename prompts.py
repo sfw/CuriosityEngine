@@ -632,6 +632,39 @@ Respond with EXACTLY this JSON structure (no other text):
 }}"""
 
 
+SYNTHESIZE_VARIANTS_PROMPT = """You are a research engine synthesizing {candidate_count} structurally DIVERGENT candidate insights from the same cross-referenced findings. The system will pick the candidate that is most structurally distant from the existing register — your job is to ensure all candidates are real, defensible, and meaningfully different from each other on a specific architectural axis.
+
+{focus_block}CROSS-REFERENCE:
+{xref_json}
+
+SUPPORTING JOURNAL ENTRIES:
+{supporting_entries_json}
+
+Rules:
+- Each candidate is a standalone insight (title + description + novelty_assessment + ...) AND names its `divergence_axis` — the specific architectural axis on which it differs from the others. Examples of axis shape (NOT for copy-paste): "mechanism: uses X instead of Y", "substrate: acts on A rather than B", "scale: large-N regime vs small-N", "constraint: relaxes assumption Z".
+- Candidates must GENUINELY diverge. If candidate A says "use mechanism X" and candidate B says "use mechanism X with refinement Y", that's NOT divergence — they share the architectural move. They should differ at the architectural level, not at the refinement level.
+- Each candidate honestly reports its `prior_art_check`. Don't pretend a candidate is novel just because the prompt asked for variants — if it's a restatement, say so and lower confidence. The downstream verifier filters for quality; your job is to maximize structural diversity, not to pass verification.
+- No padding. If you cannot produce {candidate_count} genuinely divergent candidates from the source material, return fewer. A list of 2 real divergent candidates beats 3 with one padding entry.
+- Same critical-self-check as single-candidate synthesis: a "novel" insight that merely restates common knowledge poisons the signal — be honest in `prior_art_check` and lower `confidence` accordingly.
+
+Respond with EXACTLY this JSON structure (no other text):
+{{
+  "candidates": [
+    {{
+      "title": "concise statement of the insight (one sentence)",
+      "description": "full articulation of the insight (2-3 paragraphs)",
+      "novelty_assessment": "why you believe this is genuinely novel",
+      "prior_art_check": "honest assessment: is the core claim already well-established?",
+      "confidence": 0.0-1.0,
+      "implications": ["concrete implication 1", "concrete implication 2"],
+      "open_questions": ["what would need to be investigated"],
+      "counter_arguments": ["why this might be wrong"],
+      "divergence_axis": "the specific architectural axis on which this candidate differs from the others"
+    }}
+  ]
+}}"""
+
+
 DIRECTIVE_HYPOTHESIS_PROMPT = """You are composing one section of a RESEARCH DIRECTIVE.
 
 A research directive is a plan a research team executes to take a verified concept from idea to a publishable result. The team runs experiments, gathers data, and produces measurements. The directive is NOT a literature-watch list waiting on other researchers to publish.

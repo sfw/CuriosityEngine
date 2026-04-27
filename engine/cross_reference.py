@@ -9,7 +9,7 @@ from typing import Optional
 from uuid import uuid4
 
 from models import CrossReference, Insight
-from prompts import CROSS_REFERENCE_PROMPT, SYNTHESIZE_PROMPT
+from prompts import CROSS_REFERENCE_PROMPT, SYNTHESIZE_PROMPT, SYNTHESIZE_VARIANTS_PROMPT
 
 
 class CrossReferenceMixin:
@@ -215,18 +215,134 @@ class CrossReferenceMixin:
         return stats
 
     def synthesize(self, xref: CrossReference) -> Optional[Insight]:
+        """Synthesize an Insight from a cross-reference.
+
+        Phase 6 of the self-evolving verifier: when configured for
+        candidate_count > 1, generate N divergent candidate insights,
+        canonicalize each, and select the candidate with the largest
+        alias-gap to the existing register. Ties broken by self-reported
+        confidence. Borrows from Co-Scientist's Ranking agent + agentic
+        best-of-N selection. Falls back to single-candidate synthesis
+        when synthesis_candidate_count == 1 (pre-Phase-6 behavior).
+        """
         print("\n--- SYNTHESIZING INSIGHT ---")
 
         supporting = [e for e in self.journal.entries if e["id"] in xref.source_entries]
 
-        prompt = SYNTHESIZE_PROMPT.format(
+        candidate_count = max(
+            1, int(getattr(self.connection.engine, "synthesis_candidate_count", 3)),
+        )
+
+        if candidate_count <= 1:
+            # Pre-Phase-6 path: single candidate, no tournament.
+            prompt = SYNTHESIZE_PROMPT.format(
+                focus_block=self._focus_block(),
+                xref_json=json.dumps(asdict(xref), indent=2),
+                supporting_entries_json=json.dumps(supporting, indent=2),
+            )
+            result = self._call_primary(prompt)
+            return self._build_and_persist_insight(result, xref, divergence_axis="")
+
+        # Phase 6: tournament-ranked Best-of-N.
+        prompt = SYNTHESIZE_VARIANTS_PROMPT.format(
             focus_block=self._focus_block(),
             xref_json=json.dumps(asdict(xref), indent=2),
             supporting_entries_json=json.dumps(supporting, indent=2),
+            candidate_count=candidate_count,
+        )
+        try:
+            result = self._call_primary(prompt)
+        except Exception as e:  # noqa: BLE001
+            print(f"  [error] variant synthesis failed: {type(e).__name__}: {e}")
+            return None
+
+        candidates = list(result.get("candidates") or [])
+        if not candidates:
+            print("  [warn] variant synthesis returned no candidates")
+            return None
+
+        print(f"  [tournament] {len(candidates)} candidate(s) generated; scoring by alias-gap…")
+        winner = self._select_synthesis_candidate(candidates, xref)
+        if winner is None:
+            print("  [warn] tournament selected no winner — using highest-confidence candidate as fallback")
+            winner = max(
+                candidates, key=lambda c: float(c.get("confidence", 0) or 0),
+            )
+
+        return self._build_and_persist_insight(
+            winner, xref, divergence_axis=(winner.get("divergence_axis") or "").strip(),
         )
 
-        result = self._call_primary(prompt)
+    def _select_synthesis_candidate(
+        self, candidates: list[dict], xref: CrossReference,
+    ) -> Optional[dict]:
+        """Tournament selector: canonicalize each candidate, score by
+        alias-gap to the existing register, return the most-distant
+        candidate. Confidence breaks ties when alias-gaps are within
+        ALIAS_GAP_TIE_TOLERANCE of each other.
 
+        Falls back to the most-confident candidate if canonicalization
+        produces no usable canonical forms across the cohort.
+        """
+        # ALIAS_GAP_TIE_TOLERANCE — when two candidates' alias-gaps are
+        # within this much of each other, treat them as tied and break
+        # the tie by self-reported confidence. Keeps the tournament from
+        # being decided by tiny embedding-similarity noise.
+        ALIAS_GAP_TIE_TOLERANCE = 0.02
+
+        scored: list[tuple[float, float, int, dict, dict]] = []
+        for idx, c in enumerate(candidates):
+            title = (c.get("title") or "").strip()
+            description = (c.get("description") or "").strip()
+            # Try to canonicalize using a synthetic central_move derived
+            # from the candidate's own title — _canonicalize_central_move
+            # accepts an empty central_move and extracts from description
+            # when needed.
+            try:
+                canonical = self._canonicalize_central_move(
+                    title, description, central_architectural_move=title,
+                )
+            except Exception as e:  # noqa: BLE001 — canonicalization is best-effort
+                print(f"    [warn] canonicalize failed on candidate {idx + 1}: {type(e).__name__}: {e}")
+                canonical = {}
+            # Score: alias-gap if canonical form usable; 0 (worst) otherwise
+            if canonical and canonical.get("move_predicate"):
+                gap_signal = self._alias_gap(canonical)
+                gap = gap_signal.get("gap", 1.0)
+            else:
+                gap = 0.0
+                gap_signal = {"gap": 0.0, "nearest_ids": [], "scored_against": 0}
+            conf = float(c.get("confidence") or 0.0)
+            scored.append((gap, conf, idx, c, canonical))
+            div = (c.get("divergence_axis") or "").strip()[:60]
+            print(
+                f"    candidate {idx + 1}: gap={gap:.2f} conf={conf:.2f}"
+                + (f" · axis={div!r}" if div else "")
+            )
+
+        # Sort by gap desc; among entries within ALIAS_GAP_TIE_TOLERANCE of
+        # the top, prefer the higher confidence.
+        scored.sort(key=lambda s: s[0], reverse=True)
+        best_gap = scored[0][0]
+        tied = [s for s in scored if abs(s[0] - best_gap) <= ALIAS_GAP_TIE_TOLERANCE]
+        if len(tied) > 1:
+            tied.sort(key=lambda s: s[1], reverse=True)
+            print(
+                f"  [tournament] {len(tied)} candidates within "
+                f"{ALIAS_GAP_TIE_TOLERANCE:.2f} of best gap; "
+                "tiebreaking by confidence."
+            )
+        winner = tied[0]
+        winner_idx = winner[2]
+        print(
+            f"  [tournament] winner: candidate {winner_idx + 1} "
+            f"(gap={winner[0]:.2f}, conf={winner[1]:.2f})"
+        )
+        return winner[3]
+
+    def _build_and_persist_insight(
+        self, result: dict, xref: CrossReference, divergence_axis: str = "",
+    ) -> Insight:
         insight = Insight(
             id=f"i-{uuid4().hex[:8]}",
             timestamp=datetime.now(timezone.utc).isoformat(),
@@ -240,12 +356,12 @@ class CrossReferenceMixin:
             counter_arguments=result.get("counter_arguments", []),
             prior_art_check=result.get("prior_art_check", ""),
         )
-
         self.journal.add_insight(insight)
         print(f"  INSIGHT: {insight.title}")
         print(f"  Confidence: {insight.confidence:.2f}")
+        if divergence_axis:
+            print(f"  Divergence axis (selected): {divergence_axis[:140]}")
         if insight.prior_art_check:
             print(f"  Prior art: {insight.prior_art_check[:120]}...")
         print(f"  {insight.description[:200]}...")
-
         return insight

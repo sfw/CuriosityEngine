@@ -1588,6 +1588,7 @@ def settings_save(
     engine_confidence_drop_on_downgrade: float = Form(0.10),
     engine_question_priority_floor: float = Form(0.70),
     engine_register_admission_mode: str = Form("scalar"),
+    engine_synthesis_candidate_count: int = Form(3),
     engine_analog_probe_max_analogs: int = Form(3),
     engine_assumption_probe_max_assumptions: int = Form(3),
 ):
@@ -1719,6 +1720,7 @@ def settings_save(
             f"confidence_drop_on_downgrade = {max(0.0, min(0.5, engine_confidence_drop_on_downgrade))}\n"
             f"question_priority_floor = {max(0.0, min(1.0, engine_question_priority_floor))}\n"
             f'register_admission_mode = "{register_admission_mode}"\n'
+            f"synthesis_candidate_count = {max(1, min(10, engine_synthesis_candidate_count))}\n"
             f"analog_probe_max_analogs = {max(1, min(10, engine_analog_probe_max_analogs))}\n"
             f"assumption_probe_max_assumptions = {max(1, min(10, engine_assumption_probe_max_assumptions))}\n"
         )
