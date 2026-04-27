@@ -308,11 +308,20 @@ def journal_register(
         r["_effective_novelty"] = _effective_novelty_for_entry(r)
     if filter_status:
         register = [r for r in register if r.get("human_review_status", "unreviewed") == filter_status]
-    if lifecycle and lifecycle in ("active", "held"):
+    if lifecycle and lifecycle in ("active", "held", "audit_demoted"):
         if lifecycle == "active":
-            register = [r for r in register if r.get("status") != "held"]
+            # "active" means status=active (excludes held + audit_demoted)
+            register = [r for r in register if r.get("status") == "active"]
+        elif lifecycle == "audit_demoted":
+            register = [r for r in register if r.get("status") == "audit_demoted"]
         else:  # "held"
             register = [r for r in register if r.get("status") == "held"]
+    elif not lifecycle:
+        # Default view (no filter chosen): hide audit_demoted entries.
+        # Phase 10 — these are entries the strict verifier has demoted under
+        # audit; they're preserved in the journal but should be opt-in to
+        # surface, otherwise they pollute the default register view.
+        register = [r for r in register if r.get("status") != "audit_demoted"]
     # Compute novelty counts over the lifecycle/review-filtered set BEFORE
     # applying the novelty filter, so the filter-bar counts reflect the full
     # pool the user could switch to (not just the current slice).
@@ -327,7 +336,10 @@ def journal_register(
         if nt:
             register = [r for r in register if r.get("_effective_novelty") == nt]
     held_count = sum(1 for r in journal.register if r.get("status") == "held")
-    active_count = len(journal.register) - held_count
+    audit_demoted_count = sum(
+        1 for r in journal.register if r.get("status") == "audit_demoted"
+    )
+    active_count = len(journal.register) - held_count - audit_demoted_count
     # Map register-id → directive sidecar verdict for entries with a generated
     # directive on disk. Lets the template render a "View directive" link
     # alongside the export button + a verdict chip (clean / needs_fixes / fatal).
@@ -343,6 +355,7 @@ def journal_register(
         "novelty_total": total_for_all_button,
         "held_count": held_count,
         "active_count": active_count,
+        "audit_demoted_count": audit_demoted_count,
         "directive_status": directive_status,
     })
 
@@ -646,12 +659,15 @@ async def maintenance_reverify_register(
     max_confidence: str = Form(""),
     novelty_types: str = Form(""),
     needs_canonicalization: str = Form(""),
+    demote_on_downgrade: str = Form(""),
 ):
     """Batch re-verify existing register entries (audit under updated rules).
     Appends reverification_log to each entry; never overwrites the original
     verdict. Optional filters: max_confidence (float 0-1), novelty_types
     (comma-sep list, e.g. 'new_synthesis,correction'), needs_canonicalization
-    (checkbox; only entries lacking canonical_form)."""
+    (checkbox; only entries lacking canonical_form). Phase 10 option
+    demote_on_downgrade flips status to audit_demoted when the new verdict
+    is materially worse than the original."""
     extra: list[str] = ["--reverify-register"]
     mc = (max_confidence or "").strip()
     if mc:
@@ -665,6 +681,8 @@ async def maintenance_reverify_register(
         extra.extend(["--reverify-register-novelty-types", nt])
     if (needs_canonicalization or "").strip().lower() in ("on", "true", "1", "yes"):
         extra.append("--reverify-register-needs-canonicalization")
+    if (demote_on_downgrade or "").strip().lower() in ("on", "true", "1", "yes"):
+        extra.append("--reverify-register-demote-on-downgrade")
     result = await _spawn_maintenance_subprocess(
         _journal_path(name), extra, kind="reverify-register",
     )

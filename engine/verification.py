@@ -1759,6 +1759,7 @@ class VerificationMixin:
         novelty_types: Optional[list[str]] = None,
         only_new_synthesis: bool = False,
         needs_canonicalization: bool = False,
+        demote_on_downgrade: bool = False,
         reason: str = "admin re-verify under updated rules",
     ) -> dict:
         """Re-run the verifier over existing register entries WITHOUT mutating
@@ -1774,6 +1775,18 @@ class VerificationMixin:
             canonical_form (predate the Phase 1 canonicalization layer). Use to
             scope a reverify pass to legacy "dark" entries without re-running
             the heavy verifier on entries already canonicalized.
+
+        demote_on_downgrade (Phase 10): when True and a reverification produces
+        a materially worse verdict than the original, flip the entry's
+        `status` from "active" to "audit_demoted". The original verdict + all
+        verification fields are NOT overwritten — both are preserved in the
+        reverification_log. Only `status` changes, which removes the entry
+        from the default register view going forward. Default False
+        (audit-pure behavior, matches pre-Phase-10 semantics).
+
+        Material downgrade is defined as:
+          - validated → challenged | refuted | inconclusive
+          - inconclusive → challenged | refuted
 
         Use this after changing verification rules (e.g. the phase-1 guard for
         central-move prior art, the skeptic smell test, or the peer-system
@@ -1938,6 +1951,62 @@ class VerificationMixin:
             }
             self.journal.append_register_reverification(eid, log_entry)
 
+            # Phase 10: demote-on-downgrade. Audit-trail-preserving status
+            # flip when the new verdict is materially worse than the original.
+            # Verdict and verification fields stay untouched; only status
+            # changes. Reverify path mutation of `status` is consistent with
+            # existing held→active promotion (status is the only mutable
+            # lifecycle field).
+            if demote_on_downgrade and e.get("status") == "active":
+                _DOWNGRADE_PATHS = {
+                    "validated": {"challenged", "refuted", "inconclusive"},
+                    "inconclusive": {"challenged", "refuted"},
+                }
+                worse = (
+                    new_verdict in _DOWNGRADE_PATHS.get(old_verdict, set())
+                )
+                if worse:
+                    e["status"] = "audit_demoted"
+                    # Cascade to attached predictions: predictions tied to a
+                    # demoted entry are predictions about a claim that's no
+                    # longer in the active register. Mark them parent_demoted
+                    # so they don't pollute the engine's prediction-tracking
+                    # signal (treated as expired-by-parent rather than expired-
+                    # by-date). Only touches predictions that haven't already
+                    # resolved — confirmed/refuted/already_fulfilled stay as-is
+                    # because those are real outcomes the prediction earned.
+                    cascade_count = 0
+                    cascade_timestamp = log_entry["timestamp"]
+                    for p in self.journal.predictions:
+                        if p.get("register_entry_id") != eid:
+                            continue
+                        if (p.get("status") or "pending") not in ("pending", "already_fulfilled"):
+                            continue
+                        old_pred_status = p.get("status", "pending")
+                        p["status"] = "parent_demoted"
+                        p["last_updated_at"] = cascade_timestamp
+                        p.setdefault("review_log", []).append({
+                            "checked_at": cascade_timestamp,
+                            "old_status": old_pred_status,
+                            "new_status": "parent_demoted",
+                            "reason": (
+                                f"parent register entry {eid} demoted via "
+                                f"audit reverification ({old_verdict} → {new_verdict})"
+                            ),
+                            "source": "audit_demote_cascade",
+                        })
+                        cascade_count += 1
+                    self.journal.save()
+                    print(
+                        f"  [demote] {eid}: status active → audit_demoted "
+                        f"({old_verdict} → {new_verdict})"
+                        + (f" · cascaded {cascade_count} prediction(s)" if cascade_count else "")
+                    )
+                    stats.setdefault("demoted", 0)
+                    stats["demoted"] += 1
+                    stats.setdefault("predictions_cascaded", 0)
+                    stats["predictions_cascaded"] += cascade_count
+
             # Additive structural-field population: lift dark legacy entries
             # into Phase 1+ coverage when the reverify produces fresh
             # central_move material. ONLY writes fields that are currently
@@ -2006,10 +2075,16 @@ class VerificationMixin:
                 stats["same_verdict"] += 1
                 print(f"  ✓ {eid}: verdict unchanged ({new_verdict}/{new_novelty})")
 
+        demoted_msg = ""
+        if demote_on_downgrade:
+            demoted_msg = (
+                f" · demoted={stats.get('demoted', 0)}"
+                f" · predictions_cascaded={stats.get('predictions_cascaded', 0)}"
+            )
         print(
             f"\nRe-verify complete: examined={stats['examined']} · "
             f"verdict_changed={stats['verdict_changed']} · same={stats['same_verdict']} · "
-            f"errors={stats['errors']} · skipped={stats['skipped']}"
+            f"errors={stats['errors']} · skipped={stats['skipped']}{demoted_msg}"
         )
         return stats
 
@@ -2248,8 +2323,14 @@ class VerificationMixin:
         )
 
         print(f"\n  --- EVOLVING {register_entry.id} (depth {depth + 1}) ---")
+        # Route mutation to directive_primary_fast — slot perturbation is a
+        # constrained schema-fill task, not deep reasoning. Falls back to
+        # primary via the directive_primary chain when no fast profile is
+        # configured. Critical: a reasoning model thinking for 10+ minutes
+        # on a slot swap is wasteful and (worse) burns the full retry chain
+        # if it consistently times out.
         try:
-            result = self._call_primary(prompt)
+            result = self._call_directive_primary_fast(prompt)
         except Exception as e:  # noqa: BLE001
             print(f"  [evolve] mutation call failed: {type(e).__name__}: {e}")
             return None

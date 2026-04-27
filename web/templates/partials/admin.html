@@ -302,6 +302,24 @@
               </span>
             </span>
           </label>
+          <label class="block md:col-span-2 flex items-start gap-2">
+            <input type="checkbox" name="demote_on_downgrade" value="on"
+                   class="mt-1 accent-rose-500" />
+            <span>
+              <span class="text-xs text-slate-400">demote on downgrade <span class="text-rose-400">(Phase 10)</span></span>
+              <span class="block text-[11px] text-slate-500">
+                When the reverification produces a materially worse verdict than the original
+                (validated → challenged/refuted/inconclusive, or inconclusive → challenged/refuted),
+                flip the entry's <span class="mono">status</span> from <span class="mono">active</span>
+                to <span class="mono">audit_demoted</span>. The original verdict and verification
+                fields are NOT overwritten — only status changes. Removes the entry from default
+                register operations going forward; full provenance preserved in
+                <span class="mono">reverification_log</span>. Use this when the verifier has
+                evolved (e.g. after shipping new self-evolution phases) and you want to
+                effectively de-register entries the new verifier disagrees with.
+              </span>
+            </span>
+          </label>
         </form>
       </details>
     </div>

@@ -128,6 +128,13 @@ class RegisterEntry:
     # held                       — verifier returned `inconclusive` (couldn't reach, not refuted); awaiting settlement
     # validated_by_prediction    — promoted to active after attached prediction(s) resolved confirmed
     # challenged_by_prediction   — one or more attached predictions resolved refuted
+    # audit_demoted              — Phase 10: an audit reverification under updated rules produced a
+    #                              materially worse verdict than the original. Original verdict + verification
+    #                              fields are NOT overwritten (audit-trail discipline preserved); only `status`
+    #                              flips, removing the entry from default register operations going forward.
+    #                              The reverification_log carries both the original verdict and the demoting
+    #                              audit verdict for full provenance. Set only when reverify is run with the
+    #                              `demote_on_downgrade` flag.
     status: str = "active"
 
     # Held-state metadata — populated when the verdict was `inconclusive`.
@@ -212,7 +219,20 @@ class RegisterEntry:
 
 @dataclass
 class Prediction:
-    """A falsifiable claim attached to a RegisterEntry, checkable over time."""
+    """A falsifiable claim attached to a RegisterEntry, checkable over time.
+
+    Lifecycle status (str field):
+      pending           — awaiting check at or after target_date
+      confirmed         — check found the falsifiable_condition resolved positively
+      refuted           — check found the falsifiable_condition resolved negatively
+      already_fulfilled — freshness probe at creation found the claim already true
+      expired           — target_date passed without a resolving check
+      parent_demoted    — Phase 10: the parent register entry was demoted via audit
+                          reverification. The prediction is no longer tracked because
+                          the claim it predicts about is no longer in the active register.
+                          NOT a verdict on the prediction itself — a downstream effect of
+                          parent demotion. Preserved in the journal for full provenance.
+    """
 
     id: str
     register_entry_id: str

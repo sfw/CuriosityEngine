@@ -1,12 +1,17 @@
-{% set lifecycles = [('', 'all'), ('active', 'active'), ('held', 'held')] %}
+{% set lifecycles = [('', 'all'), ('active', 'active'), ('held', 'held'), ('audit_demoted', 'audit-demoted')] %}
 <div class="mb-2 flex flex-wrap gap-1 items-center text-xs">
   <span class="text-slate-500 mr-1">Lifecycle:</span>
   {% for val, label in lifecycles %}
-    {% set count = (active_count or 0) if val == 'active' else ((held_count or 0) if val == 'held' else ((active_count or 0) + (held_count or 0))) %}
+    {% if val == 'active' %}{% set count = active_count or 0 %}
+    {% elif val == 'held' %}{% set count = held_count or 0 %}
+    {% elif val == 'audit_demoted' %}{% set count = audit_demoted_count or 0 %}
+    {% else %}{% set count = (active_count or 0) + (held_count or 0) + (audit_demoted_count or 0) %}
+    {% endif %}
     <button type="button"
             class="px-2 py-0.5 rounded hover:bg-indigo-100 dark:hover:bg-indigo-900
                    {% if lifecycle == val %}ring-1 ring-indigo-500 bg-slate-200 dark:bg-slate-700{% else %}bg-slate-100 dark:bg-slate-800{% endif %}
-                   {% if val == 'held' and held_count %}text-amber-700 dark:text-amber-300{% endif %}"
+                   {% if val == 'held' and held_count %}text-amber-700 dark:text-amber-300{% endif %}
+                   {% if val == 'audit_demoted' and audit_demoted_count %}text-rose-700 dark:text-rose-300{% endif %}"
             hx-get="/journals/{{ name }}/register?lifecycle={{ val }}{% if filter_status %}&filter_status={{ filter_status }}{% endif %}{% if novelty_type %}&novelty_type={{ novelty_type }}{% endif %}"
             hx-target="#tab-body">
       {{ label }} {% if count %}<span class="mono text-[10px] opacity-75">{{ count }}</span>{% endif %}
@@ -60,6 +65,7 @@
     {% for r in register %}
       {% set status = r.human_review_status or 'unreviewed' %}
       {% set is_held = r.status == 'held' %}
+      {% set is_audit_demoted = r.status == 'audit_demoted' %}
       {# Audit-changed detection: any reverification_log entry whose verdict or
          novelty_type differs from the originally-stored values. Purely inline
          so we don't need a backend change mid-audit. #}
@@ -72,7 +78,8 @@
       <article id="{{ r.id }}"
                data-effective-novelty="{{ effective_novelty }}"
                class="p-4 rounded-md border scroll-mt-24
-                      {% if audit_changed %}border-sky-500 bg-sky-50 dark:bg-sky-900/10 ring-1 ring-sky-500/30
+                      {% if is_audit_demoted %}border-rose-500 bg-rose-50 dark:bg-rose-900/10 opacity-75
+                      {% elif audit_changed %}border-sky-500 bg-sky-50 dark:bg-sky-900/10 ring-1 ring-sky-500/30
                       {% elif is_held %}border-amber-500 bg-amber-500/10
                       {% elif status == 'approved' %}border-emerald-400 bg-emerald-50 dark:bg-emerald-900/20
                       {% elif status == 'rejected' %}border-red-400 bg-red-50 dark:bg-red-900/20
@@ -83,6 +90,12 @@
             <span class="text-xs mono text-slate-500">{{ r.id }}</span>
             {% if is_held %}
               <span class="text-xs mono px-1.5 py-0.5 rounded bg-amber-500/30 text-amber-200 border border-amber-500/40" title="Verifier returned `inconclusive` — awaiting settlement">held</span>
+            {% endif %}
+            {% if is_audit_demoted %}
+              <span class="text-xs mono px-1.5 py-0.5 rounded bg-rose-500/30 text-rose-200 border border-rose-500/40"
+                    title="Phase 10: an audit reverification under updated rules produced a materially worse verdict than the original. Original verdict + verification fields are preserved; status was flipped to remove the entry from default operations.">
+                audit-demoted
+              </span>
             {% endif %}
             {% if audit_changed %}
               <span class="text-xs mono px-1.5 py-0.5 rounded bg-sky-500/20 text-sky-700 dark:text-sky-300 border border-sky-500/40"
