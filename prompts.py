@@ -884,6 +884,113 @@ Respond with EXACTLY this JSON structure (no other text):
 }}"""
 
 
+DIRECTIVE_CONTRIBUTION_PROMPT = """You are composing the CONTRIBUTION ARTICULATION section of a research directive. The directive guides a verified concept toward publication; this section names the SPECIFIC contributions the resulting paper will claim, each grounded in concrete differentiators against the named peer systems. Reviewers ask "what's new here?" within the first 30 seconds of reading a paper — pre-articulating the contributions in concrete terms drives the paper's framing.
+
+ENGINE DOMAIN: {engine_domain}
+REGISTER ENTRY UNDER TRANSLATION:
+{register_entry_json}
+HYPOTHESIS (from prior section):
+{hypothesis}
+
+Your job: enumerate 3-5 specific contributions of this work, each anchored to a peer baseline named in the register entry's `closest_peer_system` or `functional_decomposition`. Each contribution must be checkable by a concrete experiment — preferably one already named in the test plan, or one that could be added to it.
+
+Rules:
+- Each contribution is ONE specific named claim, not a vague "advances the field" / "novel approach" framing.
+- `peer_baseline` MUST reference an existing entry: a named system from `closest_peer_system`, a row of `functional_decomposition`, or a citation already in the register's prior-art lists. Do not invent peers.
+- `magnitude_of_difference` is qualitative or quantitative — "first to apply X to Y", "reduces Z metric by ~N%", "removes the assumption that A". Specific over vague.
+- `evidence_required` is the experimental result that would substantiate this contribution. Should map to a Test Plan step or Verification Criteria signal.
+- No literature-watch framings ("by [date] a paper appears…"). Contributions are claims about THIS work, not predictions about other researchers.
+- No fabrication: do not name peer systems that aren't in the register. Use the register's vocabulary.
+
+Respond with EXACTLY this JSON structure (no other text):
+{{
+  "contributions": [
+    {{
+      "contribution": "one-sentence specific named contribution",
+      "peer_baseline": "the existing system/method this is being compared against (must come from the register entry's peer_system or functional_decomposition)",
+      "magnitude_of_difference": "qualitative or quantitative differentiator",
+      "evidence_required": "what experimental result would substantiate this contribution"
+    }}
+  ]
+}}"""
+
+
+DIRECTIVE_OPEN_DECISIONS_PROMPT = """You are composing the OPEN DESIGN DECISIONS section of a research directive. The directive contains a Test Plan and Verification Criteria — concrete steps and signals — but several load-bearing decisions are deliberately LEFT TO THE TEAM because the directive can't responsibly make them in advance. Your job is to enumerate those forks explicitly, so the team doesn't waste the first week of the project arguing about decisions that should have been surfaced upfront.
+
+ENGINE DOMAIN: {engine_domain}
+REGISTER ENTRY UNDER TRANSLATION:
+{register_entry_json}
+HYPOTHESIS (from prior section):
+{hypothesis}
+TEST PLAN STEPS (already drafted):
+{test_plan_json}
+VERIFICATION CRITERIA (already drafted):
+{verification_criteria_json}
+
+Your job: surface 3-5 specific design decisions the team must resolve before executing. These are LOAD-BEARING decisions — at least one Test Plan step is blocked until each is settled. Not edge cases, not optional refinements.
+
+Rules:
+- Each decision is a real fork: 2-4 options the team is choosing between, each with a real downside.
+- `tradeoff_summary` describes what changes between options — what's at stake, in concrete terms.
+- `decision_blocker_risk` names which Test Plan step (or paper section) is gated by this decision.
+- Forbidden:
+  - "Choose appropriate metrics" (this is a vague hand-wave). Specify which metrics if it's a fork; otherwise drop it.
+  - "Decide on the dataset" without naming candidates.
+  - Decisions whose answer is obvious from the directive itself.
+  - Decisions that the directive should have made (if you find one of these, the test plan or verification criteria has a hole — flag it).
+- 3-5 entries; quality over quantity. If the directive has fewer than 3 genuine open decisions, return only what's real.
+
+Respond with EXACTLY this JSON structure (no other text):
+{{
+  "open_decisions": [
+    {{
+      "decision": "the question the team must resolve",
+      "options": ["option A description", "option B description", "..."],
+      "tradeoff_summary": "what changes between options — what's at stake",
+      "decision_blocker_risk": "which Test Plan step or paper section is gated by this decision"
+    }}
+  ]
+}}"""
+
+
+DIRECTIVE_REVIEWER_CONCERNS_PROMPT = """You are composing the ANTICIPATED REVIEWER CONCERNS section of a research directive. The verifier already enumerated 3-5 candidate "kill queries" (skeptic_probe) when validating this register entry — those are precisely the questions a hostile reviewer is most likely to ask. Surface them now as anticipated reviewer challenges with pre-emptive responses, so the team can address them in the paper rather than being caught off-guard at submission.
+
+ENGINE DOMAIN: {engine_domain}
+REGISTER ENTRY UNDER TRANSLATION:
+{register_entry_json}
+HYPOTHESIS (from prior section):
+{hypothesis}
+CONTRIBUTIONS ARTICULATED (from prior section):
+{contributions_json}
+
+Sources of anticipated concerns (in priority order):
+1. `skeptic_probe.candidate_queries` — the verifier's enumerated kill queries. Each is a 1-sentence question or claim a hostile reviewer is most likely to raise. THESE ARE THE PRIMARY SOURCE.
+2. `closest_peer_system` overlap — if a peer system has substantive overlap and weak differentiators, a reviewer will ask about it. Translate the overlap into a reviewer-concern.
+3. `contradicting_findings` — published work that disagrees with the composite claim. Reviewers find these.
+4. `reasoning_flaws` — flaws the verifier itself surfaced.
+
+Your job: for each concern, draft a defensible 1-2 sentence response that the team can use directly in the paper. Cite a specific contribution, peer system, or Test Plan step where possible.
+
+Rules:
+- DO NOT invent reviewer concerns from nothing. Each `concern` must be traceable to one of the four sources above. The `concern_source` field names which one.
+- Responses must be defensible from the directive's own contents — no appeals to "future work will show" or "we plan to investigate".
+- Keep each `concern` to one sentence in the voice of a hostile reviewer ("This claim is just X under a different name", "This doesn't address the case where Y").
+- Keep each `evidence_against` to 1-2 sentences citing a specific contribution, differentiator, peer-system distinction, or Test Plan element.
+- 3-7 entries; do not pad. If the register entry has only 2 genuine concerns, return 2.
+
+Respond with EXACTLY this JSON structure (no other text):
+{{
+  "anticipated_concerns": [
+    {{
+      "concern": "what a hostile reviewer would say (one sentence, in their voice)",
+      "concern_source": "skeptic_probe | peer_overlap | contradicting_finding | reasoning_flaw",
+      "evidence_against": "1-2 sentence response citing a specific contribution / peer-system difference / Test Plan element",
+      "paper_section": "introduction | related_work | methods | results | discussion | limitations"
+    }}
+  ]
+}}"""
+
+
 CANONICAL_FORM_PROMPT = """You are extracting the CANONICAL STRUCTURED FORM of a research claim. This runs as Stage 1 of the three-stage verifier — BEFORE the heavy phased prior-art search. Stage 2 will use your output to detect whether the claim is a structural duplicate of an existing register entry; if so, the heavy verifier is skipped entirely.
 
 Goal: render the claim's central architectural move as a stable structured tuple so two claims that are surface-different but structurally identical canonicalize to (approximately) the same tuple. Downstream code uses this canonical form to detect articulate restatements that surface-similarity alone misses.

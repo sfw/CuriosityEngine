@@ -42,9 +42,12 @@ from typing import Optional
 
 from prompts import (
     DIRECTIVE_AGENTIC_PROMPT_PROMPT,
+    DIRECTIVE_CONTRIBUTION_PROMPT,
     DIRECTIVE_ELI5_PROMPT,
     DIRECTIVE_HYPOTHESIS_PROMPT,
+    DIRECTIVE_OPEN_DECISIONS_PROMPT,
     DIRECTIVE_RESEARCH_PATH_PROMPT,
+    DIRECTIVE_REVIEWER_CONCERNS_PROMPT,
     DIRECTIVE_TEST_PLAN_PROMPT,
     DIRECTIVE_VERIFICATION_CRITERIA_PROMPT,
     DIRECTIVE_VERIFIER_PROMPT,
@@ -197,6 +200,51 @@ class DirectivesMixin:
             "risks_to_publication": list(result.get("risks_to_publication") or []),
         }
 
+    def _section_contributions(
+        self, entry_for_prompt: dict, engine_domain: str, hypothesis: str,
+    ) -> list[dict]:
+        """Tier 1: enumerate 3-5 specific contributions vs named peer systems.
+        Reasoning model — synthesis with grounding to existing peer entries."""
+        prompt = DIRECTIVE_CONTRIBUTION_PROMPT.format(
+            engine_domain=engine_domain,
+            register_entry_json=json.dumps(entry_for_prompt, indent=2),
+            hypothesis=hypothesis or "(none generated)",
+        )
+        result = self._call_directive_primary(prompt, max_tokens=_SECTION_MAX_TOKENS)
+        return list(result.get("contributions") or [])
+
+    def _section_open_decisions(
+        self, entry_for_prompt: dict, engine_domain: str,
+        hypothesis: str, test_plan: list[dict], criteria: dict,
+    ) -> list[dict]:
+        """Tier 1: forks the team must resolve before executing. Fast model
+        — synthesis-heavy, low CoT need."""
+        prompt = DIRECTIVE_OPEN_DECISIONS_PROMPT.format(
+            engine_domain=engine_domain,
+            register_entry_json=json.dumps(entry_for_prompt, indent=2),
+            hypothesis=hypothesis or "(none generated)",
+            test_plan_json=json.dumps(test_plan, indent=2),
+            verification_criteria_json=json.dumps(criteria, indent=2),
+        )
+        result = self._call_directive_primary_fast(prompt, max_tokens=_SECTION_MAX_TOKENS)
+        return list(result.get("open_decisions") or [])
+
+    def _section_reviewer_concerns(
+        self, entry_for_prompt: dict, engine_domain: str,
+        hypothesis: str, contributions: list[dict],
+    ) -> list[dict]:
+        """Tier 1: surface skeptic_probe.candidate_queries + peer overlaps +
+        contradicting findings as anticipated reviewer concerns with
+        pre-emptive responses. Fast model — data already on the register."""
+        prompt = DIRECTIVE_REVIEWER_CONCERNS_PROMPT.format(
+            engine_domain=engine_domain,
+            register_entry_json=json.dumps(entry_for_prompt, indent=2),
+            hypothesis=hypothesis or "(none generated)",
+            contributions_json=json.dumps(contributions, indent=2),
+        )
+        result = self._call_directive_primary_fast(prompt, max_tokens=_SECTION_MAX_TOKENS)
+        return list(result.get("anticipated_concerns") or [])
+
     def _section_test_plan(
         self, entry_for_prompt: dict, engine_domain: str,
         predictions: list[dict], hypothesis: str,
@@ -328,6 +376,9 @@ class DirectivesMixin:
         citations: list[str],
         eli5: str = "",
         research_path: Optional[dict] = None,
+        contributions: Optional[list[dict]] = None,
+        open_decisions: Optional[list[dict]] = None,
+        reviewer_concerns: Optional[list[dict]] = None,
         flags: Optional[list[str]] = None,
     ) -> str:
         rid = entry.get("id", "unknown")
@@ -374,6 +425,10 @@ class DirectivesMixin:
         parts.append(self._positioning_section(entry))
         parts.append("")
 
+        parts.append("## Contribution Articulation")
+        parts.append(self._contributions_section(contributions or []))
+        parts.append("")
+
         parts.append("## Test Plan")
         if test_plan:
             for step in test_plan:
@@ -407,6 +462,14 @@ class DirectivesMixin:
         parts.append(f"| Confirmed | {(criteria.get('confirmed') or '—').replace(chr(124), chr(92) + chr(124))} |")
         parts.append(f"| Refuted | {(criteria.get('refuted') or '—').replace(chr(124), chr(92) + chr(124))} |")
         parts.append(f"| Inconclusive | {(criteria.get('inconclusive') or '—').replace(chr(124), chr(92) + chr(124))} |")
+        parts.append("")
+
+        parts.append("## Open Design Decisions for the Team")
+        parts.append(self._open_decisions_section(open_decisions or []))
+        parts.append("")
+
+        parts.append("## Anticipated Reviewer Concerns")
+        parts.append(self._reviewer_concerns_section(reviewer_concerns or []))
         parts.append("")
 
         parts.append("## Research Path to Publication")
@@ -456,6 +519,62 @@ class DirectivesMixin:
             return "_(generator returned no research path)_"
         return "\n".join(lines).rstrip()
 
+    def _contributions_section(self, contributions: list[dict]) -> str:
+        if not contributions:
+            return "_(generator returned no contributions)_"
+        lines: list[str] = []
+        lines.append("| # | Contribution | Peer baseline | Magnitude of difference | Evidence required |")
+        lines.append("| --- | --- | --- | --- | --- |")
+        for i, c in enumerate(contributions, 1):
+            cb = lambda s: (str(s or "—").strip().replace("|", "\\|").replace(chr(10), " "))  # noqa: E731
+            lines.append(
+                f"| {i} | {cb(c.get('contribution'))} "
+                f"| {cb(c.get('peer_baseline'))} "
+                f"| {cb(c.get('magnitude_of_difference'))} "
+                f"| {cb(c.get('evidence_required'))} |"
+            )
+        return "\n".join(lines)
+
+    def _open_decisions_section(self, decisions: list[dict]) -> str:
+        if not decisions:
+            return "_(no open design decisions surfaced — directive resolves all load-bearing forks)_"
+        lines: list[str] = []
+        for i, d in enumerate(decisions, 1):
+            decision = (d.get("decision") or "?").strip()
+            options = d.get("options") or []
+            tradeoff = (d.get("tradeoff_summary") or "").strip()
+            blocker = (d.get("decision_blocker_risk") or "").strip()
+            lines.append(f"### {i}. {decision}")
+            if options:
+                lines.append("")
+                lines.append("**Options:**")
+                for opt in options:
+                    lines.append(f"- {str(opt).strip()}")
+            if tradeoff:
+                lines.append("")
+                lines.append(f"**Tradeoff.** {tradeoff}")
+            if blocker:
+                lines.append("")
+                lines.append(f"**Blocks:** {blocker}")
+            lines.append("")
+        return "\n".join(lines).rstrip()
+
+    def _reviewer_concerns_section(self, concerns: list[dict]) -> str:
+        if not concerns:
+            return "_(no anticipated reviewer concerns surfaced)_"
+        lines: list[str] = []
+        lines.append("| # | Anticipated concern (reviewer voice) | Source | Pre-emptive response | Paper section |")
+        lines.append("| --- | --- | --- | --- | --- |")
+        for i, c in enumerate(concerns, 1):
+            cb = lambda s: (str(s or "—").strip().replace("|", "\\|").replace(chr(10), " "))  # noqa: E731
+            lines.append(
+                f"| {i} | {cb(c.get('concern'))} "
+                f"| `{cb(c.get('concern_source'))}` "
+                f"| {cb(c.get('evidence_against'))} "
+                f"| {cb(c.get('paper_section'))} |"
+            )
+        return "\n".join(lines)
+
     # ── Pipeline orchestration ──────────────────────────────────────
 
     def _heartbeat(self, label: str, t0: float):
@@ -482,7 +601,7 @@ class DirectivesMixin:
         predictions = entry.get("_attached_predictions", []) or []
 
         # Section 1: hypothesis
-        self._heartbeat("generating hypothesis (1/6)", t0)
+        self._heartbeat("generating hypothesis (1/9)", t0)
         try:
             hypothesis = self._section_hypothesis(entry_for_prompt, engine_domain, predictions)
         except Exception as e:  # noqa: BLE001
@@ -490,15 +609,27 @@ class DirectivesMixin:
             hypothesis = ""
 
         # Section 2: ELI5 (depends on entry + hypothesis only — fast, small)
-        self._heartbeat("generating plain-language summary (2/6)", t0)
+        self._heartbeat("generating plain-language summary (2/9)", t0)
         try:
             eli5 = self._section_eli5(entry_for_prompt, engine_domain, hypothesis)
         except Exception as e:  # noqa: BLE001
             print(f"  [error] ELI5 generation failed: {type(e).__name__}: {e}")
             eli5 = ""
 
-        # Section 3: test plan (conditioned on hypothesis)
-        self._heartbeat("generating test plan (3/6)", t0)
+        # Section 3: contribution articulation (Tier 1) — 3-5 specific
+        # contributions vs named peer systems. Runs early so reviewer
+        # concerns later can cite the contributions explicitly.
+        self._heartbeat("generating contribution articulation (3/9)", t0)
+        try:
+            contributions = self._section_contributions(
+                entry_for_prompt, engine_domain, hypothesis,
+            )
+        except Exception as e:  # noqa: BLE001
+            print(f"  [error] contribution articulation failed: {type(e).__name__}: {e}")
+            contributions = []
+
+        # Section 4: test plan (conditioned on hypothesis)
+        self._heartbeat("generating test plan (4/9)", t0)
         try:
             test_plan = self._section_test_plan(
                 entry_for_prompt, engine_domain, predictions, hypothesis,
@@ -507,8 +638,8 @@ class DirectivesMixin:
             print(f"  [error] test plan generation failed: {type(e).__name__}: {e}")
             test_plan = []
 
-        # Section 4: agentic prompt (conditioned on hypothesis + test plan)
-        self._heartbeat("generating agentic prompt (4/6)", t0)
+        # Section 5: agentic prompt (conditioned on hypothesis + test plan)
+        self._heartbeat("generating agentic prompt (5/9)", t0)
         try:
             agentic = self._section_agentic_prompt(
                 entry_for_prompt, engine_domain, hypothesis, test_plan,
@@ -523,8 +654,8 @@ class DirectivesMixin:
                 "unresolved_dependencies": [f"generation failed: {type(e).__name__}"],
             }
 
-        # Section 5: verification criteria
-        self._heartbeat("generating verification criteria (5/6)", t0)
+        # Section 6: verification criteria
+        self._heartbeat("generating verification criteria (6/9)", t0)
         try:
             criteria = self._section_verification_criteria(
                 entry_for_prompt, engine_domain, predictions, hypothesis,
@@ -533,8 +664,32 @@ class DirectivesMixin:
             print(f"  [error] verification criteria generation failed: {type(e).__name__}: {e}")
             criteria = {"confirmed": "", "refuted": "", "inconclusive": ""}
 
-        # Section 6: research path to publication (strategic narrative)
-        self._heartbeat("generating research path (6/6)", t0)
+        # Section 7: open design decisions (Tier 1) — forks the team
+        # must resolve before executing. Conditioned on test plan + criteria.
+        self._heartbeat("generating open design decisions (7/9)", t0)
+        try:
+            open_decisions = self._section_open_decisions(
+                entry_for_prompt, engine_domain, hypothesis, test_plan, criteria,
+            )
+        except Exception as e:  # noqa: BLE001
+            print(f"  [error] open decisions generation failed: {type(e).__name__}: {e}")
+            open_decisions = []
+
+        # Section 8: anticipated reviewer concerns (Tier 1) — surfaces
+        # skeptic_probe + peer overlaps + contradicting findings as
+        # reviewer challenges with pre-emptive responses. Conditioned on
+        # contributions so responses can cite them.
+        self._heartbeat("generating anticipated reviewer concerns (8/9)", t0)
+        try:
+            reviewer_concerns = self._section_reviewer_concerns(
+                entry_for_prompt, engine_domain, hypothesis, contributions,
+            )
+        except Exception as e:  # noqa: BLE001
+            print(f"  [error] reviewer concerns generation failed: {type(e).__name__}: {e}")
+            reviewer_concerns = []
+
+        # Section 9: research path to publication (strategic narrative)
+        self._heartbeat("generating research path (9/9)", t0)
         try:
             research_path = self._section_research_path(
                 entry_for_prompt, engine_domain, hypothesis, test_plan,
@@ -548,6 +703,8 @@ class DirectivesMixin:
         markdown = self._assemble_markdown(
             entry, hypothesis, test_plan, agentic, criteria, citations,
             eli5=eli5, research_path=research_path,
+            contributions=contributions, open_decisions=open_decisions,
+            reviewer_concerns=reviewer_concerns,
         )
 
         # Verifier review pass
@@ -657,6 +814,8 @@ class DirectivesMixin:
             current_markdown = self._assemble_markdown(
                 entry, hypothesis, test_plan, current_agentic, criteria, citations,
                 eli5=eli5, research_path=research_path,
+                contributions=contributions, open_decisions=open_decisions,
+                reviewer_concerns=reviewer_concerns,
             )
             footer = {
                 "title": (entry.get("title") or "").strip(),
@@ -704,6 +863,8 @@ class DirectivesMixin:
         annotated = self._assemble_markdown(
             entry, hypothesis, test_plan, current_agentic, criteria, citations,
             eli5=eli5, research_path=research_path,
+            contributions=contributions, open_decisions=open_decisions,
+            reviewer_concerns=reviewer_concerns,
             flags=current_flags,
         )
         return {
