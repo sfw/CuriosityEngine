@@ -1,50 +1,195 @@
-{% if predictions %}
-  <div class="space-y-3">
-    {% for p in predictions %}
-      {% set entry = register_by_id.get(p.register_entry_id) %}
-      <article id="{{ p.id }}" class="p-3 rounded-md border border-slate-200 dark:border-slate-700 scroll-mt-24">
-        <div class="flex items-baseline gap-2">
-          <span class="text-xs mono text-slate-500">{{ p.id }}</span>
-          <span class="text-xs mono px-1.5 py-0.5 rounded
-                       {% if p.status == 'confirmed' %}bg-emerald-200 dark:bg-emerald-800
-                       {% elif p.status == 'refuted' %}bg-red-200 dark:bg-red-800
-                       {% elif p.status == 'expired' %}bg-slate-200 dark:bg-slate-700
-                       {% else %}bg-amber-200 dark:bg-amber-800{% endif %}">{{ p.status }}</span>
-          <span class="text-xs text-slate-500">target {{ p.target_date }}</span>
-        </div>
-        <div class="mt-1 text-sm font-medium">{{ p.claim }}</div>
-        <div class="mt-1 text-xs text-slate-600 dark:text-slate-400">
-          <span class="font-semibold">Falsifiable condition:</span> {{ p.falsifiable_condition }}
-        </div>
-        <div class="mt-1 text-xs text-slate-600 dark:text-slate-400">
-          <span class="font-semibold">Check method:</span> {{ p.check_method }}
-        </div>
-        {% if entry %}
-          <div class="mt-1 text-xs text-slate-500">
-            From register:
-            <a href="/journals/{{ name }}?tab=register#{{ entry.id }}"
-               title="Jump to this register entry"
-               class="text-slate-500 hover:text-indigo-300 no-underline">{{ entry.title }}</a>
-            <span class="mono text-[10px] text-slate-600 ml-1">{{ entry.id }}</span>
-          </div>
-        {% endif %}
-        {% if p.review_log %}
-          <details class="mt-2 text-xs">
-            <summary class="cursor-pointer text-slate-600 dark:text-slate-400">Review history ({{ p.review_log|length }})</summary>
-            <ol class="mt-1 space-y-1 list-decimal list-inside">
-              {% for r in p.review_log %}
-                <li>
-                  <span class="mono">{{ r.checked_at[:10] }}</span>
-                  · <span class="font-semibold">{{ r.verdict }}</span>
-                  · {{ r.reasoning }}
-                </li>
-              {% endfor %}
-            </ol>
-          </details>
-        {% endif %}
-      </article>
+{# Predictions tab — filter chips at top, sort toggle, status-coded cards.
+   parent_demoted predictions hidden by default (cascade leaves them in the
+   journal for audit purposes). Review history renders both shapes:
+     - manual check (--check-predictions): {checked_at, verdict, reasoning, ...}
+     - cascade event (parent demote / refute cascade): {checked_at, old_status,
+       new_status, reason, source}
+#}
+{% set status_chips = [
+    ('', 'all active', total_count - (status_counts.get('parent_demoted') or 0)),
+    ('pending', 'pending', status_counts.get('pending') or 0),
+    ('confirmed', 'confirmed', status_counts.get('confirmed') or 0),
+    ('refuted', 'refuted', status_counts.get('refuted') or 0),
+    ('already_fulfilled', 'already fulfilled', status_counts.get('already_fulfilled') or 0),
+    ('expired', 'expired', status_counts.get('expired') or 0),
+    ('parent_demoted', 'parent demoted', status_counts.get('parent_demoted') or 0),
+    ('all', 'all (incl. demoted)', total_count),
+] %}
+{% set status_colors = {
+    'pending': 'amber',
+    'confirmed': 'emerald',
+    'refuted': 'red',
+    'already_fulfilled': 'sky',
+    'expired': 'slate',
+    'parent_demoted': 'rose',
+} %}
+
+<div class="space-y-3">
+  {# Filter chips #}
+  <div class="flex flex-wrap items-center gap-1.5 text-xs">
+    <span class="text-slate-500 mr-1">Status:</span>
+    {% for val, label, count in status_chips %}
+      {% if count > 0 or val == '' or val == active_filter %}
+        {% set color = status_colors.get(val, 'slate') %}
+        <button type="button"
+                class="px-2 py-0.5 rounded mono hover:bg-indigo-100 dark:hover:bg-indigo-900
+                       {% if active_filter == val %}ring-1 ring-indigo-500 bg-slate-200 dark:bg-slate-700{% else %}bg-slate-100 dark:bg-slate-800{% endif %}
+                       {% if val and count and val != active_filter %}text-{{ color }}-700 dark:text-{{ color }}-300{% endif %}"
+                hx-get="/journals/{{ name }}/predictions?status_filter={{ val }}&sort_by={{ active_sort }}"
+                hx-target="#tab-body">
+          {{ label }} <span class="text-[10px] opacity-75">{{ count }}</span>
+        </button>
+      {% endif %}
     {% endfor %}
   </div>
-{% else %}
-  <p class="text-sm text-slate-500">No predictions attached yet. Predictions are emitted by the verifier when an insight is validated.</p>
-{% endif %}
+
+  {# Sort toggle #}
+  <div class="flex flex-wrap items-center gap-1.5 text-xs">
+    <span class="text-slate-500 mr-1">Sort:</span>
+    {% set sorts = [
+        ('target_asc', 'target ↑ (most due)'),
+        ('target_desc', 'target ↓'),
+        ('created_desc', 'created ↓ (newest)'),
+        ('created_asc', 'created ↑'),
+    ] %}
+    {% for val, label in sorts %}
+      <button type="button"
+              class="px-2 py-0.5 rounded hover:bg-indigo-100 dark:hover:bg-indigo-900
+                     {% if active_sort == val %}ring-1 ring-indigo-500 bg-slate-200 dark:bg-slate-700{% else %}bg-slate-100 dark:bg-slate-800{% endif %}"
+              hx-get="/journals/{{ name }}/predictions?status_filter={{ active_filter }}&sort_by={{ val }}"
+              hx-target="#tab-body">
+        {{ label }}
+      </button>
+    {% endfor %}
+  </div>
+
+  {% if predictions %}
+    <div class="space-y-2">
+      {% for p in predictions %}
+        {% set status = (p.status or 'pending') %}
+        {% set color = status_colors.get(status, 'slate') %}
+        {% set days = p._days_to_target %}
+        {% set is_demoted = status == 'parent_demoted' %}
+        <article id="{{ p.id }}"
+                 class="rounded-lg border scroll-mt-24
+                        {% if is_demoted %}border-rose-300/50 dark:border-rose-800/50 bg-rose-50/40 dark:bg-rose-950/10 opacity-75
+                        {% elif status == 'pending' and days is not none and days < 0 %}border-amber-500 bg-amber-50/60 dark:bg-amber-950/20
+                        {% elif status == 'pending' %}border-amber-300/60 dark:border-amber-800/40 bg-amber-50/30 dark:bg-amber-950/10
+                        {% elif status == 'confirmed' %}border-emerald-300/60 dark:border-emerald-800/40 bg-emerald-50/30 dark:bg-emerald-950/10
+                        {% elif status == 'refuted' %}border-red-300/60 dark:border-red-800/40 bg-red-50/30 dark:bg-red-950/10
+                        {% elif status == 'already_fulfilled' %}border-sky-300/60 dark:border-sky-800/40 bg-sky-50/30 dark:bg-sky-950/10
+                        {% else %}border-slate-200 dark:border-slate-700{% endif %}">
+
+          {# Header: status badge, target date with days-to, prediction id #}
+          <header class="px-3 pt-2.5 pb-1.5 flex items-baseline gap-2 flex-wrap">
+            <span class="text-[11px] mono px-1.5 py-0.5 rounded font-semibold
+                         bg-{{ color }}-200 text-{{ color }}-900
+                         dark:bg-{{ color }}-800 dark:text-{{ color }}-100">{{ status|replace('_', ' ') }}</span>
+            {% if p.target_date %}
+              <span class="text-xs text-slate-700 dark:text-slate-300">
+                target <span class="mono">{{ p.target_date }}</span>
+              </span>
+              {% if days is not none %}
+                {% if status == 'pending' and days < 0 %}
+                  <span class="text-[11px] mono px-1.5 py-0.5 rounded bg-rose-200 text-rose-900 dark:bg-rose-800 dark:text-rose-100">
+                    overdue {{ -days }}d
+                  </span>
+                {% elif status == 'pending' and days <= 14 %}
+                  <span class="text-[11px] mono px-1.5 py-0.5 rounded bg-amber-200 text-amber-900 dark:bg-amber-800 dark:text-amber-100">
+                    due in {{ days }}d
+                  </span>
+                {% elif status == 'pending' %}
+                  <span class="text-[11px] text-slate-500">in {{ days }} days</span>
+                {% elif days < 0 %}
+                  <span class="text-[11px] text-slate-500">{{ -days }}d ago</span>
+                {% else %}
+                  <span class="text-[11px] text-slate-500">in {{ days }}d</span>
+                {% endif %}
+              {% endif %}
+            {% endif %}
+            <span class="ml-auto mono text-[10px] text-slate-500">{{ p.id }}</span>
+          </header>
+
+          {# Body: claim, falsifiable condition, check method #}
+          <div class="px-3 pb-2 space-y-1.5">
+            <p class="text-sm text-slate-800 dark:text-slate-100">{{ p.claim }}</p>
+
+            {% if p.falsifiable_condition %}
+              <p class="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                <span class="font-semibold uppercase tracking-wider text-[10px] text-slate-500">Falsifiable</span>
+                {{ p.falsifiable_condition }}
+              </p>
+            {% endif %}
+            {% if p.check_method %}
+              <p class="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                <span class="font-semibold uppercase tracking-wider text-[10px] text-slate-500">Check</span>
+                {{ p.check_method }}
+              </p>
+            {% endif %}
+
+            {# Parent register entry link #}
+            {% if p._parent_title %}
+              <p class="text-[11px] text-slate-500 pt-1">
+                Parent:
+                <a href="/journals/{{ name }}?tab=register#{{ p.register_entry_id }}"
+                   class="text-slate-600 dark:text-slate-300 hover:text-indigo-500 hover:underline"
+                   title="Jump to register entry">{{ p._parent_title[:80] }}</a>
+                <span class="mono text-[10px] text-slate-600 ml-1">{{ p.register_entry_id }}</span>
+                {% if p._parent_status and p._parent_status != 'active' %}
+                  <span class="ml-1 mono text-[10px] px-1 py-0.5 rounded
+                               {% if p._parent_status == 'audit_demoted' %}bg-rose-200/60 text-rose-800 dark:bg-rose-900/40 dark:text-rose-200
+                               {% elif p._parent_status == 'held' %}bg-amber-200/60 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200
+                               {% else %}bg-slate-200/60 text-slate-700 dark:bg-slate-800/60 dark:text-slate-300{% endif %}">
+                    {{ p._parent_status|replace('_', ' ') }}
+                  </span>
+                {% endif %}
+              </p>
+            {% endif %}
+
+            {# Review history — handles both shapes (manual check + cascade event) #}
+            {% if p.review_log %}
+              <details class="pt-1">
+                <summary class="text-[11px] cursor-pointer text-slate-500 hover:text-slate-700 dark:hover:text-slate-300">
+                  Review history ({{ p.review_log|length }})
+                </summary>
+                <div class="mt-1.5 space-y-1.5 border-l-2 border-slate-200 dark:border-slate-700 pl-2.5">
+                  {% for r in p.review_log %}
+                    {# Detect shape: manual checks have `verdict`+`reasoning`,
+                       cascade events have `old_status`+`new_status`+`source`. #}
+                    {% set is_cascade = r.source is defined and r.source %}
+                    <div class="text-[11px] space-y-0.5">
+                      <div class="flex items-baseline gap-2">
+                        <span class="mono text-slate-500">{{ r.checked_at[:10] if r.checked_at else '?' }}</span>
+                        {% if is_cascade %}
+                          <span class="mono text-[10px] px-1 py-0.5 rounded bg-rose-200/60 text-rose-800 dark:bg-rose-900/40 dark:text-rose-200">cascade</span>
+                          <span class="text-slate-600 dark:text-slate-400">{{ r.old_status }} → <span class="font-semibold">{{ r.new_status }}</span></span>
+                        {% elif r.verdict %}
+                          {% set vcolor = 'emerald' if r.verdict == 'confirmed' else ('red' if r.verdict == 'refuted' else 'slate') %}
+                          <span class="mono text-[10px] px-1 py-0.5 rounded bg-{{ vcolor }}-200/60 text-{{ vcolor }}-800 dark:bg-{{ vcolor }}-900/40 dark:text-{{ vcolor }}-200">{{ r.verdict }}</span>
+                        {% endif %}
+                      </div>
+                      {% set reason_text = r.reason or r.reasoning or '' %}
+                      {% if reason_text %}
+                        <div class="text-slate-600 dark:text-slate-400 leading-relaxed">{{ reason_text[:400] }}{% if reason_text|length > 400 %}…{% endif %}</div>
+                      {% endif %}
+                    </div>
+                  {% endfor %}
+                </div>
+              </details>
+            {% endif %}
+          </div>
+        </article>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="text-center py-8">
+      {% if active_filter == 'parent_demoted' %}
+        <p class="text-sm text-slate-500">No parent_demoted predictions.</p>
+      {% elif active_filter %}
+        <p class="text-sm text-slate-500">No predictions with status <span class="mono">{{ active_filter }}</span>.</p>
+      {% else %}
+        <p class="text-sm text-slate-500">No predictions attached yet. Predictions are emitted by the verifier when an insight is validated.</p>
+      {% endif %}
+    </div>
+  {% endif %}
+</div>

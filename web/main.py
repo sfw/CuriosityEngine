@@ -915,12 +915,83 @@ def _list_directive_files(name: str) -> list[dict]:
 
 
 @app.get("/journals/{name}/predictions", response_class=HTMLResponse)
-def journal_predictions(request: Request, name: str):
+def journal_predictions(
+    request: Request,
+    name: str,
+    status_filter: Optional[str] = None,
+    sort_by: Optional[str] = None,
+):
+    """Predictions tab. Status filter (default hides parent_demoted) +
+    sort (default: target_date asc — most-due first). Annotates each
+    prediction with parent register entry context (for the link + the
+    parent's effective status, since predictions for audit_demoted
+    parents render differently)."""
     journal = _load_journal(name)
+    register_by_id = {r["id"]: r for r in journal.register}
+    predictions = list(journal.predictions)
+
+    # Compute status counts on the FULL set (so filter chips show
+    # accurate totals even when filtered).
+    status_counts: dict[str, int] = {}
+    for p in predictions:
+        s = (p.get("status") or "pending").strip() or "pending"
+        status_counts[s] = status_counts.get(s, 0) + 1
+    total_count = len(predictions)
+
+    # Default filter: hide parent_demoted (the cascade leaves them in
+    # the journal for audit purposes; they're clutter in the default
+    # view). User can opt in via filter chip.
+    sf = (status_filter or "").strip().lower()
+    if sf == "all":
+        # Explicit show-everything (including parent_demoted).
+        visible = predictions
+    elif sf in ("pending", "confirmed", "refuted", "already_fulfilled",
+                "expired", "parent_demoted"):
+        visible = [p for p in predictions if (p.get("status") or "pending") == sf]
+    else:
+        # Default: hide parent_demoted only.
+        visible = [p for p in predictions if (p.get("status") or "pending") != "parent_demoted"]
+
+    # Annotate with parent context + days-to-due.
+    from datetime import datetime, timezone
+    today = datetime.now(timezone.utc).date()
+    for p in visible:
+        parent = register_by_id.get(p.get("register_entry_id") or "")
+        p["_parent_title"] = (parent or {}).get("title", "")
+        p["_parent_status"] = (parent or {}).get("status", "")
+        p["_parent_novelty"] = (parent or {}).get("novelty_type", "")
+        # Days to (or past) target_date — useful for prioritizing pending
+        # predictions and contextualizing resolved ones.
+        td_str = (p.get("target_date") or "").strip()
+        days = None
+        if td_str:
+            try:
+                td = datetime.strptime(td_str, "%Y-%m-%d").date()
+                days = (td - today).days
+            except ValueError:
+                days = None
+        p["_days_to_target"] = days
+
+    # Sort: default target_date ascending (most-due / most-overdue first
+    # for the pending case; resolved cases land near each other).
+    sb = (sort_by or "target_asc").strip().lower()
+    if sb == "created_desc":
+        visible.sort(key=lambda p: p.get("created_at") or "", reverse=True)
+    elif sb == "created_asc":
+        visible.sort(key=lambda p: p.get("created_at") or "")
+    elif sb == "target_desc":
+        visible.sort(key=lambda p: p.get("target_date") or "9999-99-99", reverse=True)
+    else:  # target_asc (default)
+        visible.sort(key=lambda p: p.get("target_date") or "9999-99-99")
+
     return templates.TemplateResponse(request, "partials/predictions.html", {
         "name": name,
-        "predictions": list(reversed(journal.predictions)),
-        "register_by_id": {r["id"]: r for r in journal.register},
+        "predictions": visible,
+        "status_counts": status_counts,
+        "total_count": total_count,
+        "active_filter": sf,
+        "active_sort": sb,
+        "register_by_id": register_by_id,
     })
 
 
