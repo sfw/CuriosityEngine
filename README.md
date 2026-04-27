@@ -222,11 +222,33 @@ python curiosity_engine.py --backfill-canonical-forms
 
 ## Inspirations and prior work
 
-Two distinct sources have shaped CE's architecture, and they're worth distinguishing.
+CuriosityEngine has three layers of architectural lineage, and they're worth distinguishing because they sit at different points in the codebase's history.
 
-### Phases 1-5 came from CE's own validated register
+### The pre-self-evolution engine
 
-The five phases of self-evolution we shipped are not borrowed from external systems — they were derived from validated insights *in the engine's own ideation_on_ideation journal*. Each phase has a source register entry:
+Before any of the self-evolution phases existed, CE was already a working domain-agnostic research loop. Most of the load-bearing design decisions — the ones that make the system work at all — live in that original architecture, not in the later self-evolution phases. The bones:
+
+- **Hypothesis-first investigation** committed before evidence arrives, so surprise is a structural comparison rather than a self-report.
+- **Cross-family adversarial verification** (different model family from primary) reviewing every synthesized insight.
+- **Append-only audit trail** with `reverification_log` — verdicts are never overwritten.
+- **Structured novelty decomposition** (`premises_supported × synthesis_findable`) — independent axes rather than a single confidence score.
+- **Phased prior-art search** with explicit Phase 0 / 1 / 2 / 3a / 3b / 4 / 5 + final skeptic probe inside the verifier itself.
+- **Falsifiable predictions with target dates** plus a freshness probe at creation time.
+- **Cross-domain analog probes** + **within-domain assumption probes** as deliberate counterforces to attractor convergence.
+- **Negative-space gap mapping** as a (method × problem) matrix that surfaces what *isn't* in the journal yet.
+- **Source-round-robin question queue** with priority floors and human-bypass.
+- **Knowledge graph + semantic retrieval** layer providing structural and semantic connection-finding across the journal's accumulated state.
+- **Research directive export pipeline** as the bridge from validated claim to executable plan.
+- **Engine-side verifier guards** — phase-1, peer-system, known-prior-art, skeptic-probe, challenged-hedge, confidence-drop, inconclusive — that fire mechanically without LLM involvement.
+- **Known prior-art anchors** as a human-in-the-loop feedback mechanism the verifier must consult.
+
+These weren't borrowed from any one specific public system. They came from the author's own design choices about what adversarial research-loop hygiene should look like — informed broadly by Popperian falsificationism, prediction-market and forecasting-tournament practice, retrieval-augmented generation patterns, agentic tool-use frameworks, and adversarial-multi-agent literature, but not derived from any single one of them.
+
+**Without this layer the self-evolution phases would have nothing to evolve.** The engine had to be capable of running an actual research journal, accumulating validated entries, and producing high-confidence claims about its own architectural problem space *before* those claims could be applied back to itself. The self-evolution phases are an upgrade applied to a working system, not its origin.
+
+### Self-evolution Phases 1-5: derived from CE's own validated register
+
+Once the pre-self-evolution engine was running well, the user pointed it at the topic *"how should LLM-driven research loops verify novelty?"* The journal accumulated 39 register entries on that subject. Five of the highest-confidence validated insights were then applied back to CE's own verifier — each phase below has a source register entry:
 
 - **Phase 1** (canonicalization + alias-gap) ← `r-c67457` (conf 0.82)
 - **Phase 2** (three-stage verifier) ← `r-fcbba1` (conf 0.81)
@@ -234,9 +256,9 @@ The five phases of self-evolution we shipped are not borrowed from external syst
 - **Phase 4** (Pareto admission) ← `r-46988c97` (conf 0.78)
 - **Phase 5** (explore/verify space split) ← `r-9a35e387` (conf 0.77)
 
-That is the literal self-evolution claim: the engine identified architectural patterns its own verifier should adopt, and we applied those patterns to the verifier.
+That's the literal self-evolution claim: the engine identified architectural patterns its own verifier should adopt, and the patterns came from the engine's own validated outputs rather than from external sources. Each phase is independently disable-able via config — they're additive on top of the pre-self-evolution engine, not load-bearing for it.
 
-### Phases 6+ borrow from comparable public systems
+### Self-evolution Phases 6-9: borrowed from comparable public systems
 
 Once the verifier side stabilized, we audited public research-agent systems for ideas the engine could borrow on the *generator* side. Each subsequent phase credits its inspiration:
 
@@ -260,14 +282,22 @@ Once the verifier side stabilized, we audited public research-agent systems for 
 
 ### Where CE is genuinely novel
 
-Some specific combinations don't appear (to my knowledge) in any public system:
+Some specific combinations don't appear (to my knowledge) in any public system. Crediting the layer they came from:
 
+**From the pre-self-evolution engine:**
 - **Append-only audit trails** with `reverification_log` — most systems mutate state on re-evaluation.
-- **Self-evolving verifier where the engine's own validated insights have been applied to its own architecture** — Phases 1-5 above.
-- **Canonical-form alias-gap detection over a research register** — Phase 1's structural similarity check on `(predicate, substrate, mechanism, target_domain, key_constraints)` tuples is not a pattern I've seen in published agentic systems.
-- **Pareto admission gate over multi-axis register entries** — Phase 4's tournament between *existing* register entries and incoming candidates.
+- **Structural novelty decomposition** (`premises_supported × synthesis_findable`) treated as independent axes whose specific combination is the *signature* of genuine new synthesis rather than a weakness.
+- **Engine-side mechanical guards** that fire after the verifier's LLM call — phase-1, peer-system, known-prior-art, skeptic-probe, challenged-hedge, confidence-drop. The pattern of refusing the LLM's hedging is not architectural; it's a post-hoc enforcement layer.
 - **Literature-watch leakage check on directive verification criteria** — preventing the directive from outsourcing its evidence to "by date X a paper appears."
 - **Freshness probe at prediction creation time** — closing the dead-on-arrival case where a "prediction" was already true at creation.
+- **Known prior-art anchors as mandatory verifier evaluation items** — human-in-the-loop feedback the verifier *must* consult.
+
+**From the self-evolution phases:**
+- **A self-evolving verifier where the engine's own validated insights have been applied to its own architecture** — Phases 1-5 are the literal claim. To my knowledge no public system has had its own outputs feed back into its own verification architecture this way.
+- **Canonical-form alias-gap detection over a research register** — Phase 1's structural similarity check on `(predicate, substrate, mechanism, target_domain, key_constraints)` tuples is not a pattern I've seen in published agentic systems.
+- **Pareto admission gate over multi-axis register entries** — Phase 4's tournament between *existing* register entries and incoming candidates.
+- **Component-resolved novelty** that lets reverification flip individual architectural components without forcing a binary entry-level verdict change — Phase 3.
+- **Verifier-diagnostic-driven idea evolution** — Phase 8 closes the verifier→generator feedback loop by treating the verifier's downgrade rationale (`central_move_prior_art`, `closest_peer_system`, `functional_decomposition`) as direct generator input for slot mutation.
 
 If you're aware of a system that does any of those, please open an issue — I'd want to learn from how they handled it.
 
