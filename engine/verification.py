@@ -17,6 +17,58 @@ from prompts import (
     VERIFY_PROMPT,
 )
 
+# Substantive-flaw markers used by the challenged-hedge guard. Pattern-
+# matched case-insensitively against each reasoning_flaw string. If any
+# flaw matches one of these, the verifier is making a real critique
+# (not just hedging), and the challenged → validated upgrade does NOT
+# fire. Module-level so the inline guard in verify_insight and the
+# reverify-path guard share the same definition. Expand when hedge
+# phrasings are wrongly flagged as substantive or vice-versa.
+_SUBSTANTIVE_FLAW_MARKERS = (
+    # Inferential leap / claim-doesn't-follow patterns
+    "leap", "does not follow", "doesn't follow",
+    "does not show", "doesn't show",
+    "does not establish", "doesn't establish",
+    "does not support", "doesn't support",
+    "does not validate", "doesn't validate",
+    "not established", "not validated", "not supported",
+    "not justified", "without justification",
+    "not equivalent",
+    # Scope / overclaim / generalization issues
+    "generaliz",  # generalize, generalization, overgeneralization
+    "overclaim", "overstate", "overstatement",
+    "overextend",
+    "too strong", "too broad", "too general",
+    "beyond the scope", "outside the scope",
+    # Transfer / domain-mismatch assumptions
+    "assumes transfer", "assumes this transfer",
+    "transfers to",
+    "depends on a",
+    "not shown to transfer",
+    # Alternatives undermine "necessary" claims
+    "viable alternative", "alternative architecture",
+    "alternative mechanism", "alternative approach",
+    "other approach",
+    # Assumption / evidence issues
+    "assumes without", "unsupported assumption",
+    "unfounded", "without warrant",
+    "insufficient evidence",
+    # Conflation / mechanism / causal
+    "conflat",
+    "no mechanism", "mechanism is missing", "mechanism missing",
+    "causal direction", "causal is unclear",
+    "reverse causation", "spurious",
+    # Sample / scope-of-evidence
+    "sample too narrow", "sample size",
+    # Contradiction / consistency
+    "contradicts", "inconsistent with",
+    # Interpretive moves not justified by cited work
+    "treated as if", "treated as though",
+    "cross-model interpretation",
+    "does not prove", "doesn't prove",
+)
+
+
 # Alias-gap thresholds. The metric is `gap = 1 - similarity` where
 #   similarity = 0.3 * slot_match + 0.7 * cosine(canonical_form_text)
 # Smaller gap = closer alias.
@@ -154,6 +206,130 @@ class VerificationMixin:
         if novelty_type == "unsupported":
             reasons.append("unsupported_premises")
         return ("reject", "", reasons)
+
+    # ── Prediction cascade (shared by all unregister paths) ──
+
+    def _cascade_predictions_parent_demoted(
+        self, register_entry_id: str, *, reason: str, source: str,
+    ) -> int:
+        """When a register entry effectively leaves the active register,
+        cascade its attached predictions to status=parent_demoted.
+
+        Predictions in `pending` or `already_fulfilled` flip; predictions
+        in `confirmed` or `refuted` stay (those are earned outcomes the
+        prediction won/lost on its own merits, regardless of parent
+        status). Each cascaded prediction gets a review_log entry citing
+        the cascade source and reason.
+
+        Used by:
+          - reverify_register_entries (Phase 10 demote)
+          - prediction-resolution code when a parent flips to
+            challenged_by_prediction (the *other* attached predictions
+            should cascade since the parent claim is now disputed)
+          - --review-register human rejection of an active entry
+
+        Returns the number of predictions cascaded.
+        """
+        from datetime import datetime, timezone
+        cascade_count = 0
+        cascade_timestamp = datetime.now(timezone.utc).isoformat()
+        for p in self.journal.predictions:
+            if p.get("register_entry_id") != register_entry_id:
+                continue
+            if (p.get("status") or "pending") not in ("pending", "already_fulfilled"):
+                continue
+            old_pred_status = p.get("status", "pending")
+            p["status"] = "parent_demoted"
+            p["last_updated_at"] = cascade_timestamp
+            p.setdefault("review_log", []).append({
+                "checked_at": cascade_timestamp,
+                "old_status": old_pred_status,
+                "new_status": "parent_demoted",
+                "reason": reason,
+                "source": source,
+            })
+            cascade_count += 1
+        return cascade_count
+
+    # ── Challenged-hedge guard (shared by verify + reverify paths) ──
+
+    @staticmethod
+    def _evaluate_challenged_hedge_upgrade(
+        *,
+        verdict: str,
+        novelty_type: str,
+        premises_supported: bool,
+        synthesis_findable: bool,
+        verified_confidence: float,
+        confidence_floor: float,
+        closest_peer_system: dict,
+        reasoning_flaws: list,
+    ) -> tuple[bool, str]:
+        """Decides whether the challenged-hedge guard should upgrade a
+        `challenged` verdict to `validated`. The guard exists because
+        the LLM verifier sometimes hedges a verdict to `challenged`
+        even when the structural decomposition it itself produced
+        constitutes a valid extension or new_synthesis. Returns
+        (should_upgrade, reason_string). reason_string is empty when
+        should_upgrade is False.
+
+        Preconditions for the upgrade:
+          - verdict == "challenged"
+          - confidence >= floor
+          - premises_supported
+          - one of:
+              novelty_type=extension AND peer_has_differentiators
+              novelty_type in (new_synthesis, correction) AND not synthesis_findable
+          - reasoning_flaws is empty OR contains no substantive markers
+            (matched against _SUBSTANTIVE_FLAW_MARKERS)
+
+        Used by verify_insight inline and by reverify_register_entries.
+        Without the reverify path applying this guard, reverify is
+        stricter than verify_insight on identical LLM outputs, leading
+        to over-aggressive demotions under Phase 10's
+        demote_on_downgrade flag.
+        """
+        if verdict != "challenged":
+            return (False, "")
+        if not premises_supported:
+            return (False, "")
+        if verified_confidence < confidence_floor:
+            return (False, "")
+
+        peer_has_differentiators = bool(
+            (closest_peer_system or {}).get("differentiators") or []
+        )
+        extension_eligible = (
+            novelty_type == "extension" and peer_has_differentiators
+        )
+        new_synthesis_eligible = (
+            novelty_type in ("new_synthesis", "correction")
+            and not synthesis_findable
+        )
+        if not (extension_eligible or new_synthesis_eligible):
+            return (False, "")
+
+        substantive_flaws = [
+            fl for fl in (reasoning_flaws or [])
+            if fl and any(m in fl.lower() for m in _SUBSTANTIVE_FLAW_MARKERS)
+        ]
+        if substantive_flaws:
+            return (False, "")
+
+        if extension_eligible:
+            n_diffs = len((closest_peer_system or {}).get("differentiators") or [])
+            reason = (
+                f"verdict=challenged but decomposition is a valid extension "
+                f"(novelty=extension, premises=✓, peer has {n_diffs} differentiator(s)) "
+                f"and reasoning_flaws contains no substantive critique markers"
+            )
+        else:
+            reason = (
+                f"verdict=challenged but decomposition is unambiguous "
+                f"(novelty={novelty_type}, premises=✓, synthesis_findable=✗) "
+                f"and reasoning_flaws contains no substantive critique markers"
+            )
+        return (True, reason)
 
     # ── Canonicalization layer (Phase 1 — feeds alias-gap detection) ──
 
@@ -1076,59 +1252,13 @@ class VerificationMixin:
             and verified_confidence >= floor
         ):
             reasoning_flaws = result.get("reasoning_flaws", []) or []
-            # Markers of a REAL synthesis-level flaw — the kind that legitimately
-            # justifies `challenged` even on a new-synthesis decomposition.
-            # If any flaw matches one of these, respect the verdict.
-            #
-            # Marker list is pattern-matched case-insensitively against each
-            # reasoning_flaw string. Expand when you observe hedge phrasings
-            # being wrongly flagged as substantive or vice-versa.
-            substantive_flaw_markers = (
-                # Inferential leap / claim-doesn't-follow patterns
-                "leap", "does not follow", "doesn't follow",
-                "does not show", "doesn't show",
-                "does not establish", "doesn't establish",
-                "does not support", "doesn't support",
-                "does not validate", "doesn't validate",
-                "not established", "not validated", "not supported",
-                "not justified", "without justification",
-                "not equivalent",
-                # Scope / overclaim / generalization issues
-                "generaliz",  # generalize, generalization, overgeneralization
-                "overclaim", "overstate", "overstatement",
-                "overextend",
-                "too strong", "too broad", "too general",
-                "beyond the scope", "outside the scope",
-                # Transfer / domain-mismatch assumptions
-                "assumes transfer", "assumes this transfer",
-                "transfers to",  # "assumes this transfers to [new domain]"
-                "depends on a",   # "depends on a <setting> that doesn't apply"
-                "not shown to transfer",
-                # Alternatives undermine "necessary" claims
-                "viable alternative", "alternative architecture",
-                "alternative mechanism", "alternative approach",
-                "other approach",
-                # Assumption / evidence issues
-                "assumes without", "unsupported assumption",
-                "unfounded", "without warrant",
-                "insufficient evidence",
-                # Conflation / mechanism / causal
-                "conflat",  # conflate, conflation
-                "no mechanism", "mechanism is missing", "mechanism missing",
-                "causal direction", "causal is unclear",
-                "reverse causation", "spurious",
-                # Sample / scope-of-evidence
-                "sample too narrow", "sample size",
-                # Contradiction / consistency
-                "contradicts", "inconsistent with",
-                # Interpretive moves not justified by cited work
-                "treated as if", "treated as though",
-                "cross-model interpretation",
-                "does not prove", "doesn't prove",
-            )
+            # Markers live as a module-level constant so the reverify path's
+            # guard (which can also upgrade challenged → validated) shares
+            # the same definition. See _SUBSTANTIVE_FLAW_MARKERS at top of
+            # file.
             substantive_flaws = [
                 fl for fl in reasoning_flaws
-                if fl and any(m in fl.lower() for m in substantive_flaw_markers)
+                if fl and any(m in fl.lower() for m in _SUBSTANTIVE_FLAW_MARKERS)
             ]
             # Log the decision inputs so the user can spot-check guardrail calls.
             if reasoning_flaws:
@@ -1643,6 +1773,23 @@ class VerificationMixin:
                     rejection_reason=rejection_reason,
                     reviewer=reviewer,
                 )
+                # Cascade attached predictions: human rejection effectively
+                # removes the entry from the active register, so its
+                # pending predictions should not stay pending and pollute
+                # future tracking.
+                rejected_id = entry.get("id", "")
+                if rejected_id:
+                    cascaded = self._cascade_predictions_parent_demoted(
+                        rejected_id,
+                        reason=(
+                            f"parent register entry {rejected_id} rejected via "
+                            f"--review-register: {rejection_reason[:200]}"
+                        ),
+                        source="review_register_reject_cascade",
+                    )
+                    if cascaded:
+                        self.journal.save()
+                        print(f"  Cascaded {cascaded} attached prediction(s) to parent_demoted.")
                 print("  Marked rejected. Reason will inform future verifications.")
             elif action == "d":
                 self.journal.update_register_entry_review(
@@ -1739,6 +1886,23 @@ class VerificationMixin:
 
         if "refuted" in statuses:
             self.journal.update_register_entry_status(register_entry_id, "challenged_by_prediction")
+            # Cascade the OTHER attached predictions: when one prediction
+            # refutes, the parent claim is disputed, so remaining pending
+            # predictions about that claim shouldn't stay pending. The
+            # already-refuted prediction itself stays refuted (earned
+            # outcome); the cascade only touches pending/already_fulfilled
+            # siblings.
+            cascaded = self._cascade_predictions_parent_demoted(
+                register_entry_id,
+                reason=(
+                    f"parent register entry {register_entry_id} flipped to "
+                    "challenged_by_prediction (sibling prediction resolved refuted)"
+                ),
+                source="prediction_refute_cascade",
+            )
+            if cascaded:
+                self.journal.save()
+                print(f"  [cascade] {register_entry_id}: {cascaded} sibling prediction(s) → parent_demoted")
         elif all(s == "confirmed" for s in statuses):
             if is_held:
                 pred_id = next((p.get("id") for p in predictions if p.get("id")), "?")
@@ -1905,6 +2069,30 @@ class VerificationMixin:
             old_verdict = (e.get("verdict") or "").strip().lower()
             old_novelty = (e.get("novelty_type") or "").strip()
 
+            # Phase 10 hardening: apply the challenged-hedge guard on the
+            # reverify path. The guard fires inside verify_insight inline
+            # and would have salvaged some `challenged` verdicts as
+            # `validated/extension` (or validated/new_synthesis). Without
+            # it here, demote_on_downgrade fires on entries that
+            # verify_insight itself would have kept registered. The guard
+            # only UPGRADES — it never makes verdicts worse — so applying
+            # it is strictly a correctness fix.
+            should_upgrade, upgrade_reason = self._evaluate_challenged_hedge_upgrade(
+                verdict=new_verdict,
+                novelty_type=new_novelty,
+                premises_supported=bool(result.get("premises_supported", True)),
+                synthesis_findable=bool(result.get("synthesis_findable", False)),
+                verified_confidence=new_conf,
+                confidence_floor=float(getattr(
+                    self.config, "register_confidence_floor", 0.6,
+                )),
+                closest_peer_system=dict(result.get("closest_peer_system") or {}),
+                reasoning_flaws=list(result.get("reasoning_flaws") or []),
+            )
+            if should_upgrade:
+                print(f"  [challenged-hedge guard] {eid}: {upgrade_reason} — upgrading challenged → validated")
+                new_verdict = "validated"
+
             # Phase 3: per-component novelty + delta vs the entry's prior
             # component_novelty (if any). Surfaces which architectural
             # components changed status during reverification — finer-grained
@@ -1967,35 +2155,14 @@ class VerificationMixin:
                 )
                 if worse:
                     e["status"] = "audit_demoted"
-                    # Cascade to attached predictions: predictions tied to a
-                    # demoted entry are predictions about a claim that's no
-                    # longer in the active register. Mark them parent_demoted
-                    # so they don't pollute the engine's prediction-tracking
-                    # signal (treated as expired-by-parent rather than expired-
-                    # by-date). Only touches predictions that haven't already
-                    # resolved — confirmed/refuted/already_fulfilled stay as-is
-                    # because those are real outcomes the prediction earned.
-                    cascade_count = 0
-                    cascade_timestamp = log_entry["timestamp"]
-                    for p in self.journal.predictions:
-                        if p.get("register_entry_id") != eid:
-                            continue
-                        if (p.get("status") or "pending") not in ("pending", "already_fulfilled"):
-                            continue
-                        old_pred_status = p.get("status", "pending")
-                        p["status"] = "parent_demoted"
-                        p["last_updated_at"] = cascade_timestamp
-                        p.setdefault("review_log", []).append({
-                            "checked_at": cascade_timestamp,
-                            "old_status": old_pred_status,
-                            "new_status": "parent_demoted",
-                            "reason": (
-                                f"parent register entry {eid} demoted via "
-                                f"audit reverification ({old_verdict} → {new_verdict})"
-                            ),
-                            "source": "audit_demote_cascade",
-                        })
-                        cascade_count += 1
+                    cascade_count = self._cascade_predictions_parent_demoted(
+                        eid,
+                        reason=(
+                            f"parent register entry {eid} demoted via audit "
+                            f"reverification ({old_verdict} → {new_verdict})"
+                        ),
+                        source="audit_demote_cascade",
+                    )
                     self.journal.save()
                     print(
                         f"  [demote] {eid}: status active → audit_demoted "
