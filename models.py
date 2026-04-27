@@ -17,6 +17,9 @@ class UncertaintyItem:
     domain_tags: list[str]
     estimated_importance: float
     related_items: list[str] = field(default_factory=list)
+    # Phase 7: which persona surfaced this uncertainty. Empty = default
+    # (single-voice introspection, pre-Phase-7 behavior).
+    persona: str = ""
 
 
 @dataclass

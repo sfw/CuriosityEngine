@@ -11,6 +11,7 @@ from prompts import (
     ANALOG_PROBE_PROMPT,
     ASSUMPTION_PROBE_PROMPT,
     HYPOTHESIS_PROMPT,
+    HYPOTHESIS_VARIANTS_PROMPT,
     INVESTIGATE_PROMPT,
     SURPRISE_PROMPT,
 )
@@ -44,11 +45,109 @@ class InvestigationMixin:
     so surprise is a comparison rather than a self-report."""
 
     def _form_hypothesis(self, question: ResearchQuestion) -> dict:
-        prompt = HYPOTHESIS_PROMPT.format(
+        """Phase 9: when configured for variant_count > 1, the explorer
+        generates N divergent candidate hypotheses and the system selects
+        the one most distant from majority-literature consensus to drive
+        the investigation. The unselected variants are stored in the
+        returned dict under `considered_variants` for audit. Falls back
+        to single-hypothesis (pre-Phase-9 behavior) when count == 1."""
+        variant_count = max(1, min(5, int(
+            getattr(self.connection.engine, "hypothesis_variant_count", 3),
+        )))
+
+        if variant_count <= 1:
+            prompt = HYPOTHESIS_PROMPT.format(
+                domain=self.config.domain,
+                question=question.question,
+            )
+            return self._call_primary(prompt)
+
+        # Phase 9: generate variants, select most-divergent, return.
+        prompt = HYPOTHESIS_VARIANTS_PROMPT.format(
             domain=self.config.domain,
             question=question.question,
+            variant_count=variant_count,
         )
-        return self._call_primary(prompt)
+        try:
+            result = self._call_primary(prompt)
+        except Exception as e:  # noqa: BLE001 — fall back to single-hypothesis on failure
+            print(f"  [warn] variant hypothesis failed: {type(e).__name__}: {e}; falling back to single-hypothesis path")
+            fallback_prompt = HYPOTHESIS_PROMPT.format(
+                domain=self.config.domain, question=question.question,
+            )
+            return self._call_primary(fallback_prompt)
+
+        candidates = list(result.get("candidates") or [])
+        if not candidates:
+            print("  [warn] variant hypothesis returned no candidates; falling back to single-hypothesis path")
+            fallback_prompt = HYPOTHESIS_PROMPT.format(
+                domain=self.config.domain, question=question.question,
+            )
+            return self._call_primary(fallback_prompt)
+
+        # Selection rule (Phase 9 diverge mode): pick the candidate whose
+        # divergence_axis is most distinct from the others. Heuristic — when
+        # all candidates name a divergence_axis, pick the one whose axis text
+        # is least lexically overlapping with the rest. Tie-break by lowest
+        # confidence_before (least-confident candidate often == most-distant
+        # from majority literature, since the model's confidence is itself a
+        # proxy for training-data density on that hypothesis). When variants
+        # don't expose divergence_axis cleanly, fall back to lowest-confidence
+        # candidate.
+        winner = self._select_hypothesis_variant(candidates)
+        # Preserve the unselected variants for audit on the JournalEntry.
+        winner["considered_variants"] = [
+            {
+                "hypothesis": c.get("hypothesis", ""),
+                "confidence_before": c.get("confidence_before", 0.5),
+                "divergence_axis": c.get("divergence_axis", ""),
+            }
+            for c in candidates if c is not winner
+        ]
+        axis = (winner.get("divergence_axis") or "").strip()
+        print(
+            f"  [variants] {len(candidates)} candidate hypotheses generated; "
+            f"selected (axis={axis[:80] if axis else '?'!r}, conf={winner.get('confidence_before', 0.5):.2f})"
+        )
+        return winner
+
+    @staticmethod
+    def _select_hypothesis_variant(candidates: list[dict]) -> dict:
+        """Phase 9: pick the candidate whose divergence_axis is least
+        overlapping with the others (proxy: lowest token-overlap to the
+        union of other candidates' axis text). Tie-break by lowest
+        confidence_before (least training-data-supported = most likely
+        to surface a productive surprise)."""
+        if len(candidates) == 1:
+            return candidates[0]
+
+        def _tokens(s: str) -> set[str]:
+            return {t for t in (s or "").lower().replace(",", " ").split() if len(t) > 2}
+
+        scored: list[tuple[float, float, dict]] = []
+        for c in candidates:
+            mine = _tokens(c.get("divergence_axis") or "")
+            others_union: set[str] = set()
+            for other in candidates:
+                if other is c:
+                    continue
+                others_union |= _tokens(other.get("divergence_axis") or "")
+            if mine:
+                # Distinctness = 1 - jaccard overlap
+                inter = len(mine & others_union)
+                union = max(1, len(mine | others_union))
+                distinctness = 1.0 - (inter / union)
+            else:
+                # No axis named; treat as moderately distinct (don't penalise
+                # too hard — sometimes the LLM produces good hypotheses
+                # without explicit axis tagging).
+                distinctness = 0.4
+            conf = float(c.get("confidence_before") or 0.5)
+            # Sort: highest distinctness first, then lowest confidence as tiebreak.
+            scored.append((distinctness, -conf, c))
+
+        scored.sort(key=lambda t: (t[0], t[1]), reverse=True)
+        return scored[0][2]
 
     def _run_investigation(self, question: ResearchQuestion) -> dict:
         prompt = INVESTIGATE_PROMPT.format(

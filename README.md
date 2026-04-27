@@ -372,6 +372,8 @@ Two model dials: `directive_primary` (reasoning recommended — sections 3, 4, 5
 
 ## Setup
 
+A condensed quickstart is below. **For a full step-by-step guide aimed at someone who hasn't run a Docker-based research tool before — including how to use the web interface — see [INSTALL.md](./INSTALL.md).**
+
 ### Docker (recommended — fully isolates `code_execution`)
 
 ```bash
@@ -676,3 +678,5 @@ CI runs ruff + syntax + smoke + Docker build on every push/PR to `main`.
 **Copyright (c) 2026 sfw. All rights reserved.**
 
 Shared for reference and evaluation only. No part of the code, documentation, or prompts may be copied, redistributed, modified, or used in derivative or commercial works without the copyright holder's express written permission. See [LICENSE.md](./LICENSE.md) for full terms.
+
+[LICENSE.md](./LICENSE.md) also documents the third-party Python dependencies CuriosityEngine builds on (each governed by its own license — MIT / BSD / Apache-2.0 / PSF) and the architectural inspirations (pattern-borrows, no source code copied) cited in the [Inspirations and prior work](#inspirations-and-prior-work) section above.

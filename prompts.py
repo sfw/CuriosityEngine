@@ -1,6 +1,6 @@
 """Prompt templates for each phase of the Curiosity Engine loop."""
 
-INTROSPECT_PROMPT = """You are a research engine performing structured self-interrogation about your own knowledge in the domain of {domain}.
+INTROSPECT_PROMPT = """You are a research engine performing structured self-interrogation about your own knowledge in the domain of {domain}.{persona_framing}
 
 {focus_block}Your task: identify specific areas where your knowledge is uncertain, contradictory, shallow, or unstable. Be brutally honest about what you don't know well.
 
@@ -68,6 +68,33 @@ Respond with EXACTLY this JSON structure (no other text):
   "confidence_before": 0.0-1.0,
   "reasoning": "why you believe this (brief)",
   "what_would_change_your_mind": "specific finding that would falsify this hypothesis"
+}}"""
+
+
+HYPOTHESIS_VARIANTS_PROMPT = """You are the EXPLORER persona of a research engine in {domain}. Your role is exploration: open, divergent, committal. Generate {variant_count} structurally DIVERGENT candidate hypotheses for the same question — the system will then pick the candidate most distant from majority literature to actually investigate. Your job is to make sure the candidates genuinely diverge on a specific named axis (mechanism, scale, substrate, constraint, etc.), not on surface phrasing.
+
+QUESTION: {question}
+
+This step exists so the downstream assessor can measure surprise against the *most informative* of several priors, not just the first one that comes to mind. The most informative prior is usually the one most distant from what your training data converges on — that's where surprise has room to fire. So: generate candidates that disagree at the architectural level, each committal in its own direction.
+
+Rules:
+- Each candidate is a standalone, committal hypothesis — same shape as the single-variant prompt would produce, plus a `divergence_axis` field naming the architectural axis on which it diverges from the others.
+- Candidates must GENUINELY diverge. Not "X" and "X with caveat Y" — that's the same hypothesis with hedging. Real divergence: candidate A says mechanism M1; candidate B says mechanism M2; candidate C says scale S is wrong.
+- Each candidate names what would falsify it specifically.
+- No padding to hit {variant_count}. If you can only produce 2 genuinely divergent variants, return 2.
+- Be HONEST about pre-evidence confidence per candidate. The candidate the system picks may not be your highest-confidence one — that's OK; structural distance from majority literature is the selector.
+
+Respond with EXACTLY this JSON structure (no other text):
+{{
+  "candidates": [
+    {{
+      "hypothesis": "specific committal pre-investigation answer for this variant",
+      "confidence_before": 0.0-1.0,
+      "reasoning": "why you believe this (brief)",
+      "what_would_change_your_mind": "specific finding that would falsify this variant",
+      "divergence_axis": "the architectural axis on which this variant differs from the others (e.g. 'mechanism: assumes X rather than Y')"
+    }}
+  ]
 }}"""
 
 
@@ -1021,6 +1048,57 @@ Respond with EXACTLY this JSON structure (no other text):
       "paper_section": "introduction | related_work | methods | results | discussion | limitations"
     }}
   ]
+}}"""
+
+
+EVOLVE_FROM_EXTENSION_PROMPT = """You are evolving a research claim to escape prior art.
+
+The verifier just downgraded a candidate insight from `new_synthesis` to `extension` because its central architectural move has substantive prior art:
+
+ORIGINAL CANONICAL FORM:
+{canonical_form_json}
+
+PRIOR ART FOR THE CENTRAL MOVE (the published systems that disqualified novelty):
+{central_move_prior_art_json}
+
+CLOSEST PEER SYSTEM (the named system with substantive overlap, plus its differentiators):
+{closest_peer_system_json}
+
+ORIGINAL FUNCTIONAL DECOMPOSITION (per-dimension differentiators that DO survive — preserve these):
+{functional_decomposition_json}
+
+ORIGINAL DESCRIPTION (for context — do not restate, evolve from):
+{description}
+
+ENGINE DOMAIN: {engine_domain}
+
+Your job: propose a SLOT MUTATION that escapes the named prior art. The mutation must:
+
+1. Change EXACTLY ONE of `{{move_predicate, on_substrate, with_mechanism}}` — the slot whose value the prior art lives in. Identify the offending slot from the prior-art context above.
+2. Preserve `target_domain` (same problem domain — don't redirect to a different problem).
+3. Preserve `key_constraints` (the original's load-bearing qualifiers).
+4. Preserve the strongest differentiators from `functional_decomposition` (these are what's working).
+5. Genuinely escape the prior art — not "X with refinement Y" of a published X. A different mechanism for the same problem, or a different substrate the same mechanism acts on.
+
+Stay close. The evolved claim should look like a sibling of the original, not a different paper.
+
+If you cannot find a defensible mutation that escapes the prior art without destroying the original's value, set `mutation_possible: false` and explain why. The system will respect that — admitting no mutation is more useful than fabricating a weak one.
+
+Respond with EXACTLY this JSON structure (no other text):
+{{
+  "mutation_possible": true,
+  "perturbed_slot": "move_predicate|on_substrate|with_mechanism",
+  "old_slot_value": "the original value being replaced",
+  "new_slot_value": "the new value that escapes the prior art (3-8 words)",
+  "rationale": "why the new value is genuinely different AND escapes the named prior art (cite specific prior-art entries)",
+  "title": "concise statement of the mutated insight (one sentence)",
+  "description": "full articulation of the mutated insight (2-3 paragraphs)",
+  "novelty_assessment": "why the mutated form is now genuinely novel",
+  "prior_art_check": "honest assessment: does the mutated form have its own prior art? Be honest — the verifier will run a fresh phased prior-art search anyway",
+  "confidence": 0.0-1.0,
+  "implications": ["concrete implication 1", "concrete implication 2"],
+  "open_questions": ["what would need to be investigated to validate"],
+  "counter_arguments": ["why this mutation might still fail at verification"]
 }}"""
 
 

@@ -599,6 +599,82 @@
                  value="{{ connection.engine.synthesis_candidate_count }}"
                  class="mt-1 w-32 px-3 py-2 rounded-lg border border-slate-700 bg-slate-900/60 text-sm mono" />
         </label>
+
+        <label class="block md:col-span-3">
+          <span class="text-xs uppercase tracking-wider text-slate-400">introspection_persona_count</span>
+          <span class="block text-[11px] text-slate-500">
+            Phase 7. Run N parallel introspections per cycle, each through a different persona lens
+            (skeptic / outsider / contrarian / historian / practitioner). Each persona is a different
+            framing of "what is this field uncertain about", surfacing blind spots a single voice
+            misses. Borrows multi-perspective question generation from Stanford STORM.
+            <span class="mono">1</span> = single voice (Phase-7-disabled, pre-Phase-7 behavior).
+            <span class="mono">3</span> = default (skeptic + outsider + contrarian).
+            Range 1-5. Cost scales linearly; introspection is small (~500 token output) so absolute cost is
+            small.
+          </span>
+          <input name="engine_introspection_persona_count" type="number" min="1" max="5"
+                 value="{{ connection.engine.introspection_persona_count }}"
+                 class="mt-1 w-32 px-3 py-2 rounded-lg border border-slate-700 bg-slate-900/60 text-sm mono" />
+        </label>
+
+        <label class="block md:col-span-3">
+          <span class="text-xs uppercase tracking-wider text-slate-400">hypothesis_variant_count</span>
+          <span class="block text-[11px] text-slate-500">
+            Phase 9. The explorer persona generates N divergent candidate hypotheses for each question;
+            the system picks the one most distant from majority-literature consensus to actually
+            investigate. Increases the chance that the resulting investigation has surprise to fire on.
+            Borrows branching exploration from Tree of Thoughts.
+            <span class="mono">1</span> = single hypothesis (Phase-9-disabled, pre-Phase-9 behavior).
+            <span class="mono">3</span> = default. Range 1-5. Cost is small per cycle (hypothesis
+            generation is ~100-token output × variant_count); investigation cost unchanged because only
+            the selected variant drives the search.
+          </span>
+          <input name="engine_hypothesis_variant_count" type="number" min="1" max="5"
+                 value="{{ connection.engine.hypothesis_variant_count }}"
+                 class="mt-1 w-32 px-3 py-2 rounded-lg border border-slate-700 bg-slate-900/60 text-sm mono" />
+        </label>
+
+        <label class="flex items-center gap-2 md:col-span-3">
+          <input type="checkbox" name="engine_idea_evolution_enabled" value="on"
+                 {% if connection.engine.idea_evolution_enabled %}checked{% endif %}
+                 class="accent-violet-500" />
+          <span>
+            <span class="text-sm">idea_evolution_enabled</span>
+            <span class="block text-[11px] text-slate-500">
+              Phase 8 of the self-evolving verifier. When fresh-verification downgrades a
+              candidate to <span class="mono">extension</span>, autofire a slot-mutation that
+              attempts to escape the prior art surfaced by the verifier (the verifier's diagnostic
+              outputs become generator input — closes the verifier→generator feedback loop).
+              Borrows the mutation-loop pattern from Sakana's "AI Scientist" + Co-Scientist's
+              Evolution agent. Default <span class="mono">on</span>. Quality filter applies; only
+              fires when confidence ≥ floor and the closest-peer-system component has differentiators.
+            </span>
+          </span>
+        </label>
+
+        <label class="block md:col-span-3">
+          <span class="text-xs uppercase tracking-wider text-slate-400">idea_evolution_confidence_floor</span>
+          <span class="block text-[11px] text-slate-500">
+            Don't try to evolve weak material. Evolution skips candidates whose
+            <span class="mono">verified_confidence</span> is below this floor. Default
+            <span class="mono">0.65</span>.
+          </span>
+          <input name="engine_idea_evolution_confidence_floor" type="number" step="0.05" min="0" max="1"
+                 value="{{ connection.engine.idea_evolution_confidence_floor }}"
+                 class="mt-1 w-32 px-3 py-2 rounded-lg border border-slate-700 bg-slate-900/60 text-sm mono" />
+        </label>
+
+        <label class="block md:col-span-3">
+          <span class="text-xs uppercase tracking-wider text-slate-400">idea_evolution_max_depth</span>
+          <span class="block text-[11px] text-slate-500">
+            Max evolution chain depth. <span class="mono">1</span> = evolution fires once per chain
+            (recommended default — if the evolved candidate also downgrades, no further mutation).
+            Higher values risk runaway perturbation.
+          </span>
+          <input name="engine_idea_evolution_max_depth" type="number" min="0" max="3"
+                 value="{{ connection.engine.idea_evolution_max_depth }}"
+                 class="mt-1 w-32 px-3 py-2 rounded-lg border border-slate-700 bg-slate-900/60 text-sm mono" />
+        </label>
       </div>
     </section>
 

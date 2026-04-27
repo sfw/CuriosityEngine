@@ -191,6 +191,53 @@ class EngineSettings:
     # Borrows from Co-Scientist's Ranking agent + standard agentic
     # best-of-N selection patterns.
     synthesis_candidate_count: int = 3
+    # Phase 7 of the self-evolving verifier: persona-conditioned
+    # introspection. Instead of one self-interrogation per cycle, run N
+    # parallel introspections each through a different lens (skeptic,
+    # outsider, historian, contrarian, practitioner). Merges
+    # uncertainties across personas with persona-attributed source
+    # tagging on downstream questions. Borrows from Stanford STORM's
+    # multi-perspective question generation.
+    # 1 = disabled (single voice, pre-Phase-7 behavior). 3 = default
+    # (skeptic + outsider + contrarian). Up to 5 personas available.
+    # Cost scales linearly with persona count. Each introspection is
+    # cheap (~500-token output) so absolute cost is small.
+    introspection_persona_count: int = 3
+    # Phase 9 of the self-evolving verifier: hypothesis variants in the
+    # investigation loop. The explorer persona generates N divergent
+    # candidate hypotheses (each on a different architectural axis) and
+    # the system picks the one most distant from majority-literature
+    # consensus to actually investigate. Increases the chance that
+    # surprise has somewhere to fire. Borrows branching exploration from
+    # Tree of Thoughts.
+    # 1 = single hypothesis (Phase-9-disabled, pre-Phase-9 behavior).
+    # 3 = default. Cost is small per cycle (hypothesis generation is
+    # ~100-token output × variant_count); investigation cost unchanged
+    # because only the selected variant drives the search.
+    hypothesis_variant_count: int = 3
+    # Phase 8 of the self-evolving verifier: idea evolution from
+    # downgraded extensions. When verify_insight downgrades a fresh
+    # candidate to `extension` (the most common downgrade case),
+    # autofire the evolution helper: identify the offending canonical-
+    # form slot, mutate it via the verifier's diagnostic outputs,
+    # synthesize a new candidate from the mutation, run it through full
+    # verification. Closes the verifier→generator feedback loop.
+    # Borrows mutation-loop pattern from Sakana AI's "AI Scientist" +
+    # Co-Scientist's Evolution agent. Internal alignment with r-3c792e21
+    # ("typed supervision from false positives via retrospective
+    # unification") — verifier downgrades become typed supervision
+    # signal for generator-side mutation.
+    # Default: True (autofire on fresh verification). Reverify path
+    # stays manual via the --evolve-during-reverify flag.
+    idea_evolution_enabled: bool = True
+    # Quality filter: don't evolve weak material. Evolution skips
+    # candidates whose verified_confidence is below this floor.
+    idea_evolution_confidence_floor: float = 0.65
+    # Max chain depth. The evolved candidate is itself verified — if it
+    # ALSO downgrades to extension, do we evolve it again? max_depth=1
+    # means evolution fires once per chain (recommended default).
+    # Higher values risk runaway perturbation.
+    idea_evolution_max_depth: int = 1
     # Questions below this priority are rejected at enqueue time (except
     # human-sourced questions, which always bypass). Default 0.0 = disabled.
     # An earlier default of 0.70 was found to starve new journals — early
@@ -361,6 +408,21 @@ class CuriosityEngineConfig:
             ).strip().lower() or "scalar",
             synthesis_candidate_count=max(
                 1, int(eng_section.get("synthesis_candidate_count", 3))
+            ),
+            introspection_persona_count=max(
+                1, min(5, int(eng_section.get("introspection_persona_count", 3))),
+            ),
+            hypothesis_variant_count=max(
+                1, min(5, int(eng_section.get("hypothesis_variant_count", 3))),
+            ),
+            idea_evolution_enabled=bool(
+                eng_section.get("idea_evolution_enabled", True)
+            ),
+            idea_evolution_confidence_floor=float(
+                eng_section.get("idea_evolution_confidence_floor", 0.65)
+            ),
+            idea_evolution_max_depth=max(
+                0, min(3, int(eng_section.get("idea_evolution_max_depth", 1))),
             ),
             held_entries_enabled=bool(eng_section.get("held_entries_enabled", True)),
             held_confidence_floor=float(eng_section.get("held_confidence_floor", 0.7)),
@@ -742,6 +804,26 @@ register_admission_mode = "{eng.register_admission_mode}"
 # self-reported confidence). 1 = single-candidate (Phase-6-disabled,
 # matches pre-Phase-6 behavior). 3 = default. Linear LLM cost scaling.
 synthesis_candidate_count = {eng.synthesis_candidate_count}
+# Phase 7 — persona-conditioned introspection. Run N parallel
+# introspections each through a different persona (skeptic, outsider,
+# contrarian, historian, practitioner). 1 = single voice (Phase-7-disabled,
+# matches pre-Phase-7 behavior). 3 = default. Range: 1-5.
+introspection_persona_count = {eng.introspection_persona_count}
+# Phase 9 — hypothesis variants in the investigation loop. Generate N
+# divergent candidate hypotheses and pick the one most distant from
+# majority-literature consensus to investigate. 1 = single hypothesis
+# (Phase-9-disabled). 3 = default. Range 1-5.
+hypothesis_variant_count = {eng.hypothesis_variant_count}
+# Phase 8 — idea evolution from downgraded extensions. When verify_insight
+# downgrades a candidate to "extension", autofire mutation: change the
+# offending canonical-form slot, synthesize a new candidate, re-verify.
+# Closes the verifier→generator loop. Reverify path stays manual via
+# --evolve-during-reverify CLI flag.
+idea_evolution_enabled = {str(eng.idea_evolution_enabled).lower()}
+# Confidence floor — don't try to evolve weak material.
+idea_evolution_confidence_floor = {eng.idea_evolution_confidence_floor}
+# Max chain depth — 1 = evolution fires once per chain (recommended).
+idea_evolution_max_depth = {eng.idea_evolution_max_depth}
 # Held-state pipeline — when the verifier returns `inconclusive` (couldn't reach
 # the claim, not refuted it), insights become held register entries pending
 # settlement rather than being silently rejected. Held entries usually require

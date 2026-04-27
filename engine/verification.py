@@ -10,7 +10,12 @@ from uuid import uuid4
 
 from engine.embeddings import cosine
 from models import CrossReference, Insight, Prediction, RegisterEntry  # noqa: F401
-from prompts import CANONICAL_FORM_PROMPT, PREDICTION_CHECK_PROMPT, VERIFY_PROMPT
+from prompts import (
+    CANONICAL_FORM_PROMPT,
+    EVOLVE_FROM_EXTENSION_PROMPT,
+    PREDICTION_CHECK_PROMPT,
+    VERIFY_PROMPT,
+)
 
 # Alias-gap thresholds. The metric is `gap = 1 - similarity` where
 #   similarity = 0.3 * slot_match + 0.7 * cosine(canonical_form_text)
@@ -818,6 +823,8 @@ class VerificationMixin:
         self,
         insight: Insight,
         xref: CrossReference,
+        *,
+        _from_evolution: bool = False,
     ) -> Optional[RegisterEntry]:
         """Adversarially verify an insight. Return a RegisterEntry only if it passes.
 
@@ -832,6 +839,12 @@ class VerificationMixin:
           Stage 3 — existing phased prior-art search (the heavy
                     VERIFY_PROMPT call), augmented with Stage 1's
                     canonical_form as pre-extracted context.
+
+        Phase 8: when this verification produces a fresh extension entry
+        with high enough confidence, autofire `_evolve_extension` to
+        attempt a slot-mutation that escapes the prior art. The
+        `_from_evolution` flag suppresses the autofire when this method
+        is called recursively from inside _evolve_extension.
         """
         print("\n--- VERIFYING INSIGHT ---")
         print(f"  Target: {insight.title}")
@@ -1325,6 +1338,26 @@ class VerificationMixin:
             # settlement_triggers instead; those can be turned into Predictions
             # at human-review promotion time.
             self._persist_predictions(result.get("predictions", []) or [], register_entry.id)
+
+        # ── Phase 8 autofire: evolve fresh extensions ──────────────────
+        # When a fresh-verify candidate registers as `extension` with
+        # enough confidence, attempt a slot-mutation that escapes the
+        # prior art surfaced by the verifier. _from_evolution suppresses
+        # this when verify_insight is called recursively from inside
+        # _evolve_extension (max-depth enforcement).
+        engine_settings = getattr(self.connection, "engine", None)
+        evolve_enabled = bool(getattr(engine_settings, "idea_evolution_enabled", True))
+        if (
+            not _from_evolution
+            and evolve_enabled
+            and entry_status == "active"
+            and register_entry.novelty_type == "extension"
+        ):
+            try:
+                self._evolve_extension(register_entry, depth=0)
+            except Exception as e:  # noqa: BLE001 — evolution is best-effort
+                print(f"  [evolve] autofire failed: {type(e).__name__}: {e}")
+
         return register_entry
 
     def _persist_predictions(self, raw_predictions: list[dict], register_entry_id: str):
@@ -2130,6 +2163,178 @@ class VerificationMixin:
         }
 
     # ── Canonical-form backfill (Phase 1 maintenance pass) ──────────────
+
+    # ── Idea evolution (Phase 8 — verifier→generator feedback loop) ──
+
+    def _evolve_extension(
+        self,
+        register_entry: "RegisterEntry",
+        depth: int = 0,
+    ) -> Optional["RegisterEntry"]:
+        """Phase 8: when a fresh-verification candidate downgrades to
+        `extension`, attempt a single slot-mutation that escapes the prior
+        art surfaced by the verifier. The mutation produces a new Insight;
+        the new Insight runs through the standard verify_insight pipeline.
+        If the evolved candidate verifies as `new_synthesis`, it registers
+        as a separate active entry. The original `extension` stays
+        registered unchanged.
+
+        `depth` is the recursion depth. Max enforced via
+        idea_evolution_max_depth (default 1) — prevents runaway
+        perturbation when the evolved candidate also downgrades.
+
+        Returns the evolved RegisterEntry (None if mutation rejected,
+        evolved candidate doesn't verify, or quality filter fails).
+        """
+        from models import (
+            CrossReference as _CR,
+            Insight as _I,
+        )
+
+        engine_settings = getattr(self.connection, "engine", None)
+        if not bool(getattr(engine_settings, "idea_evolution_enabled", True)):
+            return None
+
+        # Quality filter: don't evolve weak material.
+        floor = float(getattr(
+            engine_settings, "idea_evolution_confidence_floor", 0.65,
+        ))
+        if float(register_entry.verified_confidence) < floor:
+            print(
+                f"  [evolve] skip {register_entry.id}: confidence "
+                f"{register_entry.verified_confidence:.2f} < floor {floor:.2f}"
+            )
+            return None
+
+        # Max-depth check.
+        max_depth = int(getattr(engine_settings, "idea_evolution_max_depth", 1))
+        if depth >= max_depth:
+            print(f"  [evolve] skip {register_entry.id}: max_depth {max_depth} reached")
+            return None
+
+        # Quality filter: closest_peer_system component_novelty must be
+        # extension or new_synthesis (i.e., the peer-system analysis
+        # surfaced something to differentiate against). If
+        # closest_peer_system is restatement, the work is too close to a
+        # known peer to evolve usefully.
+        peer_status = (register_entry.component_novelty or {}).get("closest_peer_system", "")
+        if peer_status not in ("extension", "new_synthesis"):
+            print(
+                f"  [evolve] skip {register_entry.id}: closest_peer_system="
+                f"{peer_status!r} (need extension or new_synthesis)"
+            )
+            return None
+
+        canonical = register_entry.canonical_form or {}
+        if not canonical.get("move_predicate"):
+            print(f"  [evolve] skip {register_entry.id}: no canonical_form")
+            return None
+
+        prior_art = list(register_entry.central_move_prior_art or [])
+        if not prior_art:
+            print(f"  [evolve] skip {register_entry.id}: no central_move_prior_art to evolve from")
+            return None
+
+        engine_domain = getattr(self.config, "domain", "") or "(unspecified)"
+        prompt = EVOLVE_FROM_EXTENSION_PROMPT.format(
+            canonical_form_json=json.dumps(canonical, indent=2),
+            central_move_prior_art_json=json.dumps(prior_art, indent=2),
+            closest_peer_system_json=json.dumps(register_entry.closest_peer_system or {}, indent=2),
+            functional_decomposition_json=json.dumps(
+                register_entry.functional_decomposition or [], indent=2,
+            ),
+            description=(register_entry.description or "")[:1500],
+            engine_domain=engine_domain,
+        )
+
+        print(f"\n  --- EVOLVING {register_entry.id} (depth {depth + 1}) ---")
+        try:
+            result = self._call_primary(prompt)
+        except Exception as e:  # noqa: BLE001
+            print(f"  [evolve] mutation call failed: {type(e).__name__}: {e}")
+            return None
+
+        if not bool(result.get("mutation_possible", False)):
+            rationale = (result.get("rationale") or "no rationale provided")[:200]
+            print(f"  [evolve] mutation rejected by generator: {rationale}")
+            return None
+
+        slot = (result.get("perturbed_slot") or "").strip()
+        old_val = (result.get("old_slot_value") or "").strip()
+        new_val = (result.get("new_slot_value") or "").strip()
+        if not (slot and new_val):
+            print("  [evolve] mutation result missing slot/value — skipping")
+            return None
+        print(f"  [evolve] {slot}: {old_val!r} → {new_val!r}")
+
+        # Build a new Insight from the mutation. supporting_evidence chain
+        # references the original entry's xref + source entries — so the
+        # evolved candidate's audit trail still ties back to the journal
+        # entries that produced the original.
+        evolved_insight = _I(
+            id=f"i-{uuid4().hex[:8]}",
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            title=(result.get("title") or "Evolved insight").strip(),
+            description=(result.get("description") or "").strip(),
+            supporting_evidence=(
+                [register_entry.supporting_xref_id]
+                + list(register_entry.supporting_entry_ids or [])
+            ),
+            novelty_assessment=(result.get("novelty_assessment") or "").strip(),
+            confidence=float(result.get("confidence") or 0.5),
+            implications=list(result.get("implications") or []),
+            open_questions=list(result.get("open_questions") or []),
+            counter_arguments=list(result.get("counter_arguments") or []),
+            prior_art_check=(result.get("prior_art_check") or "").strip(),
+        )
+        self.journal.add_insight(evolved_insight)
+        print(f"  [evolve] new candidate: i-{evolved_insight.id[2:]} — {evolved_insight.title[:80]}")
+
+        # Reconstruct the original CrossReference object so verify_insight
+        # has the standard inputs. The xref's existing data is in journal.
+        original_xref_dict = next(
+            (x for x in self.journal.cross_references
+             if x.get("id") == register_entry.supporting_xref_id),
+            None,
+        )
+        if original_xref_dict is None:
+            print(f"  [evolve] could not locate original xref {register_entry.supporting_xref_id} — skipping verification")
+            return None
+        xref_fields = set(_CR.__dataclass_fields__)
+        evolved_xref = _CR(**{
+            k: v for k, v in original_xref_dict.items() if k in xref_fields
+        })
+
+        # Verify the evolved candidate. If it ALSO downgrades, we won't
+        # autofire evolution again here because verify_insight calls
+        # _evolve_extension only when called from cycle/CLI fresh-verify
+        # path, NOT recursively from inside _evolve_extension. Caller is
+        # responsible for the depth-tracking; this method does its own
+        # depth check at entry to be safe.
+        try:
+            evolved_register_entry = self.verify_insight(
+                evolved_insight, evolved_xref, _from_evolution=True,
+            )
+        except Exception as e:  # noqa: BLE001
+            print(f"  [evolve] verification of evolved candidate failed: {type(e).__name__}: {e}")
+            return None
+
+        if evolved_register_entry is None:
+            print("  [evolve] evolved candidate did not survive verification — original extension stands")
+            return None
+
+        new_novelty = evolved_register_entry.novelty_type
+        if new_novelty == "new_synthesis":
+            print(
+                f"  [evolve] ✓ evolved {register_entry.id} → "
+                f"{evolved_register_entry.id} (new_synthesis)"
+            )
+        else:
+            print(
+                f"  [evolve] evolved candidate registered as {new_novelty} "
+                f"(not new_synthesis) — both entries kept for audit"
+            )
+        return evolved_register_entry
 
     def backfill_canonical_forms(self, force: bool = False) -> dict:
         """One-shot maintenance pass — populate `canonical_form` on every

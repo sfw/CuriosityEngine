@@ -1589,6 +1589,11 @@ def settings_save(
     engine_question_priority_floor: float = Form(0.70),
     engine_register_admission_mode: str = Form("scalar"),
     engine_synthesis_candidate_count: int = Form(3),
+    engine_introspection_persona_count: int = Form(3),
+    engine_hypothesis_variant_count: int = Form(3),
+    engine_idea_evolution_enabled: str = Form(""),
+    engine_idea_evolution_confidence_floor: float = Form(0.65),
+    engine_idea_evolution_max_depth: int = Form(1),
     engine_analog_probe_max_analogs: int = Form(3),
     engine_assumption_probe_max_assumptions: int = Form(3),
 ):
@@ -1624,6 +1629,7 @@ def settings_save(
     analog_probe_on        = _checkbox(engine_analog_probe_enabled)
     assumption_probe_on    = _checkbox(engine_assumption_probe_enabled)
     held_entries_on        = _checkbox(engine_held_entries_enabled)
+    idea_evolution_on      = _checkbox(engine_idea_evolution_enabled)
 
     # Validate cross_ref_role against the configured roles we know about,
     # so a typo doesn't silently save a broken config.
@@ -1721,6 +1727,11 @@ def settings_save(
             f"question_priority_floor = {max(0.0, min(1.0, engine_question_priority_floor))}\n"
             f'register_admission_mode = "{register_admission_mode}"\n'
             f"synthesis_candidate_count = {max(1, min(10, engine_synthesis_candidate_count))}\n"
+            f"introspection_persona_count = {max(1, min(5, engine_introspection_persona_count))}\n"
+            f"hypothesis_variant_count = {max(1, min(5, engine_hypothesis_variant_count))}\n"
+            f"idea_evolution_enabled = {str(idea_evolution_on).lower()}\n"
+            f"idea_evolution_confidence_floor = {max(0.0, min(1.0, engine_idea_evolution_confidence_floor))}\n"
+            f"idea_evolution_max_depth = {max(0, min(3, engine_idea_evolution_max_depth))}\n"
             f"analog_probe_max_analogs = {max(1, min(10, engine_analog_probe_max_analogs))}\n"
             f"assumption_probe_max_assumptions = {max(1, min(10, engine_assumption_probe_max_assumptions))}\n"
         )
