@@ -247,6 +247,28 @@ class EngineSettings:
     # Set to a non-zero value (e.g. 0.70) on mature journals where you
     # specifically want to prune low-priority noise.
     question_priority_floor: float = 0.0
+    # ── Direction insight backpropagation (Arbor / HTR, arXiv:2606.11926) ──
+    # Abstract clusters of related investigations into direction-level priors
+    # and inject them into introspection as FRONTIER EDGES to push past — the
+    # carry-forward layer CE was missing. The framing is deliberately
+    # divergent ("exceed these edges", not "confirm these beliefs"); abstraction
+    # runs on the cross-family verifier model, never the primary, to avoid the
+    # self-flattery loop where the generator authors and then consumes its own
+    # prior. See docs/superpowers/specs/2026-06-18-direction-backprop-design.md.
+    direction_backprop_enabled: bool = True
+    # In-loop trigger cadence: abstract directions every N cycles, before
+    # introspection, so fresh priors are available to the same cycle.
+    direction_abstract_every_n_cycles: int = 5
+    # Journal-size floor — abstraction stays silent below this many entries
+    # (small journals have no stable directions yet, like negative_space).
+    direction_min_entries: int = 8
+    # Minimum connected-component size (entries) to qualify as a direction.
+    direction_min_cluster_size: int = 4
+    # Max directions abstracted per run (largest components first) — bounds cost.
+    direction_max_count: int = 5
+    # Max frontier edges injected into introspection — the convergence dial.
+    # Lower = safer (priors can't dominate the prompt / homogenize personas).
+    direction_max_injected: int = 4
     # Parallel fan-out — how many investigations / xref-synth+verify pipelines
     # run concurrently per cycle. Default 1 = fully serial (zero behavior change).
     # Rate limiters are shared across threads so raising these does not burst
@@ -254,6 +276,33 @@ class EngineSettings:
     # pipelines; beyond that most time is spent waiting on rate limiters anyway.
     parallel_investigations: int = 1
     parallel_xref_pipeline: int = 1
+    # ── Selective verification pipeline (A2 plumbing for Phases B/C/D) ──
+    # All defaults are NO-OPS — A2 alone changes no behavior. Each knob
+    # turns on when the corresponding phase ships.
+    #
+    # Phase B (alias-gap routing). Candidates with alias_gap below the reject
+    # threshold are short-circuited to the rejection_log without an LLM
+    # verification call. Candidates above the fast-track threshold skip
+    # deep prior-art search and take the cheap path. The middle band runs
+    # the existing full pipeline. 0.0 / 1.0 = no-op (no gating, every
+    # candidate runs full pipeline).
+    alias_gap_reject_threshold: float = 0.0
+    alias_gap_fasttrack_threshold: float = 1.0
+    # Phase B audit-back: fraction of below-reject-threshold candidates that
+    # still get full LLM verification, tagged in the rejection_log as audit
+    # samples. Detects discriminator drift — if audit-back items keep
+    # validating, the reject threshold is too aggressive. 0.0 = never
+    # sample-back (no-op).
+    rejection_audit_back_rate: float = 0.0
+    # Phase C (paraphrase-perturbation verifier stability). Run verification
+    # against N paraphrase variants of the prompt, compute verdict variance
+    # as a paraphrase_inconsistency_score. 1 = single pass (no-op,
+    # pre-Phase-C behavior). 3 = recommended once C ships.
+    paraphrase_variant_count: int = 1
+    # Phase D (committee escalation). When paraphrase_inconsistency_score
+    # exceeds this threshold (or committee verdicts disagree), escalate
+    # to a second cross-family verifier. 1.0 = never escalate (no-op).
+    committee_dissent_threshold: float = 1.0
 
 CONFIG_DIR = Path.home() / ".CuriosityEngine"
 CONFIG_PATH = CONFIG_DIR / "engine.toml"
@@ -403,6 +452,24 @@ class CuriosityEngineConfig:
             question_priority_floor=float(
                 eng_section.get("question_priority_floor", 0.70)
             ),
+            direction_backprop_enabled=bool(
+                eng_section.get("direction_backprop_enabled", True)
+            ),
+            direction_abstract_every_n_cycles=max(
+                1, int(eng_section.get("direction_abstract_every_n_cycles", 5))
+            ),
+            direction_min_entries=max(
+                1, int(eng_section.get("direction_min_entries", 8))
+            ),
+            direction_min_cluster_size=max(
+                2, int(eng_section.get("direction_min_cluster_size", 4))
+            ),
+            direction_max_count=max(
+                1, int(eng_section.get("direction_max_count", 5))
+            ),
+            direction_max_injected=max(
+                0, int(eng_section.get("direction_max_injected", 4))
+            ),
             register_admission_mode=str(
                 eng_section.get("register_admission_mode", "scalar")
             ).strip().lower() or "scalar",
@@ -440,6 +507,21 @@ class CuriosityEngineConfig:
             investigation_assessor_role=str(eng_section.get("investigation_assessor_role", "")).strip(),
             parallel_investigations=int(eng_section.get("parallel_investigations", 1)),
             parallel_xref_pipeline=int(eng_section.get("parallel_xref_pipeline", 1)),
+            alias_gap_reject_threshold=float(
+                eng_section.get("alias_gap_reject_threshold", 0.0)
+            ),
+            alias_gap_fasttrack_threshold=float(
+                eng_section.get("alias_gap_fasttrack_threshold", 1.0)
+            ),
+            rejection_audit_back_rate=float(
+                eng_section.get("rejection_audit_back_rate", 0.0)
+            ),
+            paraphrase_variant_count=max(
+                1, int(eng_section.get("paraphrase_variant_count", 1)),
+            ),
+            committee_dissent_threshold=float(
+                eng_section.get("committee_dissent_threshold", 1.0)
+            ),
         )
 
         # Resolve cross_ref profile:
@@ -791,6 +873,19 @@ confidence_drop_on_downgrade = {eng.confidence_drop_on_downgrade}
 # before the journal could build context). Set to a non-zero value only on
 # mature journals where you specifically want to prune low-priority noise.
 question_priority_floor = {eng.question_priority_floor}
+# Direction insight backpropagation (Arbor / HTR, arXiv:2606.11926). Every N
+# cycles, cluster related investigations and distill each into a FRONTIER EDGE
+# injected into introspection as something to push PAST (never confirm).
+# Abstraction runs on the verifier model to avoid a self-flattery loop.
+# Set direction_backprop_enabled = false to disable entirely.
+direction_backprop_enabled = {str(eng.direction_backprop_enabled).lower()}
+direction_abstract_every_n_cycles = {eng.direction_abstract_every_n_cycles}
+direction_min_entries = {eng.direction_min_entries}
+direction_min_cluster_size = {eng.direction_min_cluster_size}
+direction_max_count = {eng.direction_max_count}
+# Max frontier edges injected per introspection — the convergence dial; lower
+# is safer (priors can't dominate the prompt / homogenize the personas).
+direction_max_injected = {eng.direction_max_injected}
 # Register admission mode. "scalar" = single confidence floor + status checks
 # (default; backward compatible). "pareto" = ALSO require the new entry to be
 # non-dominated by any existing active entry across the 4-axis Pareto set
@@ -889,6 +984,24 @@ investigation_assessor_role = "{eng.investigation_assessor_role}"
 # 2–3 xref pipelines before rate-limit waits dominate anyway.
 parallel_investigations = {eng.parallel_investigations}
 parallel_xref_pipeline = {eng.parallel_xref_pipeline}
+# ── Selective verification pipeline (A2 plumbing for Phases B/C/D) ──
+# All defaults below are NO-OPS until the corresponding phase ships.
+# Phase B — alias-gap routing. Candidates below reject_threshold short-
+# circuit to rejection_log without LLM verification; above
+# fasttrack_threshold skip deep prior-art search. Middle band runs the
+# full pipeline. 0.0 / 1.0 = no gating (current behavior).
+alias_gap_reject_threshold = {eng.alias_gap_reject_threshold}
+alias_gap_fasttrack_threshold = {eng.alias_gap_fasttrack_threshold}
+# Phase B audit-back — fraction of below-reject-threshold candidates that
+# still get full LLM verification, tagged as audit samples. Detects
+# discriminator drift. 0.0 = no audit-back (current behavior).
+rejection_audit_back_rate = {eng.rejection_audit_back_rate}
+# Phase C — paraphrase-perturbation. N variants per verification, verdict
+# variance scored as paraphrase_inconsistency_score. 1 = single pass.
+paraphrase_variant_count = {eng.paraphrase_variant_count}
+# Phase D — committee escalation when paraphrase_inconsistency_score
+# exceeds threshold (or verdicts disagree). 1.0 = never escalate.
+committee_dissent_threshold = {eng.committee_dissent_threshold}
 """
     )
     return header + "\n".join(sections)

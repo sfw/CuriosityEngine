@@ -113,6 +113,18 @@ class IntrospectionMixin:
             context += f"\nDomains explored so far: {', '.join(tags)}\n"
             context += "IMPORTANT: Prioritize uncertainties in domains NOT yet explored, or at the intersection of explored domains.\n"
 
+        # Direction backprop: inject distilled frontier edges from prior
+        # investigation clusters. Framed as edges to push PAST (divergence
+        # guard), capped to direction_max_injected (convergence dial).
+        eng = getattr(self.connection, "engine", None)
+        if eng is not None and getattr(eng, "direction_backprop_enabled", True):
+            from engine.direction_backprop import build_frontier_edges_block
+            block = build_frontier_edges_block(
+                self.journal.latest_direction_insights(),
+                max_injected=int(getattr(eng, "direction_max_injected", 4)),
+            )
+            context += block
+
         return context
 
     def _run_introspection_for_persona(

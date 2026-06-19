@@ -119,6 +119,12 @@ def main():
                         help="Synthesize + verify every cross-reference that doesn't yet have a matching insight (e.g. after a mid-run failure between cross-ref and synthesis).")
     parser.add_argument("--scan-gaps", action="store_true",
                         help="Run a negative-space scan: build (method × problem) matrix from journal entries, classify empty cells, verify underexplored gaps via academic_search, enqueue questions for verified gaps. Gated by [engine].negative_space_min_entries.")
+    parser.add_argument("--abstract-directions", action="store_true",
+                        help="Direction insight backpropagation: cluster related investigations (connected components of the entry graph), abstract each into a frontier-edge prior on the verifier model, and persist it for injection into introspection. Runs automatically every [engine].direction_abstract_every_n_cycles cycles; this forces a run now. Gated by [engine].direction_min_entries.")
+    parser.add_argument("--show-directions", action="store_true",
+                        help="Print the current (latest, non-suppressed) direction insights — the frontier edges injected into introspection.")
+    parser.add_argument("--suppress-direction", type=str, default=None, metavar="DIR_ID",
+                        help="Suppress a direction insight by id (e.g. dir-abc12345) so its lineage stops being injected into introspection. The anti-pollution lever for a bad prior.")
     parser.add_argument("--backfill-canonical-forms", action="store_true",
                         help="Populate canonical_form on existing register entries that lack one. One-shot maintenance pass — safe to interrupt and re-run.")
     parser.add_argument("--backfill-force", action="store_true",
@@ -174,6 +180,9 @@ def main():
         or args.reverify_insight is not None
         or args.synth_orphaned_xrefs
         or args.scan_gaps
+        or args.abstract_directions
+        or args.show_directions
+        or args.suppress_direction is not None
     )
     if args.domain is None:
         if read_only:
@@ -389,6 +398,33 @@ def main():
         engine.test_pareto_admission(args.pareto_admission_test)
     elif args.scan_gaps:
         engine.scan_gaps()
+    elif args.abstract_directions:
+        engine.abstract_directions()
+    elif args.show_directions:
+        directions = engine.journal.latest_direction_insights()
+        if not directions:
+            print("No direction insights yet. Run --abstract-directions or let the cycle loop produce them.")
+        else:
+            ranked = sorted(
+                directions,
+                key=lambda r: (float(r.get("confidence") or 0.0), r.get("generated_at", "")),
+                reverse=True,
+            )
+            print(f"{len(ranked)} direction insight(s) (latest, non-suppressed):\n")
+            for r in ranked:
+                print(f"  {r.get('id')}  [conf={float(r.get('confidence') or 0.0):.2f}]  {r.get('label','')}")
+                settled = r.get("settled") or []
+                if settled:
+                    print(f"    settled:   {settled[0]}")
+                print(f"    OPEN EDGE: {r.get('open_edge','')}")
+                print(f"    members:   {len(r.get('member_entry_ids') or [])} entries\n")
+    elif args.suppress_direction is not None:
+        ok = engine.journal.suppress_direction_insight(args.suppress_direction.strip())
+        print(
+            f"Suppressed direction {args.suppress_direction.strip()}."
+            if ok else
+            f"No direction insight with id {args.suppress_direction.strip()!r}."
+        )
     elif args.export_directive:
         engine.export_directive_for(args.export_directive.strip())
     elif args.export_directives_bundle:

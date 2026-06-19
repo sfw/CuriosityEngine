@@ -69,3 +69,14 @@ cross_ref_frequency = 3
 novelty_threshold = 0.7
 register_confidence_floor = 0.6
 verify_insights = true
+# Direction insight backpropagation (Arbor / HTR, arXiv:2606.11926): every N
+# cycles, cluster related investigations and distill each into a "frontier edge"
+# injected into introspection as something to push PAST. Distillation runs on
+# the verifier model (no self-flattery loop). direction_max_injected is the
+# convergence dial — lower is safer.
+direction_backprop_enabled = true
+direction_abstract_every_n_cycles = 5
+direction_min_entries = 8
+direction_min_cluster_size = 4
+direction_max_count = 5
+direction_max_injected = 4

@@ -18,6 +18,7 @@ from providers import (
 )
 
 from engine.cross_reference import CrossReferenceMixin
+from engine.direction_backprop import DirectionBackpropMixin
 from engine.directives import DirectivesMixin
 from engine.display import DisplayMixin
 from engine.introspect import IntrospectionMixin
@@ -33,6 +34,7 @@ class CuriosityEngine(
     CrossReferenceMixin,
     VerificationMixin,
     NegativeSpaceMixin,
+    DirectionBackpropMixin,
     DirectivesMixin,
     DisplayMixin,
 ):
@@ -481,6 +483,11 @@ class CuriosityEngine(
         print(f"\n{'='*60}")
         print(f"  CURIOSITY CYCLE {self.cycle_count}")
         print(f"{'='*60}")
+
+        # Direction backprop (every N cycles): distill investigation clusters
+        # into frontier-edge priors BEFORE introspection so this cycle's
+        # self-interrogation can build on them. Best-effort; never kills a cycle.
+        self.maybe_abstract_directions()
 
         uncertainties = self.introspect()
         questions = self.generate_questions(uncertainties)
