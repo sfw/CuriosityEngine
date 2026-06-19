@@ -38,6 +38,7 @@ These are load-bearing. They show up in every prompt and every config default.
 - **Grounding over generation.** Research directives can't invent URLs or tool names. Every citation must come from an allowlist built from the source register entry; every tool call must exact-match an allowlist. A verifier scans the output for fabrication; anything dubious ships with a `⚠ FLAGGED ISSUES` block.
 - **Cross-domain is a first-class move.** On surprising findings, an analog probe asks the engine which *distant* fields have structural analogs. On unsurprising-but-confirmed findings, an assumption probe surfaces premises the field takes for granted. A negative-space scan maps which `(method, problem)` combinations *aren't* in the journal yet.
 - **Audit trails, not overwrites.** Re-verification appends to a log instead of mutating the original verdict — both old and new are preserved so you can see what changed under updated rules.
+- **Lessons carry forward as edges, not beliefs.** Every few cycles the engine clusters related investigations (connected components of the knowledge graph) and distills each cluster into a *frontier edge* — the unexplored synthesis or contradiction at its boundary — which is injected into the next introspection as something to push *past*, never to confirm. The distillation runs on the cross-family verifier model so the generator never authors and then consumes its own prior. (Direction backpropagation — see [Self-evolution](#self-evolution-phases-6-9-borrowed-from-comparable-public-systems).)
 - **Domain-agnostic by construction.** Prompts use shape, not content. The same engine works identically for any structured field.
 
 ---
@@ -266,6 +267,7 @@ Once the verifier side stabilized, we audited public research-agent systems for 
 - **Phase 7** (persona-conditioned introspection, planned) — borrows multi-perspective question generation from **[Stanford STORM / Co-STORM](https://github.com/stanford-oval/storm)**. Each persona (skeptic / outsider / historian / contrarian / practitioner) surfaces blind spots the single-voice introspection misses.
 - **Phase 8** (idea evolution from downgraded extensions, planned) — borrows the mutation loop from **[Sakana AI's "AI Scientist"](https://github.com/SakanaAI/AI-Scientist)** and the Evolution agent from Co-Scientist. Internally aligns with `r-3c792e21` ("typed supervision from false positives via retrospective unification") — we treat verifier downgrades as typed supervision signal for generator-side mutation.
 - **Phase 9** (hypothesis variants in investigation, planned) — borrows branching exploration from **[Tree of Thoughts](https://arxiv.org/abs/2305.10601)**. The explorer persona generates N divergent priors; the most-distant-from-majority-literature variant drives the investigation.
+- **Direction insight backpropagation** — borrows the *carry-lessons-across-time* mechanism from **Arbor / Hypothesis Tree Refinement ([arXiv:2606.11926](https://arxiv.org/abs/2606.11926))**, whose ablation showed that propagating distilled insights matters more than the tree structure that holds them (removing propagation hurt more than removing the tree). CE adapts it to a *novelty* objective rather than Arbor's scalar one: the carried signal is a frontier edge to **exceed**, not a belief to confirm, because CE's value is divergence (OOD synthesis) where Arbor's is convergence to a measured optimum. Deliberately omits Arbor's frontier *pruning* — for a novelty engine there is no clean falsification signal, and pruning on a weak proxy (repeated low surprise) would kill exactly the directions that pay off late.
 
 ### General agentic patterns CE builds on
 
@@ -279,6 +281,7 @@ Once the verifier side stabilized, we audited public research-agent systems for 
 - **Pareto-dominance admission** (Phase 4) is multi-objective optimization theory applied to a register-admission gate.
 - **Negative-space mapping** (the `(method × problem)` matrix) is a long-standing literature-review discipline; CE just instruments it.
 - **Falsifiable predictions with target dates** is descended from prediction-market and forecasting-literature practice (Tetlock, Good Judgement Project, Metaculus).
+- **The adversarial verifier is CE's held-out gate.** Arbor ([arXiv:2606.11926](https://arxiv.org/abs/2606.11926)) admits an improvement only if it beats the current best on a *held-out* eval — separating "looked good on the exploration signal" from verified progress, which is what keeps it from overfitting. CE's adversarial prior-art search plays the same *role*: apparent novelty measured against the journal (the dev signal) is admitted only after surviving search against the literature (the held-out set). Local novelty that collapses under prior-art search is CE's "overfit." This is an analogy of role, not identity of mechanism — CE's gate is structural prior-art search, not a scalar metric comparison. CE deliberately does **not** adopt a numeric dev/held-out gate: a scalar admission target would push the engine toward optimizing a novelty *proxy*, violating "novelty is structural, not vibes."
 
 ### Where CE is genuinely novel
 
@@ -496,6 +499,12 @@ python curiosity_engine.py --backfill-canonical-forms             # canonicalize
 python curiosity_engine.py --backfill-canonical-forms --backfill-force   # re-canonicalize all
 python curiosity_engine.py --synth-orphaned-xrefs                 # recover from mid-run crashes
 python curiosity_engine.py --scan-gaps                            # negative-space scan
+
+# Direction insight backpropagation (Arbor / HTR) — runs automatically every
+# [engine].direction_abstract_every_n_cycles cycles; these force/inspect it
+python curiosity_engine.py --abstract-directions                  # force a distillation run now
+python curiosity_engine.py --show-directions                      # show the injected frontier edges
+python curiosity_engine.py --suppress-direction dir-abc12345      # kill a bad prior (stops injection)
 
 # Research directives
 python curiosity_engine.py --export-directive r-cd730b6d          # per-record

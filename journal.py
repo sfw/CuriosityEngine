@@ -52,6 +52,14 @@ class Journal:
         # discrimination work (Phase B's calibration of alias-gap thresholds,
         # negative-exemplar prompting, etc.). Append-only.
         self.rejection_log: list[dict] = []
+        # Direction insight backpropagation (Arbor / HTR, arXiv:2606.11926).
+        # Each record distills a cluster of related investigations into a
+        # direction-level prior: {id, label, member_entry_ids, member_signature,
+        # settled, open_edge, confidence, generated_at, model, journal_size_at_gen,
+        # suppressed, supersedes}. Append-only — re-abstracting a changed cluster
+        # appends a new record linked via `supersedes`; originals are never
+        # mutated (audit trail, like reverification_log / known_prior_art).
+        self.direction_insights: list[dict] = []
         self._save_lock = threading.Lock()
         self._load()
 
@@ -71,6 +79,7 @@ class Journal:
                 self.coverage_scans = list(data.get("coverage_scans", []))
                 self.known_prior_art = list(data.get("known_prior_art", []))
                 self.rejection_log = list(data.get("rejection_log", []))
+                self.direction_insights = list(data.get("direction_insights", []))
 
     def save(self):
         """Serialize the full journal state.
@@ -93,6 +102,7 @@ class Journal:
             "coverage_scans": self.coverage_scans,
             "known_prior_art": self.known_prior_art,
             "rejection_log": self.rejection_log,
+            "direction_insights": self.direction_insights,
             "metadata": {
                 "last_updated": datetime.now(timezone.utc).isoformat(),
                 "total_entries": len(self.entries),
@@ -321,6 +331,48 @@ class Journal:
 
     def latest_coverage_scan(self) -> Optional[dict]:
         return self.coverage_scans[-1] if self.coverage_scans else None
+
+    def add_direction_insight(self, record: dict):
+        """Append a direction insight (append-only audit trail).
+
+        Caller shapes the record (see __init__ for the schema). Re-abstracting a
+        cluster appends a new record with `supersedes` set to the prior record's
+        id for the same `member_signature` lineage — originals are never mutated.
+        """
+        self.direction_insights.append(dict(record))
+        self.save()
+
+    def direction_heads(self) -> list[dict]:
+        """Direction insight "heads" — records that nothing else supersedes.
+
+        Supersession is an overlap-based chain (a re-abstracted, grown cluster
+        appends a new record whose `supersedes` points at the prior head it
+        replaces). A head may be suppressed; this method still returns it so the
+        abstraction step can SEE a suppressed lineage and decline to resurface
+        it. Use `latest_direction_insights` for the injection-facing view.
+        """
+        superseded = {
+            r.get("supersedes") for r in self.direction_insights if r.get("supersedes")
+        }
+        return [r for r in self.direction_insights if r.get("id") not in superseded]
+
+    def latest_direction_insights(self) -> list[dict]:
+        """Injection-facing view: non-superseded, non-suppressed direction heads.
+
+        A suppressed head is excluded and never falls back to the stale record it
+        superseded (that older record is in the superseded set, so it's gone too).
+        """
+        return [r for r in self.direction_heads() if not r.get("suppressed")]
+
+    def suppress_direction_insight(self, insight_id: str) -> bool:
+        """Mark a direction insight suppressed so its lineage drops out of
+        `latest_direction_insights` (and thus out of injection)."""
+        for rec in self.direction_insights:
+            if rec.get("id") == insight_id:
+                rec["suppressed"] = True
+                self.save()
+                return True
+        return False
 
     def update_register_entry_review(
         self,

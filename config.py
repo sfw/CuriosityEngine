@@ -247,6 +247,28 @@ class EngineSettings:
     # Set to a non-zero value (e.g. 0.70) on mature journals where you
     # specifically want to prune low-priority noise.
     question_priority_floor: float = 0.0
+    # ── Direction insight backpropagation (Arbor / HTR, arXiv:2606.11926) ──
+    # Abstract clusters of related investigations into direction-level priors
+    # and inject them into introspection as FRONTIER EDGES to push past — the
+    # carry-forward layer CE was missing. The framing is deliberately
+    # divergent ("exceed these edges", not "confirm these beliefs"); abstraction
+    # runs on the cross-family verifier model, never the primary, to avoid the
+    # self-flattery loop where the generator authors and then consumes its own
+    # prior. See docs/superpowers/specs/2026-06-18-direction-backprop-design.md.
+    direction_backprop_enabled: bool = True
+    # In-loop trigger cadence: abstract directions every N cycles, before
+    # introspection, so fresh priors are available to the same cycle.
+    direction_abstract_every_n_cycles: int = 5
+    # Journal-size floor — abstraction stays silent below this many entries
+    # (small journals have no stable directions yet, like negative_space).
+    direction_min_entries: int = 8
+    # Minimum connected-component size (entries) to qualify as a direction.
+    direction_min_cluster_size: int = 4
+    # Max directions abstracted per run (largest components first) — bounds cost.
+    direction_max_count: int = 5
+    # Max frontier edges injected into introspection — the convergence dial.
+    # Lower = safer (priors can't dominate the prompt / homogenize personas).
+    direction_max_injected: int = 4
     # Parallel fan-out — how many investigations / xref-synth+verify pipelines
     # run concurrently per cycle. Default 1 = fully serial (zero behavior change).
     # Rate limiters are shared across threads so raising these does not burst
@@ -429,6 +451,24 @@ class CuriosityEngineConfig:
             ),
             question_priority_floor=float(
                 eng_section.get("question_priority_floor", 0.70)
+            ),
+            direction_backprop_enabled=bool(
+                eng_section.get("direction_backprop_enabled", True)
+            ),
+            direction_abstract_every_n_cycles=max(
+                1, int(eng_section.get("direction_abstract_every_n_cycles", 5))
+            ),
+            direction_min_entries=max(
+                1, int(eng_section.get("direction_min_entries", 8))
+            ),
+            direction_min_cluster_size=max(
+                2, int(eng_section.get("direction_min_cluster_size", 4))
+            ),
+            direction_max_count=max(
+                1, int(eng_section.get("direction_max_count", 5))
+            ),
+            direction_max_injected=max(
+                0, int(eng_section.get("direction_max_injected", 4))
             ),
             register_admission_mode=str(
                 eng_section.get("register_admission_mode", "scalar")
@@ -833,6 +873,19 @@ confidence_drop_on_downgrade = {eng.confidence_drop_on_downgrade}
 # before the journal could build context). Set to a non-zero value only on
 # mature journals where you specifically want to prune low-priority noise.
 question_priority_floor = {eng.question_priority_floor}
+# Direction insight backpropagation (Arbor / HTR, arXiv:2606.11926). Every N
+# cycles, cluster related investigations and distill each into a FRONTIER EDGE
+# injected into introspection as something to push PAST (never confirm).
+# Abstraction runs on the verifier model to avoid a self-flattery loop.
+# Set direction_backprop_enabled = false to disable entirely.
+direction_backprop_enabled = {str(eng.direction_backprop_enabled).lower()}
+direction_abstract_every_n_cycles = {eng.direction_abstract_every_n_cycles}
+direction_min_entries = {eng.direction_min_entries}
+direction_min_cluster_size = {eng.direction_min_cluster_size}
+direction_max_count = {eng.direction_max_count}
+# Max frontier edges injected per introspection — the convergence dial; lower
+# is safer (priors can't dominate the prompt / homogenize the personas).
+direction_max_injected = {eng.direction_max_injected}
 # Register admission mode. "scalar" = single confidence floor + status checks
 # (default; backward compatible). "pareto" = ALSO require the new entry to be
 # non-dominated by any existing active entry across the 4-axis Pareto set

@@ -56,6 +56,28 @@ Respond with EXACTLY this JSON structure (no other text):
 Generate {n_questions} questions, ranked by priority_score."""
 
 
+ABSTRACT_DIRECTION_PROMPT = """You are the EVALUATOR of a research engine in {domain}. A "direction" is a cluster of investigations the engine has already run that are structurally related (shared concepts, shared sources, or cross-referenced together). Your job is NOT to summarize what the cluster found. Your job is to locate the cluster's FRONTIER EDGE — the specific thing that is investigable next and is NOT yet resolved.
+
+The single most valuable thing you can name is a NEGATIVE-SPACE EDGE: a place where the premises already exist across these investigations but the synthesis between them does not. "The premises exist in the literature, the synthesis does not" is the signature of genuine novelty — find where this cluster sits right on that line. A contradiction between two findings, or a method that one finding uses that another finding's problem has never been combined with, are also valid edges.
+
+DIRECTION CLUSTER ({entry_count} investigations):
+{cluster_json}
+
+Rules:
+- Do NOT restate findings as if they were conclusions. The downstream consumer is the engine's own introspection step, which will be told to PUSH PAST your open_edge — so a vague or already-answered edge wastes a cycle.
+- The open_edge must be a single, specific, investigable frontier — phrased so a researcher could act on it. Not "more work is needed on X."
+- `settled` is intentionally minor: one or two terse clauses, only so the engine knows what NOT to re-ask. Spend your effort on open_edge.
+- Stay domain-agnostic in structure; be concrete in content.
+
+Respond with EXACTLY this JSON structure (no other text):
+{{
+  "label": "short name for this direction (≤ 8 words)",
+  "settled": ["terse clause of what this cluster has established", "optional second clause"],
+  "open_edge": "the single specific unexplored synthesis / contradiction / missing combination at this cluster's frontier, phrased as an investigable edge to push past",
+  "confidence": 0.0
+}}"""
+
+
 HYPOTHESIS_PROMPT = """You are the EXPLORER persona of a research engine in {domain}. Your role is exploration: open, divergent, committal — pick the most specific answer you can defend and stake out a position. The ASSESSOR (a separate downstream stage) will do the evaluation; right now you are NOT evaluating, you are committing.
 
 QUESTION: {question}
