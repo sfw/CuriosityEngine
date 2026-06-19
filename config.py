@@ -254,6 +254,33 @@ class EngineSettings:
     # pipelines; beyond that most time is spent waiting on rate limiters anyway.
     parallel_investigations: int = 1
     parallel_xref_pipeline: int = 1
+    # ── Selective verification pipeline (A2 plumbing for Phases B/C/D) ──
+    # All defaults are NO-OPS — A2 alone changes no behavior. Each knob
+    # turns on when the corresponding phase ships.
+    #
+    # Phase B (alias-gap routing). Candidates with alias_gap below the reject
+    # threshold are short-circuited to the rejection_log without an LLM
+    # verification call. Candidates above the fast-track threshold skip
+    # deep prior-art search and take the cheap path. The middle band runs
+    # the existing full pipeline. 0.0 / 1.0 = no-op (no gating, every
+    # candidate runs full pipeline).
+    alias_gap_reject_threshold: float = 0.0
+    alias_gap_fasttrack_threshold: float = 1.0
+    # Phase B audit-back: fraction of below-reject-threshold candidates that
+    # still get full LLM verification, tagged in the rejection_log as audit
+    # samples. Detects discriminator drift — if audit-back items keep
+    # validating, the reject threshold is too aggressive. 0.0 = never
+    # sample-back (no-op).
+    rejection_audit_back_rate: float = 0.0
+    # Phase C (paraphrase-perturbation verifier stability). Run verification
+    # against N paraphrase variants of the prompt, compute verdict variance
+    # as a paraphrase_inconsistency_score. 1 = single pass (no-op,
+    # pre-Phase-C behavior). 3 = recommended once C ships.
+    paraphrase_variant_count: int = 1
+    # Phase D (committee escalation). When paraphrase_inconsistency_score
+    # exceeds this threshold (or committee verdicts disagree), escalate
+    # to a second cross-family verifier. 1.0 = never escalate (no-op).
+    committee_dissent_threshold: float = 1.0
 
 CONFIG_DIR = Path.home() / ".CuriosityEngine"
 CONFIG_PATH = CONFIG_DIR / "engine.toml"
@@ -440,6 +467,21 @@ class CuriosityEngineConfig:
             investigation_assessor_role=str(eng_section.get("investigation_assessor_role", "")).strip(),
             parallel_investigations=int(eng_section.get("parallel_investigations", 1)),
             parallel_xref_pipeline=int(eng_section.get("parallel_xref_pipeline", 1)),
+            alias_gap_reject_threshold=float(
+                eng_section.get("alias_gap_reject_threshold", 0.0)
+            ),
+            alias_gap_fasttrack_threshold=float(
+                eng_section.get("alias_gap_fasttrack_threshold", 1.0)
+            ),
+            rejection_audit_back_rate=float(
+                eng_section.get("rejection_audit_back_rate", 0.0)
+            ),
+            paraphrase_variant_count=max(
+                1, int(eng_section.get("paraphrase_variant_count", 1)),
+            ),
+            committee_dissent_threshold=float(
+                eng_section.get("committee_dissent_threshold", 1.0)
+            ),
         )
 
         # Resolve cross_ref profile:
@@ -889,6 +931,24 @@ investigation_assessor_role = "{eng.investigation_assessor_role}"
 # 2–3 xref pipelines before rate-limit waits dominate anyway.
 parallel_investigations = {eng.parallel_investigations}
 parallel_xref_pipeline = {eng.parallel_xref_pipeline}
+# ── Selective verification pipeline (A2 plumbing for Phases B/C/D) ──
+# All defaults below are NO-OPS until the corresponding phase ships.
+# Phase B — alias-gap routing. Candidates below reject_threshold short-
+# circuit to rejection_log without LLM verification; above
+# fasttrack_threshold skip deep prior-art search. Middle band runs the
+# full pipeline. 0.0 / 1.0 = no gating (current behavior).
+alias_gap_reject_threshold = {eng.alias_gap_reject_threshold}
+alias_gap_fasttrack_threshold = {eng.alias_gap_fasttrack_threshold}
+# Phase B audit-back — fraction of below-reject-threshold candidates that
+# still get full LLM verification, tagged as audit samples. Detects
+# discriminator drift. 0.0 = no audit-back (current behavior).
+rejection_audit_back_rate = {eng.rejection_audit_back_rate}
+# Phase C — paraphrase-perturbation. N variants per verification, verdict
+# variance scored as paraphrase_inconsistency_score. 1 = single pass.
+paraphrase_variant_count = {eng.paraphrase_variant_count}
+# Phase D — committee escalation when paraphrase_inconsistency_score
+# exceeds threshold (or verdicts disagree). 1.0 = never escalate.
+committee_dissent_threshold = {eng.committee_dissent_threshold}
 """
     )
     return header + "\n".join(sections)

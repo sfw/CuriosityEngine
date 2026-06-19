@@ -1386,6 +1386,37 @@ class VerificationMixin:
 
         if outcome == "reject":
             print(f"  Not registered ({', '.join(gate_reasons)}).")
+            self.journal.add_rejection({
+                "id": f"rj-{uuid4().hex[:8]}",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "insight_id": insight.id,
+                "xref_id": xref.id,
+                "title": insight.title,
+                "description": (insight.description or "")[:1200],
+                "canonical_form": canonical_form or {},
+                "pareto_axes": pareto_axes or {},
+                "verdict": verdict,
+                "llm_returned_verdict": llm_returned_verdict,
+                "novelty_type": novelty_type,
+                "verified_confidence": verified_confidence,
+                "premises_supported": premises_supported,
+                "synthesis_findable": synthesis_findable,
+                "gate_reasons": list(gate_reasons),
+                "central_architectural_move": central_architectural_move,
+                "target_application_domain": target_application_domain,
+                "closest_peer_system": {
+                    "name": (closest_peer_system.get("name") or "").strip(),
+                    "overlap_summary": (closest_peer_system.get("overlap_summary") or "")[:400],
+                    "differentiators": list(closest_peer_system.get("differentiators") or []),
+                },
+                "skeptic_probe_disqualifies": bool(skeptic_probe.get("disqualifies")),
+                "verification_summary": (summary or "")[:1500],
+                "alias_signal": {
+                    "tier": alias_tier or "",
+                    "gap": float(alias_signal.get("gap", 1.0)) if alias_signal else 1.0,
+                    "nearest_ids": list(alias_signal.get("nearest_ids", [])) if alias_signal else [],
+                },
+            })
             return None
 
         supporting_sources: list[str] = []

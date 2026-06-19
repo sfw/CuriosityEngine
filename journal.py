@@ -44,6 +44,14 @@ class Journal:
         # blind spots a human has spotted (e.g. the Google co-scientist miss
         # this feature addresses) without hand-editing the journal.
         self.known_prior_art: list[dict] = []
+        # Rejected verification candidates — every candidate the verifier
+        # produced that did NOT pass the register gate. Persisted (rather
+        # than discarded) so the journal accumulates organic negative
+        # signal: which canonical_forms / pareto_axes / closest peer systems
+        # the live verifier has already filtered out. Substrate for future
+        # discrimination work (Phase B's calibration of alias-gap thresholds,
+        # negative-exemplar prompting, etc.). Append-only.
+        self.rejection_log: list[dict] = []
         self._save_lock = threading.Lock()
         self._load()
 
@@ -62,6 +70,7 @@ class Journal:
                 self.embeddings = dict(data.get("embeddings", {}))
                 self.coverage_scans = list(data.get("coverage_scans", []))
                 self.known_prior_art = list(data.get("known_prior_art", []))
+                self.rejection_log = list(data.get("rejection_log", []))
 
     def save(self):
         """Serialize the full journal state.
@@ -83,6 +92,7 @@ class Journal:
             "embeddings": self.embeddings,
             "coverage_scans": self.coverage_scans,
             "known_prior_art": self.known_prior_art,
+            "rejection_log": self.rejection_log,
             "metadata": {
                 "last_updated": datetime.now(timezone.utc).isoformat(),
                 "total_entries": len(self.entries),
@@ -142,6 +152,13 @@ class Journal:
         self.predictions.append(asdict(prediction))
         self.save()
         self._write_register_markdown()
+
+    def add_rejection(self, rejection: dict):
+        """Persist a rejected verification candidate. Caller is responsible
+        for shaping the dict (insight metadata, canonical_form, pareto_axes,
+        gate_reasons, etc.)."""
+        self.rejection_log.append(rejection)
+        self.save()
 
     def update_prediction(self, prediction_id: str, *, status: str, review_entry: dict):
         """Record a check result and update status."""
